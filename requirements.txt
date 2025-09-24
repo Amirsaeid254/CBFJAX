@@ -1,0 +1,17 @@
+# Core JAX dependencies
+jax>=0.4.0
+jaxlib>=0.4.0
+equinox>=0.11.0
+
+# Differential equation solving
+diffrax>=0.4.0
+
+# Scientific computing
+numpy>=1.21.0
+scipy>=1.7.0
+
+# Visualization
+matplotlib>=3.5.0
+
+# Optional: CUDA support (uncomment if using GPU)
+# jax[cuda12_pip]>=0.4.0 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html

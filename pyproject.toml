@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax-flowbarrier"
+version = "0.1.0"
+description = "High-performance JAX implementation of FlowBarrier for safe control"
+authors = [{name = "FlowBarrier Team"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "jax[cpu]>=0.4.20",
+    "jaxlib>=0.4.20",
+    "diffrax>=0.5.0",
+    "qpax>=0.1.0",
+    "chex>=0.1.8",
+    "numpy>=1.21.0",
+    "scipy>=1.9.0",
+]
+
+[project.optional-dependencies]
+gpu = ["jax[cuda12_pip]"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=22.0",
+    "isort>=5.10",
+    "mypy>=1.0",
+    "pre-commit>=2.20",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jax_flowbarrier*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
