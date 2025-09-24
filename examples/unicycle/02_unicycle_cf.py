@@ -33,7 +33,7 @@ mpl.rcParams['text.usetex'] = True
 mpl.rcParams['font.family'] = 'serif'
 
 # Control gains
-control_gains = dict(k1=0.2, k2=1.0, k3=2.0)
+control_gains = immutabledict(k1=0.2, k2=1.0, k3=2.0)
 
 # Barrier configuration
 cfg = immutabledict({
@@ -53,12 +53,15 @@ dynamics = UnicycleDynamics()
 map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
 
 # Goal positions
+# goal_pos = jnp.array([
+#     [3.0, 4.5],
+#     [-7.0, 9.0],
+#     [-1.0, 7.0],
+#     [5.0, 9.5],
+# ])
+
 goal_pos = jnp.array([
-    [3.0, 4.5],
-    [-7.0, 9.0],
-    [-1.0, 7.0],
-    [5.0, 9.5],
-])
+    [3.0, 4.5]])
 
 # Initial conditions
 x0 = jnp.tile(jnp.array([-1.0, -8.5, 0.0, pi / 2]), (goal_pos.shape[0], 1))
@@ -79,21 +82,9 @@ safety_filter = MinIntervCFSafeControl(
 ).assign_dynamics(dynamics=dynamics).assign_state_barrier(barrier=map_.barrier)
 
 
-    # Create JIT-compiled desired control function
-@jax.jit
-def vectorized_desired_control(x, goal_pos_batch):
-    """JIT-compiled vectorized desired control function."""
-    return jax.vmap(
-        lambda state, goal: desired_control(
-            state.reshape(1, -1),
-            goal.reshape(1, -1),
-            **control_gains
-        ).reshape(-1)
-    )(x, goal_pos_batch)
-
 # Assign desired control based on the goal positions
 safety_filter = safety_filter.assign_desired_control(
-    desired_control=lambda x: vectorized_desired_control(x, goal_pos)
+    desired_control=lambda x: desired_control(x, goal_pos)
 )
 
 print("Starting trajectory simulation...")

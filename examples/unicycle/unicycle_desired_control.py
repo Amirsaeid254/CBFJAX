@@ -8,7 +8,6 @@ import jax.numpy as jnp
 from math import pi
 
 
-@jax.jit
 def desired_control(x, goal_pos, k1=0.2, k2=1.0, k3=2.0):
     """
     JIT-compiled desired control for unicycle dynamics.

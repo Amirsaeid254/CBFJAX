@@ -68,7 +68,7 @@ class CFSafeControl(BaseSafeControl):
             buffer = params.get('buffer', buffer)
 
         # Initialize base class with explicit constructor
-        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer}))
+        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer}), dynamics, barrier, Q, c)
 
         # Set static parameters
         self._slack_gain = slack_gain
@@ -285,7 +285,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             buffer = params.get('buffer', buffer)
 
         # Initialize base class with explicit constructor
-        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer}), desired_control)
+        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer}), desired_control, dynamics, barrier)
 
         # Set static parameters
         self._slack_gain = slack_gain

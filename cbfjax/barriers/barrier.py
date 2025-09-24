@@ -215,7 +215,7 @@ class Barrier(eqx.Module):
         Compute HOCBF and its Lie derivatives efficiently.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: State vector (batch, n)
 
         Returns:
             Tuple of (hocbf_value, Lf_hocbf, Lg_hocbf) with shapes:
@@ -223,19 +223,35 @@ class Barrier(eqx.Module):
             - Lf_hocbf: (batch, 1)
             - Lg_hocbf: (batch, action_dim)
         """
-        def compute_single(x_single):
-            hocbf_val = self._hocbf_func(x_single)
-            grad_hocbf = jax.grad(self._hocbf_func)(x_single)
+        return apply_and_batchize_tuple(self._get_hocbf_and_lie_derivs_single, x)
 
-            f_val = self._dynamics.f(x_single)
-            g_val = self._dynamics.g(x_single)
 
-            Lf_hocbf = jnp.dot(grad_hocbf, f_val)
-            Lg_hocbf = grad_hocbf @ g_val
+    def _get_hocbf_and_lie_derivs_single (self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Compute HOCBF and its Lie derivatives.
 
-            return hocbf_val, Lf_hocbf, Lg_hocbf
+        Args:
+            x: State vector (n,)
 
-        return apply_and_batchize_tuple(compute_single, x)
+        Returns:
+            Tuple of (hocbf_value, Lf_hocbf, Lg_hocbf) with shapes:
+            - hocbf_value: (1,)
+            - Lf_hocbf: (1,)
+            - Lg_hocbf: (action_dim,)
+        """
+        hocbf_val = self._hocbf_func(x)
+        grad_hocbf = jax.grad(self._hocbf_func)(x)
+
+        f_val = self._dynamics.f(x)
+        g_val = self._dynamics.g(x)
+
+        Lf_hocbf = jnp.dot(grad_hocbf, f_val)
+        Lg_hocbf = grad_hocbf @ g_val
+
+        return hocbf_val, Lf_hocbf, Lg_hocbf
+
+
+
 
     def Lf_hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -298,6 +314,22 @@ class Barrier(eqx.Module):
         barrier_vals = self.compute_barriers_at(x)
         stacked_vals = jnp.concatenate(barrier_vals, axis=1)
         return jnp.min(stacked_vals, axis=1, keepdims=True)
+
+    def min_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
+        """
+        Calculate the minimum value among all barrier values computed at point x.
+
+        This method matches CBFTorch behavior by computing the minimum across
+        the base barrier function values (not the full barrier series).
+
+        Args:
+            x: State vector (n,) or batch (batch, n)
+
+        Returns:
+            Minimum barrier value with shape (batch, 1)
+        """
+        barrier_vals = self.barrier(x)  # Get base barrier values
+        return jnp.min(barrier_vals, axis=-1, keepdims=True)
 
     def _make_hocbf_series(self, barrier: Callable, dynamics, rel_deg: int,
                           alphas: tuple) -> List[Callable]:
