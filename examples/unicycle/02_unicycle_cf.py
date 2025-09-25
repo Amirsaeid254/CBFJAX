@@ -104,32 +104,13 @@ trajs_list = [trajs[:, i, :] for i in range(goal_pos.shape[0])]
 # Get actions values along the trajs
 print("Computing control actions and barrier values...")
 actions = []
-des_ctrls = []
 h_vals = []
 min_barriers = []
 min_constraint = []
 
 for i, traj in enumerate(trajs_list):
-    # Create desired control for this specific goal
-    @jax.jit
-    def single_goal_desired_control(x):
-        goal_batch = jnp.tile(goal_pos[i], (x.shape[0], 1))
-        return jax.vmap(
-            lambda state, goal: desired_control(
-                state.reshape(1, -1),
-                goal.reshape(1, -1),
-                **control_gains
-            ).reshape(-1)
-        )(x, goal_batch)
 
-    # Update safety filter for this goal
-    updated_filter = safety_filter.assign_desired_control(
-        desired_control=single_goal_desired_control
-    )
-
-    # Compute actions and desired controls
-    actions.append(updated_filter.safe_optimal_control(traj))
-    des_ctrls.append(single_goal_desired_control(traj))
+    actions.append(safety_filter.safe_optimal_control(traj)[0])
 
     # Compute barrier values
     h_vals.append(map_.barrier.hocbf(traj))
@@ -176,7 +157,7 @@ ax.set_yticks([-10, -5, 0, 5, 10])
 ax.plot(trajs_list[0][0, 0], trajs_list[0][0, 1], 'x', color='blue', markersize=8, label=r'$x_0$')
 
 # Plot trajectories and goals
-for i in range(4):
+for i in range(goal_pos.shape[0]):
     ax.plot(goal_pos[i, 0], goal_pos[i, 1], '*', markersize=10, color='limegreen',
             label='Goal' if i == 0 else None)
     ax.plot(trajs_list[i][-1, 0], trajs_list[i][-1, 1], '+', color='blue', markersize=8,
@@ -231,12 +212,12 @@ axs[2].set_ylabel(r'$\theta$', fontsize=16)
 
 # Plot actions
 axs[3].plot(time_array, actions[0][:, 0], label=r'$u_1$', color='black')
-axs[3].plot(time_array, des_ctrls[0][:, 0], color='red', linestyle='--', label=r'$u_{{\rm d}_1}$')
+# axs[3].plot(time_array, des_ctrls[0][:, 0], color='red', linestyle='--', label=r'$u_{{\rm d}_1}$')
 axs[3].legend(loc='upper right', ncol=2, frameon=False, fontsize=14)
 axs[3].set_ylabel(r'$u_1$', fontsize=16)
 
 axs[4].plot(time_array, actions[0][:, 1], label=r'$u_2$', color='black')
-axs[4].plot(time_array, des_ctrls[0][:, 1], color='red', linestyle='--', label=r'$u_{{\rm d}_2}$')
+# axs[4].plot(time_array, des_ctrls[0][:, 1], color='red', linestyle='--', label=r'$u_{{\rm d}_2}$')
 axs[4].legend(loc='lower right', ncol=2, frameon=False, fontsize=14)
 axs[4].set_ylabel(r'$u_2$', fontsize=16)
 

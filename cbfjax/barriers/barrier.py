@@ -299,7 +299,7 @@ class Barrier(eqx.Module):
         """
         if len(self._barriers) == 0:
             raise ValueError("Barriers not computed. Use assign_dynamics() first.")
-        return [apply_and_batchize(barrier, x) for barrier in self._barriers]
+        return [apply_and_batchize(barrier, x) for barrier in self.barriers_flatten]
 
     def get_min_barrier_at(self, x: jnp.ndarray) -> jnp.ndarray:
         """
