@@ -64,7 +64,7 @@ goal_pos = jnp.array([
     [3.0, 4.5]])
 
 # Initial conditions
-x0 = jnp.tile(jnp.array([-1.0, -8.5, 0.0, pi / 2]), (goal_pos.shape[0], 1))
+x0 = jnp.tile(jnp.array([-1.0, -8.5, 0.0, pi / 2]), (1, 1))
 timestep = 0.01
 sim_time = 10.0
 
@@ -86,6 +86,8 @@ safety_filter = MinIntervCFSafeControl(
 safety_filter = safety_filter.assign_desired_control(
     desired_control=lambda x: desired_control(x, goal_pos)
 )
+
+safety_filter._safe_optimal_control_single(x0.squeeze(0))
 
 print("Starting trajectory simulation...")
 

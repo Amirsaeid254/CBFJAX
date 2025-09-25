@@ -5,14 +5,15 @@ This module provides base classes for implementing safe control algorithms
 that guarantee system safety through barrier function constraints.
 Fixed to follow JAX JIT-compatible immutable patterns.
 """
-
+import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable, Optional, Any, Union
 from abc import abstractmethod
 from immutabledict import immutabledict
 
-from ..utils.integration import _safe_optimal_control_impl, get_trajs_from_action_func, get_trajs_from_action_func_zoh
+from ..utils.integration import get_trajs_from_action_func, get_trajs_from_action_func_zoh
+from ..utils.utils import ensure_batch_dim
 
 
 class DummyBarrier:
@@ -220,7 +221,7 @@ class BaseSafeControl(eqx.Module):
         )
 
     @abstractmethod
-    def _safe_optimal_control_single(self, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
+    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for a single state.
 
@@ -229,14 +230,16 @@ class BaseSafeControl(eqx.Module):
 
         Args:
             x: Single state vector (state_dim,)
-            ret_info: Whether to return additional information
 
         Returns:
-            Control vector (action_dim,) or tuple with additional info
+            Tuple (u, slack_vars, constraint_at_u) where:
+            - u: Control vector (action_dim,)
+            - slack_vars: Slack variable values
+            - constraint_at_u: Constraint value at computed control
         """
         raise NotImplementedError
 
-    def safe_optimal_control(self, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
+    def safe_optimal_control(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control with automatic batch support.
 
@@ -250,11 +253,15 @@ class BaseSafeControl(eqx.Module):
         Returns:
             Control(s) with shape (batch, action_dim) or tuple with info
         """
-        return _safe_optimal_control_impl(self, x, ret_info)
+
+        x_batched = ensure_batch_dim(x)
+
+
+        return jax.vmap(self._safe_optimal_control_single)(x_batched)
 
     def _safe_optimal_control_for_ode(self, x: jnp.ndarray) -> jnp.ndarray:
         """
-        Internal method for ODE integration.
+        Internal method for ODE integration - optimized for repeated calls.
 
         Args:
             x: State vector (state_dim,) - single state, not batched
@@ -262,7 +269,9 @@ class BaseSafeControl(eqx.Module):
         Returns:
             Control vector (action_dim,)
         """
-        return self._safe_optimal_control_single(x, ret_info=False)
+
+        u, _, _ = self._safe_optimal_control_single(x)
+        return u
 
     def get_safe_optimal_trajs(self, x0: jnp.ndarray, timestep: float = 0.001,
                               sim_time: float = 4.0, method: str = 'tsit5') -> jnp.ndarray:
@@ -572,12 +581,21 @@ class BaseMinIntervSafeControl(BaseSafeControl):
 
     # Abstract method that concrete classes must implement
     @abstractmethod
-    def _safe_optimal_control_single(self, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
+    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for a single state.
 
         Concrete minimum intervention controllers should implement this method
         to compute the control that minimizes deviation from desired control
         while satisfying safety constraints.
+
+        Args:
+            x: Single state vector (state_dim,)
+
+        Returns:
+            Tuple (u, slack_vars, constraint_at_u) where:
+            - u: Control vector (action_dim,)
+            - slack_vars: Slack variable values
+            - constraint_at_u: Constraint value at computed control
         """
         raise NotImplementedError

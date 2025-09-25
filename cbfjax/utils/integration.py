@@ -2,35 +2,9 @@ import jax
 import jax.numpy as jnp
 import diffrax
 from typing import Callable, Union
-
+from functools import partial
 
 from .utils import ensure_batch_dim
-
-
-@jax.jit
-def _safe_optimal_control_impl(controller, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
-    """
-    JIT-compiled implementation for safe optimal control.
-
-    Args:
-        controller: Controller instance
-        x: State(s) (state_dim,) or (batch, state_dim)
-        ret_info: Whether to return additional information
-
-    Returns:
-        Control(s) with shape (batch, action_dim) or tuple with info
-    """
-    # Ensure batch dimension
-    x_batched = ensure_batch_dim(x)
-
-    # Get results from _safe_optimal_control_single (either control array or tuple)
-    results = jax.vmap(
-        lambda state: controller._safe_optimal_control_single(state, ret_info=ret_info)
-    )(x_batched)
-
-    return results
-
-
 
 def get_solver(method: str):
     """
@@ -44,7 +18,6 @@ def get_solver(method: str):
     """
     solver_map = {
         'euler': diffrax.Euler(),
-        'rk4': diffrax.Runge_Kutta(tableau=diffrax.ButcherTableau.rk4()),
         'tsit5': diffrax.Tsit5(),
         'dopri5': diffrax.Dopri5(),
         'dopri8': diffrax.Dopri8(),
@@ -59,7 +32,6 @@ def get_solver(method: str):
     return solver_map[method]
 
 
-@jax.jit
 def get_trajs_from_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
                                timestep: float, sim_time: float, method: str = 'tsit5') -> jnp.ndarray:
     """
@@ -71,8 +43,8 @@ def get_trajs_from_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
         action_func: Function that computes control given state
-        timestep: Integration timestep
-        sim_time: Total simulation time
+        timestep: Integration timestep (must be static)
+        sim_time: Total simulation time (must be static)
         method: Integration method
 
     Returns:
@@ -81,7 +53,7 @@ def get_trajs_from_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
     # Ensure batch dimension using existing utility
     x0 = ensure_batch_dim(x0)
 
-    # Time points
+    # Time points - now safe because timestep and sim_time are static
     t_eval = jnp.linspace(0.0, sim_time, int(sim_time / timestep) + 1)
 
     # Define ODE function
@@ -106,14 +78,13 @@ def get_trajs_from_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
         y0=x0,
         saveat=diffrax.SaveAt(ts=t_eval),
         adjoint=adjoint,
-        max_steps=int(sim_time / timestep) * 10  # Safety factor
+        max_steps=int(sim_time / timestep)
     )
 
     # Extract trajectories: (time_steps, batch, state_dim)
     return solution.ys
 
 
-@jax.jit
 def get_trajs_from_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Callable,
                                    timestep: float, sim_time: float, intermediate_steps: int = 2,
                                    method: str = 'tsit5') -> jnp.ndarray:
@@ -126,8 +97,8 @@ def get_trajs_from_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Calla
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
         action_func: Function that computes control given state
-        timestep: Control update timestep
-        sim_time: Total simulation time
+        timestep: Control update timestep (must be static)
+        sim_time: Total simulation time (must be static)
         intermediate_steps: Integration substeps per control update
         method: Integration method
 
@@ -166,7 +137,7 @@ def get_trajs_from_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Calla
             dt0=dt_sub,
             y0=current_state,
             adjoint=adjoint,
-            max_steps=intermediate_steps * 2  # Safety factor
+            max_steps=intermediate_steps
         )
 
         next_state = solution.ys  # Final state

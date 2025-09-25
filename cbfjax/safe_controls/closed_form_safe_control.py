@@ -1,9 +1,8 @@
 """
-Closed-Form Safe Control classes with full JAX JIT compatibility.
+Closed-Form Safe Control classes with JAX JIT compatibility.
 
-This module implements closed-form safe control algorithms using the complete
-immutability pattern. All data structures are JAX JIT-compatible with proper
-hashability and functional design.
+This module implements closed-form safe control algorithms using immutable
+data structures that are JIT-compatible for high performance.
 """
 
 import jax
@@ -162,27 +161,28 @@ class CFSafeControl(BaseSafeControl):
             buffer=self._buffer
         )
 
-    def _safe_optimal_control_single(self, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
+    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for a single state using closed-form solution.
 
         Args:
             x: Single state vector (state_dim,)
-            ret_info: Whether to return additional information
 
         Returns:
-            If ret_info=False: Control vector (action_dim,)
-            If ret_info=True: Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, slack_vars, constraint_at_u) where:
+            - u: Control vector (action_dim,)
+            - slack_vars: Slack variable values
+            - constraint_at_u: Constraint value at computed control
         """
         # Q and c are single-state functions
         Q_matrix = self._Q(x)  # (action_dim, action_dim)
         c_vector = self._c(x)  # (action_dim,)
         Q_inv = jnp.linalg.inv(Q_matrix)
 
-        # Get barrier values and Lie derivatives (barrier handles single states)
-        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
+        # Get barrier values and Lie derivatives (single state version for efficiency)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
 
-        # Apply buffer - use static field instead of dict access
+        # Apply buffer
         hocbf = hocbf - self._buffer
 
         # Compute closed-form solution
@@ -202,13 +202,8 @@ class CFSafeControl(BaseSafeControl):
         # Compute control
         u = -Q_inv @ (c_vector - lg_hocbf * lam)
 
-        # JIT-friendly return with consistent tuple structure
-        return jax.lax.cond(
-            ret_info,
-            lambda _: self._add_optimal_control_info(u, hocbf, lf_hocbf, lg_hocbf, lam),
-            lambda _: u,
-            None
-        )
+        # Always return full info tuple for consistent structure
+        return self._add_optimal_control_info(u, hocbf, lf_hocbf, lg_hocbf, lam)
 
     def _add_optimal_control_info(self, u: jnp.ndarray, hocbf: jnp.ndarray,
                                   lf_hocbf: jnp.ndarray, lg_hocbf: jnp.ndarray,
@@ -374,23 +369,24 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             softplus_gain=self._softplus_gain,
             buffer=self._buffer
         )
-
-    def _safe_optimal_control_single(self, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
+    @jax.jit
+    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute minimum intervention safe control for a single state.
 
         Args:
             x: Single state vector (state_dim,)
-            ret_info: Whether to return additional information
 
         Returns:
-            If ret_info=False: Control vector (action_dim,)
-            If ret_info=True: Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, slack_vars, constraint_at_u) where:
+            - u: Control vector (action_dim,)
+            - slack_vars: Slack variable values
+            - constraint_at_u: Constraint value at computed control
         """
-        # Get barrier values and Lie derivatives (barrier handles single states)
-        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
+        # Get barrier values and Lie derivatives (single state version for efficiency)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
 
-        # Apply buffer - use static field
+        # Apply buffer
         hocbf = hocbf - self._buffer
 
         # Get desired control (single state input)
@@ -413,13 +409,8 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         # Compute control
         u = u_d + lg_hocbf * lam
 
-        # JIT-friendly return
-        return jax.lax.cond(
-            ret_info,
-            lambda _: self._add_optimal_control_info(u, hocbf, lf_hocbf, lg_hocbf, lam),
-            lambda _: u,
-            None
-        )
+        # Always return full info tuple for consistent structure
+        return self._add_optimal_control_info(u, hocbf, lf_hocbf, lg_hocbf, lam)
 
     def _add_optimal_control_info(self, u: jnp.ndarray, hocbf: jnp.ndarray,
                                   lf_hocbf: jnp.ndarray, lg_hocbf: jnp.ndarray,
@@ -611,20 +602,21 @@ class InputConstCFSafeControl(CFSafeControl):
 
         return updated_ctrl
 
-    def _safe_optimal_control_single(self, x: jnp.ndarray, ret_info: bool = False) -> Union[jnp.ndarray, tuple]:
+    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for input-constrained system.
 
         Args:
             x: Single augmented state vector (state_dim + action_dim,)
-            ret_info: Whether to return additional information
 
         Returns:
-            If ret_info=False: Control vector (action_dim,)
-            If ret_info=True: Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, slack_vars, constraint_at_u) where:
+            - u: Control vector (action_dim,)
+            - slack_vars: Slack variable values
+            - constraint_at_u: Constraint value at computed control
         """
-        # Get barrier values and Lie derivatives
-        hocbf, Lf_hocbf, Lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
+        # Get barrier values and Lie derivatives (single state version for efficiency)
+        hocbf, Lf_hocbf, Lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
 
         # Apply buffer
         hocbf = hocbf - self._buffer
@@ -649,12 +641,8 @@ class InputConstCFSafeControl(CFSafeControl):
         # Compute control
         u = u_d + Lg_hocbf * lam
 
-        # JIT-friendly return
-        return jax.lax.cond(
-            ret_info,
-            lambda _: self._add_optimal_control_info(u, hocbf, Lf_hocbf, Lg_hocbf, lam),
-            lambda _: u,
-        )
+        # Always return full info tuple for consistent structure
+        return self._add_optimal_control_info(u, hocbf, Lf_hocbf, Lg_hocbf, lam)
 
     def _make_composed_barrier(self) -> 'InputConstCFSafeControl':
         """Create composed barrier from state and action barriers."""
