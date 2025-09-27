@@ -36,18 +36,6 @@ cd cbfjax
 pip install -e .
 ```
 
-Optional dependencies:
-```bash
-# For GPU support
-pip install cbfjax[gpu]
-
-# For running examples
-pip install cbfjax[examples]
-
-# For development
-pip install cbfjax[dev]
-```
-
 ## Quick Start
 
 ### Basic Usage
