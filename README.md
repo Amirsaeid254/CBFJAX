@@ -20,7 +20,7 @@ High-performance JAX implementation of Control Barrier Functions for safe contro
   - MultiBarriers for handling multiple constraints
   - Composite barriers with soft/hard composition
 - **High Performance**: 64-bit precision, JIT compilation, and optimized algorithms
-- **Modern Dependencies**: Equinox for neural networks, Diffrax for ODE solving, qpax for QP optimization
+- **Modern Dependencies**: Diffrax for ODE solving, qpax for QP optimization
 
 ## Installation
 
@@ -232,56 +232,6 @@ For barriers with relative degree > 1, HOCBFs extend the framework:
 L_f^n h(x) + L_g L_f^{n-1} h(x) u ≥ -α(ψ(x))
 ```
 
-Where ψ(x) depends on lower-order derivatives.
-
-### Safe Control Methods
-
-1. **Closed-Form**: Direct analytical computation when possible
-2. **QP-Based**: Quadratic programming for complex constraints
-3. **Input-Constrained**: QP with actuator limits
-4. **Minimum Intervention**: Minimal deviation from desired control
-
-## Performance
-
-CBFJAX is designed for high performance through:
-
-- **JIT Compilation**: All critical paths are JIT-compiled
-- **64-bit Precision**: Numerical stability for safety-critical applications
-- **Functional Programming**: Pure functions enable aggressive optimization
-- **Minimal Overhead**: Direct JAX operations without unnecessary abstractions
-
-Typical performance: >10x speedup over equivalent PyTorch implementations.
-
-## Contributing
-
-We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md).
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## Citation
-
-If you use CBFJAX in your research, please cite:
-
-```bibtex
-@software{cbfjax2024,
-  title={CBFJAX: High-Performance Control Barrier Functions in JAX},
-  author={Amirsaeid Safari},
-  year={2024},
-  url={https://github.com/amirsaeid/cbfjax}
-}
-```
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
 ## Related Work
 
 - [CBFTorch](https://github.com/bardhh/cbftorch): PyTorch implementation of CBFs
-- [JAX](https://jax.readthedocs.io/): Core numerical computing library
-- [Equinox](https://docs.kidger.site/equinox/): Neural networks in JAX
-- [Diffrax](https://docs.kidger.site/diffrax/): Differential equation solving
