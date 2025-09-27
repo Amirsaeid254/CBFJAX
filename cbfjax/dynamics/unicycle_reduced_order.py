@@ -1,14 +1,22 @@
 import jax.numpy as jnp
 from .base import AffineInControlDynamics
+from immutabledict import immutabledict
 
 
-class UnicycleDynamics(AffineInControlDynamics):
-    """Unicycle Dynamics"""
-    
+class UnicycleReducedOrderDynamics(AffineInControlDynamics):
+    """Unicycle Reduced Order Dynamics"""
+
     def __init__(self, params=None, **kwargs):
         super().__init__(params, **kwargs)
         self._state_dim = 4
         self._action_dim = 2
+
+        # Default parameter: distance from rear axle to center of mass
+        default_params = immutabledict({'d': 0.5})
+        if params is None:
+            self._params = default_params
+        else:
+            self._params = immutabledict({**default_params, **params})
 
     def _f(self, x):
         """
@@ -23,11 +31,12 @@ class UnicycleDynamics(AffineInControlDynamics):
     def _g(self, x):
         """
         x: (4,) - state vector
-        output: (4, 2) - control matrix  
+        output: (4, 2) - control matrix
         """
-        return jnp.array([[0.0, 0.0],
-                          [0.0, 0.0],
-                          [1.0, 0.0], 
+        d = self._params['d']
+        return jnp.array([[0.0, -d * jnp.sin(x[3])],
+                          [0.0, d * jnp.cos(x[3])],
+                          [1.0, 0.0],
                           [0.0, 1.0]])
 
     def get_pos(self, x):
