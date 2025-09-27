@@ -31,7 +31,7 @@ pip install cbfjax
 
 For development installation:
 ```bash
-git clone https://github.com/amirsaeid/cbfjax.git
+git clone https://github.com/amirsaeid254/cbfjax.git
 cd cbfjax
 pip install -e .
 ```
