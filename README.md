@@ -1,6 +1,6 @@
 # CBFJAX
 
-High-performance JAX implementation of Control Barrier Functions for safe control with JIT compilation and functional programming paradigms.
+CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CBFs) for safe control, adapted from the pioneering [CBFTorch](https://github.com/pedramrabiee/cbftorch) framework. This implementation leverages JAX's JIT compilation and functional programming paradigms to deliver superior computational performance for safety-critical control applications.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![JAX](https://img.shields.io/badge/JAX-0.4.20+-orange.svg)](https://jax.readthedocs.io/)
