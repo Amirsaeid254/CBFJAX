@@ -186,9 +186,13 @@ cbfjax/
 │   ├── multi_barrier.py   # Multiple barrier handling
 │   └── composite_barrier.py # Barrier composition
 ├── dynamics/           # System dynamics
-│   ├── base.py            # Base dynamics classes
-│   ├── unicycle.py        # Unicycle dynamics
-│   └── double_integrator.py
+│   ├── base.py                    # Base dynamics classes
+│   ├── unicycle.py               # Unicycle dynamics
+│   ├── double_integrator.py      # Double integrator dynamics
+│   ├── single_integrator.py      # Single integrator dynamics
+│   ├── bicycle.py                # Bicycle dynamics
+│   ├── inverted_pendulum.py      # Inverted pendulum dynamics
+│   └── unicycle_reduced_order.py # Reduced-order unicycle dynamics
 ├── safe_controls/      # Safe control implementations
 │   ├── base_safe_control.py      # Base classes
 │   ├── closed_form_safe_control.py # Analytical solutions
