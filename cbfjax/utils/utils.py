@@ -148,11 +148,22 @@ def apply_and_match_dim(func: Callable, x: jnp.ndarray) -> jnp.ndarray:
     res = func(x)
     return match_dim(res, x)
 
-def ensure_batch_dim(x: jnp.ndarray) -> jnp.ndarray:
-    """Always return (batch, n) shape"""
-    if x.ndim == 1:
-        return jnp.expand_dims(x, 0)  # (n,) -> (1, n)
+def ensure_batch_dim(x: jnp.ndarray, target_ndim: int = 2) -> jnp.ndarray:
+    """
+    Ensure array has at least target number of dimensions.
+
+    Args:
+        x: Input array
+        target_ndim: Target number of dimensions (default 2)
+
+    Returns:
+        Array with at least target_ndim dimensions
+    """
+    while x.ndim < target_ndim:
+        x = jnp.expand_dims(x, 0)
     return x
+
+
 
 def apply_and_batchize(func: Callable, x: jnp.ndarray):
     """ALWAYS use vmap for consistent behavior"""

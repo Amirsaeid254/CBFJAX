@@ -10,9 +10,8 @@ import equinox as eqx
 from typing import List, Optional, Tuple
 
 from .barrier import Barrier
-from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple, lie_deriv
+from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple, lie_deriv, ensure_batch_dim
 from cbfjax.dynamics.base import DummyDynamics
-
 
 class MultiBarriers(Barrier):
     """
@@ -214,7 +213,7 @@ class MultiBarriers(Barrier):
 
     def _get_hocbf_and_lie_derivs_single(self, x: jnp.ndarray) -> tuple:
         """
-        Compute HOCBF and Lie derivatives for single state using lax.scan.
+        Compute HOCBF and Lie derivatives.
 
         Args:
             x: Single state vector (n,)
@@ -227,24 +226,36 @@ class MultiBarriers(Barrier):
         if self._dynamics is None:
             raise ValueError("Dynamics not assigned. Use assign_dynamics() first.")
 
-        # Compute HOCBF values
-        hocbf_vals = jnp.array([hocbf_func(x) for hocbf_func in self._hocbf_funcs])
-
-        # Compute Lie derivatives for each HOCBF
-        lf_vals = []
-        lg_vals = []
-
         f_val = self._dynamics.f(x)
         g_val = self._dynamics.g(x)
+
+        hocbf_values = []
+        lf_values = []
+        lg_values = []
+
+        # Process each barrier function
         for hocbf_func in self._hocbf_funcs:
-            grad_hocbf = jax.grad(hocbf_func)(x)
+            # Get jacobian and value in single call using has_aux=True
+            jac_hocbf, barrier_val = jax.jacrev(lambda x: (hocbf_func(x), hocbf_func(x)), has_aux=True)(x)
 
+            # Ensure barrier_val is at least 1D
+            barrier_val = ensure_batch_dim(barrier_val, target_ndim=1)
 
-            lf_vals.append(jnp.dot(grad_hocbf, f_val))
-            lg_vals.append(grad_hocbf @ g_val)
+            # Ensure jacobian is 2D: (num_outputs, state_dim)
+            jac_hocbf = ensure_batch_dim(jac_hocbf, target_ndim=2)
 
-        lf_hocbf = jnp.array(lf_vals)
-        lg_hocbf = jnp.array(lg_vals)
+            lf_vals = jnp.einsum('ij,j->i', jac_hocbf, f_val)
+            lg_vals = jnp.einsum('ij,jk->ik', jac_hocbf, g_val)
+
+            # Extend the lists
+            hocbf_values.extend(barrier_val)
+            lf_values.extend(lf_vals)
+            lg_values.extend(lg_vals)
+
+        # Stack results
+        hocbf_vals = jnp.array(hocbf_values)
+        lf_hocbf = jnp.array(lf_values)
+        lg_hocbf = jnp.array(lg_values)
 
         return hocbf_vals, lf_hocbf, lg_hocbf
 

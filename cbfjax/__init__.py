@@ -21,7 +21,9 @@ from . import utils
 
 # Main classes for convenience
 from .dynamics import UnicycleDynamics, AffineInControlDynamics
-from .barriers import Barrier, MultiBarriers, SoftCompositionBarrier, NonSmoothCompositionBarrier
+from .barriers import Barrier
+from .barriers.multi_barrier import MultiBarriers
+from .barriers.composite_barrier import SoftCompositionBarrier, NonSmoothCompositionBarrier
 from .safe_controls import (
     MinIntervCFSafeControl,
     MinIntervQPSafeControl,

@@ -240,8 +240,9 @@ class Barrier(eqx.Module):
             - Lf_hocbf: (1,)
             - Lg_hocbf: (action_dim,)
         """
-        hocbf_val = self._hocbf_func(x)
-        grad_hocbf = jax.grad(self._hocbf_func)(x)
+
+        hocbf_val, grad_hocbf = jax.value_and_grad(self._hocbf_func)(x)
+
 
         f_val = self._dynamics.f(x)
         g_val = self._dynamics.g(x)
