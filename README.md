@@ -234,4 +234,4 @@ L_f^n h(x) + L_g L_f^{n-1} h(x) u ≥ -α(ψ(x))
 
 ## Related Work
 
-- [CBFTorch](https://github.com/bardhh/cbftorch): PyTorch implementation of CBFs
+- [CBFTorch](https://github.com/pedramrabiee/cbftorch): PyTorch implementation of CBFs
