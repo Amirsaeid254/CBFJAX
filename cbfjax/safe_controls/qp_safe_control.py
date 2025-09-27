@@ -2,8 +2,7 @@
 QP-based Safe Control classes with JAX JIT compatibility.
 
 This module implements QP-based safe control algorithms using qpax for solving
-quadratic programs, following the exact logic from CBFTorch but adapted to
-the CBFJAX immutable structure.
+quadratic programs.
 """
 
 import jax
@@ -166,7 +165,7 @@ class QPSafeControl(BaseSafeControl):
         G, h = self._make_ineq_const_single(x)
 
         # Make equality constraints (empty by default)
-        A, b = self._make_eq_const_single(x)
+        A, b = self._make_eq_const_single(x, Q_matrix)
 
         # Solve QP
         # qpax expects: min 0.5 x^T Q x + c^T x s.t. Gx <= h, Ax = b
@@ -174,7 +173,7 @@ class QPSafeControl(BaseSafeControl):
 
         # Compute constraint at u for info
         constraint_at_u = jnp.dot(G, u) - h
-        slack_vars = jnp.zeros(1)  # No slack in non-slacked version
+        slack_vars = jnp.zeros(1)
 
         return u, slack_vars, constraint_at_u
 
@@ -197,10 +196,10 @@ class QPSafeControl(BaseSafeControl):
         Q_matrix, c_vector = self._make_objective_slacked_single(x, num_constraints)
 
         # Make equality constraints
-        A, b = self._make_eq_const_single(x)
+        A, b = self._make_eq_const_single(x, Q_matrix)
 
         # Solve QP for augmented decision variable [u, slack]
-        res = solve_qp(Q_matrix, c_vector, G, h, A, b)
+        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
         # Extract control and slack
         u = res[:self._action_dim]
@@ -240,7 +239,7 @@ class QPSafeControl(BaseSafeControl):
         Q_base, c_base = self._make_objective_single(x)
 
         # Create block diagonal Q matrix
-        Q_slack = self._slack_gain * jnp.eye(num_constraints)
+        Q_slack = self._slack_gain * 0.5 * jnp.eye(num_constraints)
         Q_matrix = jnp.block([
             [Q_base, jnp.zeros((self._action_dim, num_constraints))],
             [jnp.zeros((num_constraints, self._action_dim)), Q_slack]
@@ -270,8 +269,8 @@ class QPSafeControl(BaseSafeControl):
 
         # Convert to QP form: Gu <= h
         # CBF constraint: -Lg_hocbf * u <= Lf_hocbf + alpha(hocbf)
-        G = -lg_hocbf  # Shape: (num_barries, action_dim)
-        h = (lf_hocbf + self._alpha(hocbf)) # Shape: (num_barriers,)
+        G = -lg_hocbf  # Shape: (num_barriers, action_dim)
+        h = (lf_hocbf + jax.vmap(self._alpha)(hocbf))  # Shape: (num_barriers,)
 
         return G, h
 
@@ -290,19 +289,17 @@ class QPSafeControl(BaseSafeControl):
         # Get barrier values and Lie derivatives for single state
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
 
-        #TODO: Fix the slack dimension
-
         # Create constraint matrix for [u, slack]
         # -Lg_hocbf * u - hocbf * slack <= Lf_hocbf + alpha(hocbf)
-        G_u = -lg_hocbf  # Shape: (num_barries, action_dim)
-        G_slack = -hocbf.reshape(1, 1)  # Shape: (1, 1) for single constraint
-        G = jnp.concatenate([G_u, G_slack], axis=1)
+        G_u = -lg_hocbf  # Shape: (num_barriers, action_dim)
+        G_slack = -jnp.diag(hocbf)  # Shape: (num_barriers, num_barriers) - diagonal matrix
+        G = jnp.concatenate([G_u, G_slack], axis=1)  # Shape: (num_barriers, action_dim + num_barriers)
 
-        h = (lf_hocbf + self._alpha(hocbf)).reshape(1)
+        h = (lf_hocbf + jax.vmap(self._alpha)(hocbf))  # Shape: (num_barriers,)
 
         return G, h
 
-    def _make_eq_const_single(self, x: jnp.ndarray) -> tuple:
+    def _make_eq_const_single(self, x: jnp.ndarray, Q_matrix: jnp.ndarray) -> tuple:
         """
         Create equality constraints for single state.
 
@@ -314,7 +311,7 @@ class QPSafeControl(BaseSafeControl):
         Returns:
             Tuple (A, b) for equality Au = b (empty by default)
         """
-        A = jnp.zeros((0, self._action_dim))
+        A = jnp.zeros((0, Q_matrix.shape[0]))
         b = jnp.zeros(0)
         return A, b
 
@@ -361,9 +358,11 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
             dynamics=self._dynamics,
             barrier=self._barrier,
             desired_control=desired_control,
+            Q=Q_func,
+            c=c_func,
             slacked=self._slacked,
             slack_gain=self._slack_gain
-        ).assign_cost(Q_func, c_func)
+        )
 
     def assign_cost(self, Q: Callable, c: Callable) -> 'MinIntervQPSafeControl':
         """
@@ -425,8 +424,8 @@ class InputConstQPSafeControl(QPSafeControl):
     """
 
     # Input bounds
-    _control_low: jnp.ndarray = eqx.field(static=True)
-    _control_high: jnp.ndarray = eqx.field(static=True)
+    _control_low: tuple = eqx.field(static=True)
+    _control_high: tuple = eqx.field(static=True)
     _has_control_bounds: bool = eqx.field(static=True)
 
     def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
@@ -436,14 +435,15 @@ class InputConstQPSafeControl(QPSafeControl):
         """Initialize InputConstQPSafeControl."""
         super().__init__(action_dim, alpha, params, dynamics, barrier, Q, c, slacked, slack_gain)
 
-        # Set control bounds
+        # Set control bounds as tuples
         if control_low is not None and control_high is not None:
-            self._control_low = jnp.array(control_low)
-            self._control_high = jnp.array(control_high)
+            # Convert to tuples for static fields
+            self._control_low = tuple(control_low) if not isinstance(control_low, tuple) else control_low
+            self._control_high = tuple(control_high) if not isinstance(control_high, tuple) else control_high
             self._has_control_bounds = True
         else:
-            self._control_low = jnp.zeros(action_dim)
-            self._control_high = jnp.zeros(action_dim)
+            self._control_low = tuple([0.0] * action_dim)
+            self._control_high = tuple([0.0] * action_dim)
             self._has_control_bounds = False
 
     def assign_control_bounds(self, low: list, high: list) -> 'InputConstQPSafeControl':
@@ -474,68 +474,103 @@ class InputConstQPSafeControl(QPSafeControl):
             slack_gain=self._slack_gain
         )
 
-    def _make_ineq_const_single(self, x: jnp.ndarray) -> tuple:
+    @jax.jit
+    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
-        Create inequality constraints including control bounds.
+        Compute safe optimal control for single state with input constraints.
+        Follows CBFTorch approach.
 
         Args:
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (G, h) for inequality Gu <= h
+            Tuple (u, slack_vars, constraint_at_u)
         """
-        # Get base CBF constraints
-        G_cbf, h_cbf = super()._make_ineq_const_single(x)
+        if self._slacked:
+            return self._safe_optimal_control_single_slacked(x)
 
-        if not self._has_control_bounds:
-            return G_cbf, h_cbf
+        # Make objective for single state
+        Q_matrix, c_vector = self._make_objective_single(x)
 
-        # Add control bound constraints
-        # u >= low => -u <= -low
-        G_low = -jnp.eye(self._action_dim)
-        h_low = -self._control_low
+        # Get CBF constraints
+        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        G_cbf = -lg_hocbf
+        h_cbf = (lf_hocbf + jax.vmap(self._alpha)(hocbf))
 
-        # u <= high => u <= high
-        G_high = jnp.eye(self._action_dim)
-        h_high = self._control_high
+        if self._has_control_bounds:
+            # Add control bound constraints
+            G_low = -jnp.eye(self._action_dim)
+            h_low = -jnp.array(self._control_low)
+            G_high = jnp.eye(self._action_dim)
+            h_high = jnp.array(self._control_high)
 
-        # Combine all constraints
-        G = jnp.vstack([G_cbf, G_low, G_high])
-        h = jnp.concatenate([h_cbf, h_low, h_high])
+            # Combine constraints
+            G = jnp.vstack([G_cbf, G_low, G_high])
+            h = jnp.concatenate([h_cbf, h_low, h_high])
+        else:
+            G, h = G_cbf, h_cbf
 
-        return G, h
+        # Make equality constraints
+        A, b = self._make_eq_const_single(x, Q_matrix)
 
-    def _make_ineq_const_slacked_single(self, x: jnp.ndarray) -> tuple:
+        # Solve QP
+        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
+        # Compute constraint at u for info
+        constraint_at_u = jnp.dot(G, u) - h
+        slack_vars = jnp.zeros(1)
+
+        return u, slack_vars, constraint_at_u
+
+    def _safe_optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
         """
-        Create inequality constraints with slack including control bounds.
+        Compute safe optimal control with slack variables for single state.
+        Follows CBFTorch approach.
 
         Args:
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (G, h) for inequality G[u; slack] <= h
+            Tuple (u, slack_vars, constraint_at_u)
         """
-        # Get base CBF constraints with slack
+        # Get CBF constraints with slack (base method)
         G_cbf, h_cbf = super()._make_ineq_const_slacked_single(x)
+        num_cbf_constraints = h_cbf.shape[0]
 
-        if not self._has_control_bounds:
-            return G_cbf, h_cbf
+        # Make objective with slack for CBF constraints only
+        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_cbf_constraints)
 
-        # Control bounds only apply to u, not slack variables
-        num_slack = G_cbf.shape[1] - self._action_dim
+        if self._has_control_bounds:
+            # Add control bound constraints (no slack variables for these)
+            num_slack = G_cbf.shape[1] - self._action_dim
 
-        # Control bound constraints with zero columns for slack
-        G_low = jnp.hstack([-jnp.eye(self._action_dim), jnp.zeros((self._action_dim, num_slack))])
-        h_low = -self._control_low
+            # Control bound constraints with zero columns for slack
+            G_low = jnp.hstack([-jnp.eye(self._action_dim), jnp.zeros((self._action_dim, num_slack))])
+            h_low = -jnp.array(self._control_low)
 
-        G_high = jnp.hstack([jnp.eye(self._action_dim), jnp.zeros((self._action_dim, num_slack))])
-        h_high = self._control_high
+            G_high = jnp.hstack([jnp.eye(self._action_dim), jnp.zeros((self._action_dim, num_slack))])
+            h_high = jnp.array(self._control_high)
 
-        # Combine all constraints
-        G = jnp.vstack([G_cbf, G_low, G_high])
-        h = jnp.concatenate([h_cbf, h_low, h_high])
+            # Combine CBF constraints (with slack) and control bound constraints
+            G = jnp.vstack([G_cbf, G_low, G_high])
+            h = jnp.concatenate([h_cbf, h_low, h_high])
+        else:
+            G, h = G_cbf, h_cbf
 
-        return G, h
+        # Make equality constraints
+        A, b = self._make_eq_const_single(x, Q_matrix)
+
+        # Solve QP for augmented decision variable [u, slack]
+        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
+        # Extract control and slack
+        u = res[:self._action_dim]
+        slack_vars = res[self._action_dim:]
+
+        # Compute constraint at solution
+        constraint_at_u = jnp.dot(G, res) - h
+
+        return u, slack_vars, constraint_at_u
 
     def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':
         """Assign state barrier."""
@@ -577,23 +612,29 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
     Combines minimum intervention with input constraints.
     """
 
+    # Input bounds
+    _control_low: tuple = eqx.field(static=True)
+    _control_high: tuple = eqx.field(static=True)
+    _has_control_bounds: bool = eqx.field(static=True)
+
     def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
                  params: Optional[dict] = None, dynamics=None, barrier=None,
-                 desired_control=None, control_low=None, control_high=None,
+                 desired_control=None, Q=None, c=None, control_low=None, control_high=None,
                  slacked: bool = False, slack_gain: float = 100.0):
         """Initialize MinIntervInputConstQPSafeControl."""
-        # Call MinIntervQPSafeControl init which handles BaseMinIntervSafeControl
-        MinIntervQPSafeControl.__init__(self, action_dim, alpha, params, dynamics,
-                                       barrier, desired_control, slacked, slack_gain)
 
-        # Set control bounds from InputConstQPSafeControl
+        MinIntervQPSafeControl.__init__(self, action_dim, alpha, params, dynamics,
+                                       barrier, desired_control, Q, c, slacked, slack_gain)
+
+        # Set control bounds as tuples
         if control_low is not None and control_high is not None:
-            self._control_low = jnp.array(control_low)
-            self._control_high = jnp.array(control_high)
+            # Convert to tuples for static fields
+            self._control_low = tuple(control_low) if not isinstance(control_low, tuple) else control_low
+            self._control_high = tuple(control_high) if not isinstance(control_high, tuple) else control_high
             self._has_control_bounds = True
         else:
-            self._control_low = jnp.zeros(action_dim)
-            self._control_high = jnp.zeros(action_dim)
+            self._control_low = tuple([0.0] * action_dim)
+            self._control_high = tuple([0.0] * action_dim)
             self._has_control_bounds = False
 
     def assign_control_bounds(self, low: list, high: list) -> 'MinIntervInputConstQPSafeControl':
