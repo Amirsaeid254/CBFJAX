@@ -13,6 +13,7 @@ from typing import List, Callable, Optional, Any, Dict
 from immutabledict import immutabledict
 
 from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple
+from cbfjax.dynamics.base import DummyDynamics
 
 
 class Barrier(eqx.Module):
@@ -427,18 +428,3 @@ class Barrier(eqx.Module):
         return len(self._barriers)
 
 
-class DummyDynamics:
-    """
-    Dummy dynamics class for default initialization.
-
-    Provides zero dynamics to avoid None values during object construction.
-    Should only be used during the construction phase.
-    """
-
-    def f(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Zero drift dynamics."""
-        return jnp.zeros_like(x)
-
-    def g(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Zero control matrix."""
-        return jnp.zeros((x.shape[0], 1))

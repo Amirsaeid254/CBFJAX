@@ -193,3 +193,20 @@ class LowPassFilterDynamics(AffineInControlDynamics):
         output: (state_dim, action_dim) - control matrix
         """
         return self._gains_mat
+
+
+class DummyDynamics:
+    """
+    Dummy dynamics class for default initialization.
+
+    Provides zero dynamics to avoid None values during object construction.
+    Should only be used during the construction phase.
+    """
+
+    def f(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Zero drift dynamics."""
+        return jnp.zeros_like(x)
+
+    def g(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Zero control matrix."""
+        return jnp.zeros((x.shape[0], 1))

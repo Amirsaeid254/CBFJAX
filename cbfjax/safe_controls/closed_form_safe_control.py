@@ -602,6 +602,7 @@ class InputConstCFSafeControl(CFSafeControl):
 
         return updated_ctrl
 
+    @jax.jit
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for input-constrained system.
