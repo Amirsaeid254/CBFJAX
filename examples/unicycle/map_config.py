@@ -1,11 +1,10 @@
 """
 Map configuration for CBFJAX unicycle example.
-Converted from CBFTorch Box objects to regular dictionaries for JAX compatibility.
 """
 
 import os
 
-# Make map configuration - using regular dicts instead of Box objects
+# Make map configuration
 map_config = {
     'geoms': (
         ('norm_box', {'center': (2.0, 1.5), 'size': (2.0, 2.0)}),

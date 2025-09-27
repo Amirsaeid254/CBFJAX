@@ -478,7 +478,6 @@ class InputConstQPSafeControl(QPSafeControl):
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for single state with input constraints.
-        Follows CBFTorch approach.
 
         Args:
             x: Single state vector (state_dim,)
@@ -525,7 +524,6 @@ class InputConstQPSafeControl(QPSafeControl):
     def _safe_optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control with slack variables for single state.
-        Follows CBFTorch approach.
 
         Args:
             x: Single state vector (state_dim,)

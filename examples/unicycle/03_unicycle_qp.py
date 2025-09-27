@@ -14,11 +14,8 @@ import datetime
 import os
 from immutabledict import immutabledict
 
-# Configure JAX for CPU computation
-jax.config.update("jax_platforms", "cpu")
-jax.config.update("jax_enable_x64", True)
-
-# CBFJAX imports
+# CBFJAX imports and configuration
+import cbfjax.config  # This automatically configures JAX with proper settings
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.utils.make_map import Map
 from cbfjax.barriers.multi_barrier import MultiBarriers
@@ -106,7 +103,7 @@ trajs = safety_filter.get_safe_optimal_trajs(x0=x0, sim_time=sim_time, timestep=
 simulation_time = time() - start_time
 print(f"Simulation completed in {simulation_time:.4f} seconds")
 
-# Rearrange trajs to match CBFTorch format
+# Rearrange trajs
 # trajs shape: (time_steps, batch, state_dim) -> list of (time_steps, state_dim) per trajectory
 trajs_list = [trajs[:, i, :] for i in range(goal_pos.shape[0])]
 

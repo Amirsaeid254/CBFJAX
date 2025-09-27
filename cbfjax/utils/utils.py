@@ -135,7 +135,7 @@ def match_dim(res: jnp.ndarray, x: jnp.ndarray, ) -> jnp.ndarray:
 
 def apply_and_match_dim(func: Callable, x: jnp.ndarray) -> jnp.ndarray:
     """
-    Apply function and match dimensions exactly like CBFTorch.
+    Apply function and match dimensions.
 
     Args:
         func: Function to apply
@@ -241,8 +241,6 @@ def make_circle_barrier_functional(center, radius):
     """
     Create circle barrier function.
 
-    JAX version of CBFTorch make_circle_barrier_functional.
-
     Args:
         center: Circle center (2,)
         radius: Circle radius (scalar)
@@ -262,8 +260,6 @@ def make_circle_barrier_functional(center, radius):
 def make_ellipse_barrier_functional(center, A):
     """
     Create ellipse barrier function.
-
-    JAX version of CBFTorch make_ellipse_barrier_functional.
 
     Args:
         center: Ellipse center (2,)
@@ -290,8 +286,6 @@ def make_ellipse_barrier_functional(center, A):
 def make_norm_rectangular_barrier_functional(center, size, rotation=0.0, p=20):
     """
     Create norm-based rectangular barrier function.
-
-    JAX version of CBFTorch make_norm_rectangular_barrier_functional.
 
     Args:
         center: Rectangle center (2,)
@@ -321,8 +315,6 @@ def make_norm_rectangular_barrier_functional(center, size, rotation=0.0, p=20):
 def make_affine_rectangular_barrier_functional(center, size, rotation=0.0, smooth=False, rho=40):
     """
     Create affine rectangular barrier function.
-
-    JAX version of CBFTorch make_affine_rectangular_barrier_functional.
 
     Args:
         center: Rectangle center (2,)

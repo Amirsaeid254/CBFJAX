@@ -3,25 +3,46 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jax-flowbarrier"
+name = "cbfjax"
 version = "0.1.0"
-description = "High-performance JAX implementation of FlowBarrier for safe control"
-authors = [{name = "FlowBarrier Team"}]
+description = "High-performance JAX implementation of Control Barrier Functions for safe control"
+authors = [{name = "Amirsaeid Safari"}]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.9"
+keywords = ["jax", "control", "barrier-functions", "safe-control", "robotics", "optimization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
 dependencies = [
-    "jax[cpu]>=0.4.20",
-    "jaxlib>=0.4.20",
-    "diffrax>=0.5.0",
-    "qpax>=0.1.0",
-    "chex>=0.1.8",
-    "numpy>=1.21.0",
-    "scipy>=1.9.0",
+    "jax>=0.6.2",
+    "jaxlib>=0.6.2",
+    "equinox>=0.13.1",
+    "diffrax>=0.7.0",
+    "qpax>=0.0.9",
+    "immutabledict>=4.2.1",
+    "numpy>=2.2.6",
+    "scipy>=1.15.3",
 ]
 
 [project.optional-dependencies]
 gpu = ["jax[cuda12_pip]"]
+examples = [
+    "matplotlib>=3.10.3",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -29,22 +50,42 @@ dev = [
     "isort>=5.10",
     "mypy>=1.0",
     "pre-commit>=2.20",
+    "matplotlib>=3.10.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/amirsaeid/cbfjax"
+Repository = "https://github.com/amirsaeid/cbfjax"
+Documentation = "https://cbfjax.readthedocs.io"
+"Bug Reports" = "https://github.com/amirsaeid/cbfjax/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["jax_flowbarrier*"]
+include = ["cbfjax*"]
+exclude = ["tests*", "examples*"]
+
+[tool.setuptools.package-data]
+cbfjax = ["py.typed"]
 
 [tool.black]
 line-length = 88
 target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  examples
+  | tests
+)/
+'''
 
 [tool.isort]
 profile = "black"
 line_length = 88
+skip_glob = ["examples/*", "tests/*"]
 
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

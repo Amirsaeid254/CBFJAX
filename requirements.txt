@@ -1,17 +1,23 @@
-# Core JAX dependencies
-jax>=0.4.0
-jaxlib>=0.4.0
-equinox>=0.11.0
+# Core dependencies
+jax>=0.6.2
+jaxlib>=0.6.2
+equinox>=0.13.1
+diffrax>=0.7.0
+qpax>=0.0.9
+immutabledict>=4.2.1
+numpy>=2.2.6
+scipy>=1.15.3
 
-# Differential equation solving
-diffrax>=0.4.0
+# Optional dependencies for examples
+matplotlib>=3.10.3
 
-# Scientific computing
-numpy>=1.21.0
-scipy>=1.7.0
+# Development dependencies (install with pip install -e .[dev])
+# pytest>=7.0
+# pytest-cov>=4.0
+# black>=22.0
+# isort>=5.10
+# mypy>=1.0
+# pre-commit>=2.20
 
-# Visualization
-matplotlib>=3.5.0
-
-# Optional: CUDA support (uncomment if using GPU)
-# jax[cuda12_pip]>=0.4.0 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# GPU support (install with pip install -e .[gpu])
+# jax[cuda12_pip]>=0.4.20
