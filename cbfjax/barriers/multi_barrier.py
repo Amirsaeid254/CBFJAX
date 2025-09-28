@@ -25,10 +25,11 @@ class MultiBarriers(Barrier):
     _barrier_funcs: tuple = eqx.field(static=True)
     _hocbf_funcs: tuple = eqx.field(static=True)
     _barriers: tuple = eqx.field(static=True)  # Override parent's _barriers to store list of barrier series
+    _multidim_indices: tuple = eqx.field(static=True)  # Indices of multi-dimensional barriers
 
     def __init__(self, barrier_func=None, dynamics=None, rel_deg=1, alphas=None,
                  barriers=None, hocbf_func=None, cfg=None,
-                 barrier_funcs=None, hocbf_funcs=None):
+                 barrier_funcs=None, hocbf_funcs=None, multidim_indices=None):
         """
         Initialize MultiBarriers.
 
@@ -42,6 +43,7 @@ class MultiBarriers(Barrier):
             cfg: Configuration dictionary
             barrier_funcs: Tuple of barrier functions from added barriers
             hocbf_funcs: Tuple of HOCBF functions from added barriers
+            multidim_indices: Tuple of indices for multi-dimensional barriers
         """
         # Initialize parent with minimal fields
         super().__init__(
@@ -58,6 +60,7 @@ class MultiBarriers(Barrier):
         self._barrier_funcs = tuple(barrier_funcs or ())
         self._hocbf_funcs = tuple(hocbf_funcs or ())
         self._barriers = tuple(barriers or ())
+        self._multidim_indices = tuple(multidim_indices or ())
 
     @classmethod
     def create_empty(cls, cfg=None):
@@ -80,13 +83,14 @@ class MultiBarriers(Barrier):
         """
         raise Exception("Use add_barriers method to add barriers for MultiBarriers class")
 
-    def add_barriers(self, barriers: List[Barrier], infer_dynamics: bool = False) -> 'MultiBarriers':
+    def add_barriers(self, barriers: List[Barrier], infer_dynamics: bool = False, multidim: bool = False) -> 'MultiBarriers':
         """
         Add barriers to MultiBarriers collection.
 
         Args:
             barriers: List of Barrier objects to add
             infer_dynamics: If True, infer dynamics from first barrier
+            multidim: If True, mark these barriers as multi-dimensional
 
         Returns:
             New MultiBarriers instance with added barriers
@@ -102,18 +106,26 @@ class MultiBarriers(Barrier):
         new_barrier_funcs = list(self._barrier_funcs)
         new_hocbf_funcs = list(self._hocbf_funcs)
         new_barriers = list(self._barriers)
+        new_multidim_indices = list(self._multidim_indices)
 
         # Add new barriers - store the _single methods to match CBFJAX structure
+        base_idx = len(self._hocbf_funcs)
         new_barrier_funcs.extend([barrier._barrier_single for barrier in barriers])
         new_hocbf_funcs.extend([barrier._hocbf_single for barrier in barriers])
         new_barriers.extend([barrier.barriers for barrier in barriers])
+
+        # If multidim=True, mark these new barriers as multi-dimensional
+        if multidim:
+            for i in range(len(barriers)):
+                new_multidim_indices.append(base_idx + i)
 
         return MultiBarriers(
             dynamics=dynamics,
             cfg=self.cfg,
             barrier_funcs=tuple(new_barrier_funcs),
             hocbf_funcs=tuple(new_hocbf_funcs),
-            barriers=tuple(new_barriers)
+            barriers=tuple(new_barriers),
+            multidim_indices=tuple(new_multidim_indices)
         )
 
     def assign_dynamics(self, dynamics) -> 'MultiBarriers':
@@ -136,7 +148,8 @@ class MultiBarriers(Barrier):
             cfg=self.cfg,
             barrier_funcs=self._barrier_funcs,
             hocbf_funcs=self._hocbf_funcs,
-            barriers=self._barriers
+            barriers=self._barriers,
+            multidim_indices=self._multidim_indices
         )
 
     def _barrier_single(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -234,23 +247,27 @@ class MultiBarriers(Barrier):
         lg_values = []
 
         # Process each barrier function
-        for hocbf_func in self._hocbf_funcs:
-            # Get jacobian and value in single call using has_aux=True
-            jac_hocbf, barrier_val = jax.jacrev(lambda x: (hocbf_func(x), hocbf_func(x)), has_aux=True)(x)
+        for i, hocbf_func in enumerate(self._hocbf_funcs):
+            if i in self._multidim_indices:
+                # Multi-dimensional barrier: use jacrev with has_aux
+                jac_hocbf, barrier_val = jax.jacrev(lambda x: (hocbf_func(x), hocbf_func(x)), has_aux=True)(x)
 
-            # Ensure barrier_val is at least 1D
-            barrier_val = ensure_batch_dim(barrier_val, target_ndim=1)
+                lf_vals = jnp.einsum('ij,j->i', jac_hocbf, f_val)
+                lg_vals = jnp.einsum('ij,jk->ik', jac_hocbf, g_val)
 
-            # Ensure jacobian is 2D: (num_outputs, state_dim)
-            jac_hocbf = ensure_batch_dim(jac_hocbf, target_ndim=2)
+                hocbf_values.extend(barrier_val)
+                lf_values.extend(lf_vals)
+                lg_values.extend(lg_vals)
+            else:
+                # Scalar barrier: use efficient value_and_grad
+                barrier_val, grad_hocbf = jax.value_and_grad(hocbf_func)(x)
 
-            lf_vals = jnp.einsum('ij,j->i', jac_hocbf, f_val)
-            lg_vals = jnp.einsum('ij,jk->ik', jac_hocbf, g_val)
+                lf_val = jnp.dot(grad_hocbf, f_val)
+                lg_val = grad_hocbf @ g_val
 
-            # Extend the lists
-            hocbf_values.extend(barrier_val)
-            lf_values.extend(lf_vals)
-            lg_values.extend(lg_vals)
+                hocbf_values.append(barrier_val)
+                lf_values.append(lf_val)
+                lg_values.append(lg_val)
 
         # Stack results
         hocbf_vals = jnp.array(hocbf_values)
