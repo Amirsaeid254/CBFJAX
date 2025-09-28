@@ -53,8 +53,10 @@ def get_trajs_from_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
     # Ensure batch dimension using existing utility
     x0 = ensure_batch_dim(x0)
 
+    steps = int(sim_time / timestep) + 1
+
     # Time points - now safe because timestep and sim_time are static
-    t_eval = jnp.linspace(0.0, sim_time, int(sim_time / timestep) + 1)
+    t_eval = jnp.linspace(0.0, sim_time, steps)
 
     # Define ODE function
     def ode_func(t, y, args):
@@ -78,7 +80,7 @@ def get_trajs_from_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
         y0=x0,
         saveat=diffrax.SaveAt(ts=t_eval),
         adjoint=adjoint,
-        max_steps=int(sim_time / timestep)
+        max_steps=steps * 5,  # Conservative buffer for adaptive methods
     )
 
     # Extract trajectories: (time_steps, batch, state_dim)
@@ -111,8 +113,6 @@ def get_trajs_from_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Calla
     batch_size, state_dim = x0.shape
     num_steps = int(sim_time / timestep) + 1
 
-    # Integration substep size
-    dt_sub = timestep / intermediate_steps
 
     solver = get_solver(method)
     adjoint = diffrax.RecursiveCheckpointAdjoint()
@@ -120,31 +120,39 @@ def get_trajs_from_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Calla
     def step_forward(carry, i):
         current_state = carry
 
-        # Compute control for current state (held constant for this timestep)
+        # Compute control for current batch of states (zero-order hold)
         current_controls = jax.vmap(action_func)(current_state)
 
-        # Define ODE with fixed control
-        def ode_func_fixed(t, y, args):
+        def ode_func(t, y, args):
             return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, current_controls)
 
-        # Integrate one timestep with fixed control
-        term = diffrax.ODETerm(ode_func_fixed)
+        # Set up integration time points
+        t_eval = jnp.linspace(0.0, timestep, intermediate_steps)
+        saveat = diffrax.SaveAt(ts=t_eval)
+
+        # Integrate over one timestep with fixed control
+        term = diffrax.ODETerm(ode_func)
         solution = diffrax.diffeqsolve(
             terms=term,
             solver=solver,
             t0=0.0,
             t1=timestep,
-            dt0=dt_sub,
+            dt0=timestep / (intermediate_steps - 1) if intermediate_steps > 1 else timestep,
             y0=current_state,
             adjoint=adjoint,
-            max_steps=intermediate_steps
+            saveat=saveat,
+            max_steps=intermediate_steps * 5,  # Conservative buffer for adaptive methods
         )
 
-        next_state = solution.ys  # Final state
+        # Extract final state
+        next_state = solution.ys[-1]
+
         return next_state, next_state
 
     # Use scan to iterate through timesteps
     _, states_sequence = jax.lax.scan(step_forward, x0, jnp.arange(num_steps - 1))
 
     # Concatenate initial state with computed states
-    return jnp.concatenate([jnp.expand_dims(x0, 0), states_sequence], axis=0)
+    trajs = jnp.concatenate([jnp.expand_dims(x0, 0), states_sequence], axis=0)
+
+    return trajs

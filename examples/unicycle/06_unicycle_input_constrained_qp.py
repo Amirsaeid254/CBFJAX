@@ -134,7 +134,7 @@ for i, traj in enumerate(trajs_list):
     # des_ctrls.append(des_ctrl_vals)
 
     # Compute barrier values using MultiBarriers
-    h_vals.append(barrier.hocbf(traj))
+    h_vals.append(map_.barrier.hocbf(traj))
 
     # For min barriers, we need to create the composite map barrier for visualization
     map_composite = map_.create_barriers()
@@ -275,7 +275,7 @@ plt.show()
 fig, axs = plt.subplots(3, 1, figsize=(8, 4.5))
 
 # Plot barrier values (MultiBarriers HOCBF)
-axs[0].plot(time_array, h_vals[0][:, 0, 0], color='black')  # First barrier from MultiBarriers
+axs[0].plot(time_array, h_vals[0], color='black')  # First barrier from MultiBarriers
 axs[0].set_ylabel(r'$h$', fontsize=16)
 
 axs[1].plot(time_array, min_barriers[0], color='black')
