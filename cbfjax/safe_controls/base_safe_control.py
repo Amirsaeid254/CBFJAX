@@ -12,7 +12,7 @@ from typing import Callable, Optional, Any, Union
 from abc import abstractmethod
 from immutabledict import immutabledict
 
-from ..utils.integration import get_trajs_from_action_func, get_trajs_from_action_func_zoh
+from ..utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh
 from ..utils.utils import ensure_batch_dim
 
 
@@ -287,7 +287,7 @@ class BaseSafeControl(eqx.Module):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
-        return get_trajs_from_action_func(
+        return get_trajs_from_state_action_func(
             x0=x0,
             dynamics=self._dynamics,
             action_func=self._safe_optimal_control_for_ode,
@@ -312,7 +312,7 @@ class BaseSafeControl(eqx.Module):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
-        return get_trajs_from_action_func_zoh(
+        return get_trajs_from_state_action_func_zoh(
             x0=x0,
             dynamics=self._dynamics,
             action_func=self._safe_optimal_control_for_ode,
@@ -526,7 +526,7 @@ class BaseMinIntervSafeControl(BaseSafeControl):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
-        return get_trajs_from_action_func(
+        return get_trajs_from_state_action_func(
             x0=x0,
             dynamics=self._dynamics,
             action_func=self._desired_control_for_ode,
@@ -551,7 +551,7 @@ class BaseMinIntervSafeControl(BaseSafeControl):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
-        return get_trajs_from_action_func_zoh(
+        return get_trajs_from_state_action_func_zoh(
             x0=x0,
             dynamics=self._dynamics,
             action_func=self._desired_control_for_ode,
