@@ -167,7 +167,7 @@ def ensure_batch_dim(x: jnp.ndarray, target_ndim: int = 2) -> jnp.ndarray:
 
 def apply_and_batchize(func: Callable, x: jnp.ndarray):
     """ALWAYS use vmap for consistent behavior"""
-    x_batched = ensure_batch_dim(x)  # Ensure batch dim
+    x_batched = jnp.atleast_2d(x)  # Ensure batch dim
     batched_func = jax.vmap(func)    # Always vmap
     return apply_and_match_dim(batched_func, x_batched)
 

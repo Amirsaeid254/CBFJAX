@@ -119,7 +119,7 @@ class MultiBarriers(Barrier):
             for i in range(len(barriers)):
                 new_multidim_indices.append(base_idx + i)
 
-        return MultiBarriers(
+        return self.__class__(
             dynamics=dynamics,
             cfg=self.cfg,
             barrier_funcs=tuple(new_barrier_funcs),
@@ -143,7 +143,7 @@ class MultiBarriers(Barrier):
             warnings.warn('The assigned dynamics is overridden by the dynamics of the'
                          ' first barrier on the barriers list')
 
-        return MultiBarriers(
+        return self.__class__(
             dynamics=dynamics,
             cfg=self.cfg,
             barrier_funcs=self._barrier_funcs,
@@ -174,20 +174,19 @@ class MultiBarriers(Barrier):
 
         Main barrier value is the barrier which defines all the higher order cbfs
         involved in the composite barrier function expression.
-        This method returns a horizontally stacked array of the value of barriers at x.
+        This method returns a horizontally concatenated array of the value of barriers at x.
 
         Args:
             x: State vector (n,) or batch (batch, n)
 
         Returns:
-            Barrier values with shape (batch, len(self._barrier_funcs), 1)
+            Barrier values with shape (batch, total_barriers, 1)
         """
         if not self._barrier_funcs:
             raise ValueError("No barriers added. Use add_barriers() first.")
 
-        # Stack and transpose
-        stacked = jnp.stack([apply_and_batchize(barrier_func, x) for barrier_func in self._barrier_funcs])
-        return jnp.transpose(stacked, (1, 0, 2))
+        # Concatenate along barrier dimension
+        return jnp.concatenate([apply_and_batchize(barrier_func, x) for barrier_func in self._barrier_funcs], axis=1)
 
     def _hocbf_single(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -203,7 +202,7 @@ class MultiBarriers(Barrier):
             raise ValueError("No barriers added. Use add_barriers() first.")
 
         # Compute all HOCBF values for single state
-        return jnp.array([hocbf_func(x) for hocbf_func in self._hocbf_funcs])
+        return jnp.concatenate([jnp.atleast_1d(hocbf_func(x)) for hocbf_func in self._hocbf_funcs])
 
     def hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -215,14 +214,13 @@ class MultiBarriers(Barrier):
             x: State vector (n,) or batch (batch, n)
 
         Returns:
-            HOCBF values with shape (batch, len(self._hocbf_funcs), 1)
+            HOCBF values with shape (batch, total_barriers)
         """
         if not self._hocbf_funcs:
             raise ValueError("No barriers added. Use add_barriers() first.")
 
-        # Stack and transpose
-        stacked = jnp.stack([apply_and_batchize(hocbf_func, x) for hocbf_func in self._hocbf_funcs])
-        return jnp.transpose(stacked, (1, 0, 2))
+        # Concatenate along barrier dimension
+        return jnp.concatenate([apply_and_batchize(hocbf_func, x) for hocbf_func in self._hocbf_funcs], axis=1)
 
     def _get_hocbf_and_lie_derivs_single(self, x: jnp.ndarray) -> tuple:
         """
@@ -259,7 +257,7 @@ class MultiBarriers(Barrier):
                 lf_values.extend(lf_vals)
                 lg_values.extend(lg_vals)
             else:
-                # Scalar barrier: use efficient value_and_grad
+                # Scalar barrier: use value_and_grad
                 barrier_val, grad_hocbf = jax.value_and_grad(hocbf_func)(x)
 
                 lf_val = jnp.dot(grad_hocbf, f_val)
@@ -286,7 +284,6 @@ class MultiBarriers(Barrier):
         Returns:
             Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf) with proper batch dimensions
         """
-        # Use apply_and_batchize_tuple for consistent batching
         return apply_and_batchize_tuple(self._get_hocbf_and_lie_derivs_single, x)
 
     def Lf_hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -297,16 +294,15 @@ class MultiBarriers(Barrier):
             x: State vector (n,) or batch (batch, n)
 
         Returns:
-            Lie derivatives with shape (batch, len(self._hocbf_funcs), f dimension)
+            Lie derivatives with shape (batch, total_barriers, f dimension)
         """
         if not self._hocbf_funcs:
             raise ValueError("No barriers added. Use add_barriers() first.")
         if self._dynamics is None:
             raise ValueError("Dynamics not assigned. Use assign_dynamics() first.")
 
-        # Compute Lie derivatives and stack
-        lie_derivs = jnp.stack([lie_deriv(x, hocbf_func, self._dynamics.f) for hocbf_func in self._hocbf_funcs])
-        return jnp.transpose(lie_derivs, (1, 0, 2))
+        # Concatenate along barrier dimension
+        return jnp.concatenate([lie_deriv(x, hocbf_func, self._dynamics.f) for hocbf_func in self._hocbf_funcs], axis=1)
 
     def Lg_hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -316,16 +312,15 @@ class MultiBarriers(Barrier):
             x: State vector (n,) or batch (batch, n)
 
         Returns:
-            Lie derivatives with shape (batch, len(self._hocbf_funcs), g.shape)
+            Lie derivatives with shape (batch, total_barriers, g.shape)
         """
         if not self._hocbf_funcs:
             raise ValueError("No barriers added. Use add_barriers() first.")
         if self._dynamics is None:
             raise ValueError("Dynamics not assigned. Use assign_dynamics() first.")
 
-        # Compute Lie derivatives and stack
-        lie_derivs = jnp.stack([lie_deriv(x, hocbf_func, self._dynamics.g) for hocbf_func in self._hocbf_funcs])
-        return jnp.transpose(lie_derivs, (1, 0, 2))
+        # Concatenate along barrier dimension to handle multi-dimensional barriers
+        return jnp.concatenate([lie_deriv(x, hocbf_func, self._dynamics.g) for hocbf_func in self._hocbf_funcs], axis=1)
 
     def min_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """

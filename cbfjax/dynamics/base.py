@@ -21,7 +21,7 @@ class AffineInControlDynamics(eqx.Module):
     _params: Optional[Dict[str, Any]] = eqx.field(static=True)
 
     def __init__(self, params=None, **kwargs):
-        self._params = immutabledict(params or {})  # ✅ Handle None case
+        self._params = immutabledict(params or {})
         if "state_dim" in kwargs:
             self._state_dim = kwargs["state_dim"]
         if "action_dim" in kwargs:
@@ -62,7 +62,7 @@ class AffineInControlDynamics(eqx.Module):
         assert out.shape == expected_shape, f"Expected shape {expected_shape}, got {out.shape}"
         return out
 
-    @abstractmethod
+
     def _f(self, x):
         """
         x: (state_dim,) - single state vector
@@ -70,7 +70,7 @@ class AffineInControlDynamics(eqx.Module):
         """
         raise NotImplementedError
 
-    @abstractmethod
+
     def _g(self, x):
         """
         x: (state_dim,) - single state vector
@@ -88,80 +88,46 @@ class AffineInControlDynamics(eqx.Module):
         assert action.shape == (self.action_dim,), f"Expected action shape {(self.action_dim,)}, got {action.shape}"
         return self.f(x) + self.g(x) @ action
 
-    def set_f(self, f_func: Callable) -> 'AffineInControlDynamics':
-        """
-        Create new dynamics with different drift function.
 
-        JAX-compatible version of CBFTorch's set_f using eqx.tree_at.
-        Preserves original type and is more efficient than creating new objects.
+
+class CustomDynamics(AffineInControlDynamics):
+    """
+    Custom dynamics class where users provide f and g functions.
+
+    This allows users to create custom dynamics by passing callable functions
+    for the drift (f) and control matrix (g) without needing to subclass.
+    """
+    _f_func: Callable = eqx.field(static=True)
+    _g_func: Callable = eqx.field(static=True)
+
+    def __init__(self, state_dim: int, action_dim: int, f_func: Callable, g_func: Callable, params=None):
+        """
+        Initialize custom dynamics with user-provided functions.
 
         Args:
-            f_func: New drift function (state,) -> (state_dim,)
-
-        Returns:
-            New dynamics instance with updated drift function (preserves original type)
-
-        Example:
-            def new_drift(x):
-                return jnp.array([x[1], -x[0] + 0.1*jnp.sin(x[0])])
-
-            new_dynamics = dynamics.set_f(new_drift)
+            state_dim: State dimension
+            action_dim: Action/control dimension
+            f_func: Drift function with signature f(x) -> (state_dim,)
+            g_func: Control matrix function with signature g(x) -> (state_dim, action_dim)
+            params: Optional parameters dictionary
         """
-        if not callable(f_func):
-            raise TypeError("f_func must be a callable function")
+        super().__init__(params=params, state_dim=state_dim, action_dim=action_dim)
+        self._f_func = f_func
+        self._g_func = g_func
 
-        return eqx.tree_at(lambda d: d._f, self, f_func)
-
-    def set_g(self, g_func: Callable) -> 'AffineInControlDynamics':
+    def _f(self, x):
         """
-        Create new dynamics with different control matrix function.
-
-        JAX-compatible version of CBFTorch's set_g using eqx.tree_at.
-        Preserves original type and is more efficient than creating new objects.
-
-        Args:
-            g_func: New control matrix function (state,) -> (state_dim, action_dim)
-
-        Returns:
-            New dynamics instance with updated control matrix (preserves original type)
-
-        Example:
-            def new_control(x):
-                return 2.0 * original_dynamics._g(x)  # Double the control gains
-
-            new_dynamics = dynamics.set_g(new_control)
+        x: (state_dim,) - single state vector
+        output: (state_dim,) - drift vector
         """
-        if not callable(g_func):
-            raise TypeError("g_func must be a callable function")
+        return self._f_func(x)
 
-        return eqx.tree_at(lambda d: d._g, self, g_func)
-
-    def set_f_and_g(self, f_func: Callable, g_func: Callable) -> 'AffineInControlDynamics':
+    def _g(self, x):
         """
-        Create new dynamics with both drift and control functions changed.
-
-        Convenient method to update both f and g at once using eqx.tree_at.
-
-        Args:
-            f_func: New drift function
-            g_func: New control matrix function
-
-        Returns:
-            New dynamics instance with both functions updated (preserves original type)
-
-        Example:
-            new_dynamics = dynamics.set_f_and_g(my_f, my_g)
+        x: (state_dim,) - single state vector
+        output: (state_dim, action_dim) - control matrix
         """
-        if not callable(f_func):
-            raise TypeError("f_func must be a callable function")
-        if not callable(g_func):
-            raise TypeError("g_func must be a callable function")
-
-        return eqx.tree_at(
-            lambda d: (d._f, d._g),
-            self,
-            (f_func, g_func)
-        )
+        return self._g_func(x)
 
 
 class LowPassFilterDynamics(AffineInControlDynamics):

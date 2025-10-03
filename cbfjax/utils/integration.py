@@ -53,7 +53,7 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
 
     steps = int(sim_time / timestep) + 1
 
-    # Time points - now safe because timestep and sim_time are static
+    # Time points
     t_eval = jnp.linspace(0.0, sim_time, steps)
 
     # Define ODE function
@@ -85,6 +85,7 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
     return solution.ys
 
 
+
 def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Callable,
                                          timestep: float, sim_time: float, intermediate_steps: int = 2,
                                          method: str = 'tsit5') -> jnp.ndarray:
@@ -94,105 +95,96 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
     Args:
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
-        action_func: Function that computes control given state
-        timestep: Control update timestep (must be static)
-        sim_time: Total simulation time (must be static)
+        action_func: Function that computes control given SINGLE state
+        timestep: Control update timestep
+        sim_time: Total simulation time
         intermediate_steps: Integration substeps per control update
         method: Integration method
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
     """
-    # Ensure batch dimension using existing utility
     x0 = ensure_batch_dim(x0)
-
-    batch_size, state_dim = x0.shape
     num_steps = int(sim_time / timestep) + 1
-
 
     solver = get_solver(method)
     adjoint = diffrax.RecursiveCheckpointAdjoint()
 
     def step_forward(carry, i):
         current_state = carry
-
-        # Compute control for current batch of states (zero-order hold)
         current_controls = jax.vmap(action_func)(current_state)
 
         def ode_func(t, y, args):
-            return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, current_controls)
+            controls = args
+            return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, controls)
 
-        # Set up integration time points
-        t_eval = jnp.linspace(0.0, timestep, intermediate_steps)
-        saveat = diffrax.SaveAt(ts=t_eval)
-
-        # Integrate over one timestep with fixed control
         term = diffrax.ODETerm(ode_func)
         solution = diffrax.diffeqsolve(
             terms=term,
             solver=solver,
             t0=0.0,
             t1=timestep,
-            dt0=timestep / (intermediate_steps - 1) if intermediate_steps > 1 else timestep,
+            dt0=timestep / intermediate_steps,
             y0=current_state,
+            args=current_controls,
             adjoint=adjoint,
-            saveat=saveat,
-            max_steps=intermediate_steps * 5,  # Conservative buffer for adaptive methods
+            saveat=diffrax.SaveAt(t1=True),
+            max_steps=intermediate_steps * 5,
         )
 
-        # Extract final state
-        next_state = solution.ys[-1]
-
+        next_state = solution.ys[0]
         return next_state, next_state
 
-    # Use scan to iterate through timesteps
     _, states_sequence = jax.lax.scan(step_forward, x0, jnp.arange(num_steps - 1))
-
-    # Concatenate initial state with computed states
     trajs = jnp.concatenate([jnp.expand_dims(x0, 0), states_sequence], axis=0)
 
     return trajs
 
 
-
-
-def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
-                                     timestep: float, sim_time: float, method: str = 'tsit5') -> jnp.ndarray:
+def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_func: Callable,
+                                     timestep: float = None, sim_time: float = None,
+                                     num_steps: int = None, method: str = 'tsit5') -> jnp.ndarray:
     """
     Generate trajectories from action function using diffrax.
 
     Args:
-        x0: Initial states (batch, state_dim) or (state_dim,)
+        x0: Initial states (state_dim,)
         dynamics: Dynamics object with rhs method
-        action_func: Function that computes control given state
-        timestep: Integration timestep (must be static)
-        sim_time: Total simulation time (must be static)
+        action_func: Function that computes control given time
+        timestep: Integration timestep (optional if num_steps provided)
+        sim_time: Total simulation time (can be traced if num_steps provided)
+        num_steps: Number of time steps (static, required when sim_time is traced)
         method: Integration method
 
     Returns:
-        Trajectories (time_steps, batch, state_dim)
+        Trajectories (time_steps, state_dim)
     """
-    # Ensure batch dimension
-    x0 = ensure_batch_dim(x0)
 
-    steps = int(sim_time / timestep) + 1
+    # Handle static num_steps with traced sim_time
+    if num_steps is not None:
+        steps = num_steps
+        # timestep is computed adaptively from sim_time / (steps - 1)
+        if timestep is None:
+            timestep = sim_time / (steps - 1) if steps > 1 else sim_time
+    else:
+        if timestep is None or sim_time is None:
+            raise ValueError("Must provide either (timestep, sim_time) or (num_steps, sim_time)")
+        steps = int(sim_time / timestep) + 1
 
-    # Time points - now safe because timestep and sim_time are static
+    # Time points - jnp.linspace works with traced sim_time when num is static
     t_eval = jnp.linspace(0.0, sim_time, steps)
 
-    # Define ODE function
-    def ode_func(t, y, args):
-        # y shape: (batch, state_dim)
-        control = jax.vmap(action_func)(t)  # Vectorize action function over batch
-        return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, control)  # Vectorize dynamics
+    def vector_field(t, y, args):
+        return dynamics.rhs(y, action_func(t))
 
     # Set up diffrax problem
     solver = get_solver(method)
 
     # Use RecursiveCheckpointAdjoint for gradient computation
-    adjoint = diffrax.RecursiveCheckpointAdjoint()
+    adjoint = diffrax.RecursiveCheckpointAdjoint(checkpoints=10)
+    # adjoint = diffrax.BacksolveAdjoint()
 
-    term = diffrax.ODETerm(ode_func)
+    term = diffrax.ODETerm(vector_field)
     solution = diffrax.diffeqsolve(
         terms=term,
         solver=solver,
@@ -205,7 +197,7 @@ def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Call
         max_steps=steps * 5,  # Conservative buffer for adaptive methods
     )
 
-    # Extract trajectories: (time_steps, batch, state_dim)
+    # Extract trajectories: (time_steps, state_dim)
     return solution.ys
 
 
@@ -219,8 +211,8 @@ def get_trajs_from_time_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: 
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
         action_func: Function that computes control given time
-        timestep: Control update timestep (must be static)
-        sim_time: Total simulation time (must be static)
+        timestep: Control update timestep
+        sim_time: Total simulation time
         intermediate_steps: Integration substeps per control update
         method: Integration method
 
@@ -277,3 +269,127 @@ def get_trajs_from_time_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: 
     trajs = jnp.concatenate([jnp.expand_dims(x0, 0), states_sequence], axis=0)
 
     return trajs
+
+
+def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_func: Callable,
+                                              timestep: float, sim_time: float, method: str = 'tsit5') -> jnp.ndarray:
+    """
+    Generate trajectories from action function using diffrax with Python loop for batching.
+
+    Use this when action_func is not JAX-compatible (e.g., uses external libraries like CVXOPT).
+
+    Args:
+        x0: Initial states (batch, state_dim) or (state_dim,)
+        dynamics: Dynamics object with rhs method
+        action_func: Function that computes control given SINGLE state (not vmappable)
+        timestep: Integration timestep (must be static)
+        sim_time: Total simulation time (must be static)
+        method: Integration method
+
+    Returns:
+        Trajectories (time_steps, batch, state_dim)
+    """
+    # Ensure batch dimension using existing utility
+    x0 = ensure_batch_dim(x0)
+    batch_size = x0.shape[0]
+
+    steps = int(sim_time / timestep) + 1
+    t_eval = jnp.linspace(0.0, sim_time, steps)
+
+    # Process each initial state independently
+    trajectories = []
+    for i in range(batch_size):
+        # Define ODE function for single trajectory
+        def ode_func(t, y, args):
+            control = action_func(y)
+            return dynamics.rhs(y, control)
+
+        # Set up diffrax problem
+        solver = get_solver(method)
+        adjoint = diffrax.RecursiveCheckpointAdjoint()
+
+        term = diffrax.ODETerm(ode_func)
+        solution = diffrax.diffeqsolve(
+            terms=term,
+            solver=solver,
+            t0=0.0,
+            t1=sim_time,
+            dt0=timestep,
+            y0=x0[i],
+            saveat=diffrax.SaveAt(ts=t_eval),
+            adjoint=adjoint,
+            max_steps=steps * 5,
+        )
+
+        trajectories.append(solution.ys)
+
+    # Stack trajectories: (time_steps, batch, state_dim)
+    return jnp.stack(trajectories, axis=1)
+
+
+def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, action_func: Callable,
+                                                   timestep: float, sim_time: float, intermediate_steps: int = 2,
+                                                   method: str = 'tsit5') -> jnp.ndarray:
+    """
+    Generate trajectories with zero-order hold control using diffrax with Python loop for batching.
+
+    Use this when action_func is not JAX-compatible (e.g., uses external libraries like CVXOPT).
+    The ODE integration between control updates is JIT-compiled.
+
+    Args:
+        x0: Initial states (batch, state_dim) or (state_dim,)
+        dynamics: Dynamics object with rhs method
+        action_func: Function that computes control given SINGLE state (not vmappable)
+        timestep: Control update timestep
+        sim_time: Total simulation time
+        intermediate_steps: Integration substeps per control update
+        method: Integration method
+
+    Returns:
+        Trajectories (time_steps, batch, state_dim)
+    """
+    x0 = ensure_batch_dim(x0)
+    batch_size = x0.shape[0]
+    num_steps = int(sim_time / timestep) + 1
+
+    solver = get_solver(method)
+    adjoint = diffrax.RecursiveCheckpointAdjoint()
+
+    # JIT-compiled ODE step with fixed control (ZOH)
+    @jax.jit
+    def integrate_with_fixed_control(current_state, control):
+        def ode_func(t, y, args):
+            return dynamics.rhs(y, args)
+
+        term = diffrax.ODETerm(ode_func)
+        solution = diffrax.diffeqsolve(
+            terms=term,
+            solver=solver,
+            t0=0.0,
+            t1=timestep,
+            dt0=timestep / intermediate_steps,
+            y0=current_state,
+            args=control,
+            adjoint=adjoint,
+            saveat=diffrax.SaveAt(t1=True),
+            max_steps=intermediate_steps * 5,
+        )
+        return solution.ys[0]
+
+    # Process each initial state independently
+    trajectories = []
+    for i in range(batch_size):
+        traj = [x0[i]]
+        current_state = x0[i]
+
+        # Python loop over timesteps (cannot use lax.scan due to CVXOPT in action_func)
+        for _ in range(num_steps - 1):
+            current_control = action_func(current_state)
+            next_state = integrate_with_fixed_control(current_state, current_control)
+            traj.append(next_state)
+            current_state = next_state
+
+        trajectories.append(jnp.stack(traj, axis=0))
+
+    # Stack trajectories: (time_steps, batch, state_dim)
+    return jnp.stack(trajectories, axis=1)
