@@ -142,7 +142,9 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
 
 
 def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_func: Callable,
-                                     timestep: float = None, sim_time: float = None,
+                                     timestep: Union[float, jnp.ndarray] = None,
+                                     start_time: Union[float, jnp.ndarray] = 0.0,
+                                     sim_time: Union[float, jnp.ndarray] = None,
                                      num_steps: int = None, method: str = 'tsit5') -> jnp.ndarray:
     """
     Generate trajectories from action function using diffrax.
@@ -151,14 +153,19 @@ def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_fun
         x0: Initial states (state_dim,)
         dynamics: Dynamics object with rhs method
         action_func: Function that computes control given time
-        timestep: Integration timestep (optional if num_steps provided)
-        sim_time: Total simulation time (can be traced if num_steps provided)
+        timestep: Integration timestep (optional if num_steps provided, can be jnp.ndarray)
+        start_time: Start time for integration (can be jnp.ndarray for gradient)
+        sim_time: Total simulation time (can be jnp.ndarray for gradient)
         num_steps: Number of time steps (static, required when sim_time is traced)
         method: Integration method
 
     Returns:
         Trajectories (time_steps, state_dim)
     """
+    # Convert to jnp arrays if not already
+    start_time = jnp.asarray(start_time)
+    if sim_time is not None:
+        sim_time = jnp.asarray(sim_time)
 
     # Handle static num_steps with traced sim_time
     if num_steps is not None:
@@ -171,8 +178,7 @@ def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_fun
             raise ValueError("Must provide either (timestep, sim_time) or (num_steps, sim_time)")
         steps = int(sim_time / timestep) + 1
 
-    # Time points - jnp.linspace works with traced sim_time when num is static
-    t_eval = jnp.linspace(0.0, sim_time, steps)
+    t_eval = jnp.linspace(start_time, sim_time, steps)
 
     def vector_field(t, y, args):
         return dynamics.rhs(y, action_func(t))
@@ -181,14 +187,14 @@ def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_fun
     solver = get_solver(method)
 
     # Use RecursiveCheckpointAdjoint for gradient computation
-    adjoint = diffrax.RecursiveCheckpointAdjoint(checkpoints=10)
-    # adjoint = diffrax.BacksolveAdjoint()
+    adjoint = diffrax.RecursiveCheckpointAdjoint()
+
 
     term = diffrax.ODETerm(vector_field)
     solution = diffrax.diffeqsolve(
         terms=term,
         solver=solver,
-        t0=0.0,
+        t0=start_time,
         t1=sim_time,
         dt0=timestep,
         y0=x0,
