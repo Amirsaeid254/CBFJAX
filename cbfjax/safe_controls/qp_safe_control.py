@@ -80,6 +80,30 @@ class QPSafeControl(BaseSafeControl):
         """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New QPSafeControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'params': dict(self._params),
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'Q': self._Q,
+            'c': self._c,
+            'slacked': self._slacked,
+            'slack_gain': self._slack_gain
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_state_barrier(self, barrier) -> 'QPSafeControl':
         """
         Assign state barrier to controller.
@@ -90,16 +114,7 @@ class QPSafeControl(BaseSafeControl):
         Returns:
             New QPSafeControl instance with assigned barrier
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=self._dynamics,
-            barrier=barrier,
-            Q=self._Q,
-            c=self._c,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics) -> 'QPSafeControl':
         """
@@ -111,16 +126,7 @@ class QPSafeControl(BaseSafeControl):
         Returns:
             New QPSafeControl instance with assigned dynamics
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_cost(self, Q: Callable, c: Callable) -> 'QPSafeControl':
         """
@@ -133,16 +139,7 @@ class QPSafeControl(BaseSafeControl):
         Returns:
             New QPSafeControl instance with assigned cost
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            Q=Q,
-            c=c,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(Q=Q, c=c)
 
     @jax.jit
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
@@ -335,6 +332,31 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         self._slacked = slacked if params is None else params.get('slacked', slacked)
         self._slack_gain = slack_gain if params is None else params.get('slack_gain', slack_gain)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New MinIntervQPSafeControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'params': dict(self._params),
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'desired_control': self._desired_control,
+            'Q': self._Q,
+            'c': self._c,
+            'slacked': self._slacked,
+            'slack_gain': self._slack_gain
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_desired_control(self, desired_control: Callable) -> 'MinIntervQPSafeControl':
         """
         Assign desired control and automatically set up cost.
@@ -351,17 +373,10 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         Q_func = lambda x: 2.0 * jnp.eye(self._action_dim)
         c_func = lambda x: -2.0 * desired_control(x)
 
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=self._barrier,
+        return self._create_updated_instance(
             desired_control=desired_control,
             Q=Q_func,
-            c=c_func,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
+            c=c_func
         )
 
     def assign_cost(self, Q: Callable, c: Callable) -> 'MinIntervQPSafeControl':
@@ -375,44 +390,15 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         Returns:
             New instance with assigned cost
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            desired_control=self._desired_control,
-            Q=Q,
-            c=c,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(Q=Q, c=c)
 
     def assign_state_barrier(self, barrier) -> 'MinIntervQPSafeControl':
         """Assign state barrier."""
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=barrier,
-            desired_control=self._desired_control,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics) -> 'MinIntervQPSafeControl':
         """Assign dynamics."""
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=dynamics,
-            barrier=self._barrier,
-            desired_control=self._desired_control,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
 
 class InputConstQPSafeControl(QPSafeControl):
@@ -446,6 +432,32 @@ class InputConstQPSafeControl(QPSafeControl):
             self._control_high = tuple([0.0] * action_dim)
             self._has_control_bounds = False
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New InputConstQPSafeControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'params': dict(self._params),
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'Q': self._Q,
+            'c': self._c,
+            'control_low': self._control_low if self._has_control_bounds else None,
+            'control_high': self._control_high if self._has_control_bounds else None,
+            'slacked': self._slacked,
+            'slack_gain': self._slack_gain
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_control_bounds(self, low: list, high: list) -> 'InputConstQPSafeControl':
         """
         Assign control input bounds.
@@ -460,19 +472,7 @@ class InputConstQPSafeControl(QPSafeControl):
         assert len(low) == len(high), 'low and high should have the same length'
         assert len(low) == self._action_dim, 'bounds length should match action dimension'
 
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c,
-            control_low=low,
-            control_high=high,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(control_low=low, control_high=high)
 
     @jax.jit
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
@@ -572,35 +572,11 @@ class InputConstQPSafeControl(QPSafeControl):
 
     def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':
         """Assign state barrier."""
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=barrier,
-            Q=self._Q,
-            c=self._c,
-            control_low=self._control_low if self._has_control_bounds else None,
-            control_high=self._control_high if self._has_control_bounds else None,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics) -> 'InputConstQPSafeControl':
         """Assign dynamics."""
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c,
-            control_low=self._control_low if self._has_control_bounds else None,
-            control_high=self._control_high if self._has_control_bounds else None,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
 
 class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeControl):
@@ -635,23 +611,39 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
             self._control_high = tuple([0.0] * action_dim)
             self._has_control_bounds = False
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New MinIntervInputConstQPSafeControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'params': dict(self._params),
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'desired_control': self._desired_control,
+            'Q': self._Q,
+            'c': self._c,
+            'control_low': self._control_low if self._has_control_bounds else None,
+            'control_high': self._control_high if self._has_control_bounds else None,
+            'slacked': self._slacked,
+            'slack_gain': self._slack_gain
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_control_bounds(self, low: list, high: list) -> 'MinIntervInputConstQPSafeControl':
         """Assign control bounds."""
         assert len(low) == len(high), 'low and high should have the same length'
         assert len(low) == self._action_dim, 'bounds length should match action dimension'
 
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            desired_control=self._desired_control,
-            control_low=low,
-            control_high=high,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
-        )
+        return self._create_updated_instance(control_low=low, control_high=high)
 
     def assign_desired_control(self, desired_control: Callable) -> 'MinIntervInputConstQPSafeControl':
         """Assign desired control and set up cost."""
@@ -659,17 +651,8 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
         Q_func = lambda x: 2.0 * jnp.eye(self._action_dim)
         c_func = lambda x: -2.0 * desired_control(x)
 
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=self._barrier,
+        return self._create_updated_instance(
             desired_control=desired_control,
             Q=Q_func,
-            c=c_func,
-            control_low=self._control_low if self._has_control_bounds else None,
-            control_high=self._control_high if self._has_control_bounds else None,
-            slacked=self._slacked,
-            slack_gain=self._slack_gain
+            c=c_func
         )

@@ -100,6 +100,31 @@ class Barrier(eqx.Module):
         """
         return cls(cfg=cfg)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        This helper method enables clean assignment methods by collecting
+        all current field values and updating only the changed ones.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New instance of the same class with updated fields
+        """
+        defaults = {
+            'barrier_func': self._barrier_func,
+            'dynamics': self._dynamics,
+            'rel_deg': self._rel_deg,
+            'alphas': self._alphas,
+            'barriers': self._barriers,
+            'hocbf_func': self._hocbf_func,
+            'cfg': self.cfg
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign(self, barrier_func: Callable, rel_deg: int = 1,
                alphas: Optional[List[Callable]] = None) -> 'Barrier':
         """
@@ -119,14 +144,10 @@ class Barrier(eqx.Module):
         assert callable(barrier_func), "barrier_func must be a callable function"
         processed_alphas = self._handle_alphas(alphas, rel_deg)
 
-        return Barrier(
+        return self._create_updated_instance(
             barrier_func=barrier_func,
-            dynamics=self._dynamics,
             rel_deg=rel_deg,
-            alphas=processed_alphas,
-            barriers=self._barriers,
-            hocbf_func=self._hocbf_func,
-            cfg=self.cfg
+            alphas=processed_alphas
         )
 
     def assign_dynamics(self, dynamics) -> 'Barrier':
@@ -154,14 +175,10 @@ class Barrier(eqx.Module):
         )
         hocbf_func = barriers[-1]
 
-        return Barrier(
-            barrier_func=self._barrier_func,
+        return self._create_updated_instance(
             dynamics=dynamics,
-            rel_deg=self._rel_deg,
-            alphas=self._alphas,
             barriers=tuple(barriers),
-            hocbf_func=hocbf_func,
-            cfg=self.cfg
+            hocbf_func=hocbf_func
         )
 
     def _is_dummy_barrier(self, func):

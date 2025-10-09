@@ -82,6 +82,34 @@ class CompositionBarrier(Barrier):
         """
         return cls(cfg=cfg)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        This helper method extends Barrier by adding composition-specific fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New instance of the same class with updated fields
+        """
+        defaults = {
+            'barrier_func': self._barrier_func,
+            'dynamics': self._dynamics,
+            'rel_deg': self._rel_deg,
+            'alphas': self._alphas,
+            'barriers': self._barriers,
+            'hocbf_func': self._hocbf_func,
+            'cfg': self.cfg,
+            'barrier_list': self._barrier_list,
+            'composition_rule': self._composition_rule,
+            'barriers_raw': self._barriers_raw,
+            'barrier_funcs': self._barrier_funcs
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign(self, barrier_func: Callable, rel_deg: int = 1,
                alphas: Optional[List[Callable]] = None) -> 'CompositionBarrier':
         """
@@ -117,19 +145,7 @@ class CompositionBarrier(Barrier):
             )
 
         # Otherwise update dynamics only
-        return self.__class__(
-            barrier_func=self._barrier_func,
-            dynamics=dynamics,
-            rel_deg=self._rel_deg,
-            alphas=self._alphas,
-            barriers=self._barriers,
-            hocbf_func=self._hocbf_func,
-            cfg=self.cfg,
-            barrier_list=self._barrier_list,
-            composition_rule=self._composition_rule,
-            barriers_raw=self._barriers_raw,
-            barrier_funcs=self._barrier_funcs
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_barriers_and_rule(self, barriers: List[Barrier], rule: str,
                                 infer_dynamics: bool = False,
@@ -165,14 +181,13 @@ class CompositionBarrier(Barrier):
         barriers_series = self._build_composed_barrier_series(barriers, hocbf_func)
 
         # Create new composed instance
-        return self.__class__(
+        return self._create_updated_instance(
             barrier_func=barrier_funcs,
             dynamics=dynamics,
             rel_deg=1,
             alphas=(),
             barriers=barriers_series,
             hocbf_func=hocbf_func,
-            cfg=self.cfg,
             barrier_list=tuple(barriers),
             composition_rule=rule,
             barriers_raw=tuple(barriers),

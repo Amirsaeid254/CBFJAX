@@ -159,6 +159,31 @@ class BaseSafeControl(eqx.Module):
         """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        This helper method enables clean assignment methods by collecting
+        all current field values and updating only the changed ones.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New instance of the same class with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'params': dict(self._params) if self._params else None,
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'Q': self._Q,
+            'c': self._c
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_state_barrier(self, barrier):
         """
         Assign state barrier to controller.
@@ -169,15 +194,7 @@ class BaseSafeControl(eqx.Module):
         Returns:
             New controller instance with assigned barrier
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=barrier,
-            Q=self._Q,
-            c=self._c
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics):
         """
@@ -189,15 +206,7 @@ class BaseSafeControl(eqx.Module):
         Returns:
             New controller instance with assigned dynamics
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_cost(self, Q: Callable, c: Callable):
         """
@@ -210,15 +219,7 @@ class BaseSafeControl(eqx.Module):
         Returns:
             New controller instance with assigned cost
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            Q=Q,
-            c=c
-        )
+        return self._create_updated_instance(Q=Q, c=c)
 
     @abstractmethod
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
@@ -417,6 +418,31 @@ class BaseMinIntervSafeControl(BaseSafeControl):
         """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields (extends parent).
+
+        This helper method extends BaseSafeControl by adding desired_control field.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New instance of the same class with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'params': dict(self._params) if self._params else None,
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'Q': self._Q,
+            'c': self._c,
+            'desired_control': self._desired_control
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_state_barrier(self, barrier):
         """
         Assign state barrier to controller.
@@ -427,16 +453,7 @@ class BaseMinIntervSafeControl(BaseSafeControl):
         Returns:
             New controller instance with assigned barrier
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            desired_control=self._desired_control,
-            dynamics=self._dynamics,
-            barrier=barrier,
-            Q=self._Q,
-            c=self._c
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics):
         """
@@ -448,16 +465,7 @@ class BaseMinIntervSafeControl(BaseSafeControl):
         Returns:
             New controller instance with assigned dynamics
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            desired_control=self._desired_control,
-            dynamics=dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_desired_control(self, desired_control: Callable):
         """
@@ -469,16 +477,7 @@ class BaseMinIntervSafeControl(BaseSafeControl):
         Returns:
             New controller instance with assigned desired control
         """
-        return self.__class__(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            params=dict(self._params),
-            desired_control=desired_control,
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c
-        )
+        return self._create_updated_instance(desired_control=desired_control)
 
     def assign_cost(self, Q: jnp.ndarray, c: jnp.ndarray):
         """

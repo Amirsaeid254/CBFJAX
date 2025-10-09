@@ -75,6 +75,27 @@ class MultiBarriers(Barrier):
         """
         return cls(cfg=cfg)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New MultiBarriers instance with updated fields
+        """
+        defaults = {
+            'dynamics': self._dynamics,
+            'cfg': self.cfg,
+            'barrier_funcs': self._barrier_funcs,
+            'hocbf_funcs': self._hocbf_funcs,
+            'barriers': self._barriers,
+            'multidim_indices': self._multidim_indices
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign(self, barrier_func, rel_deg=1, alphas=None):
         """
 
@@ -119,9 +140,8 @@ class MultiBarriers(Barrier):
             for i in range(len(barriers)):
                 new_multidim_indices.append(base_idx + i)
 
-        return self.__class__(
+        return self._create_updated_instance(
             dynamics=dynamics,
-            cfg=self.cfg,
             barrier_funcs=tuple(new_barrier_funcs),
             hocbf_funcs=tuple(new_hocbf_funcs),
             barriers=tuple(new_barriers),
@@ -143,14 +163,7 @@ class MultiBarriers(Barrier):
             warnings.warn('The assigned dynamics is overridden by the dynamics of the'
                          ' first barrier on the barriers list')
 
-        return self.__class__(
-            dynamics=dynamics,
-            cfg=self.cfg,
-            barrier_funcs=self._barrier_funcs,
-            hocbf_funcs=self._hocbf_funcs,
-            barriers=self._barriers,
-            multidim_indices=self._multidim_indices
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def _barrier_single(self, x: jnp.ndarray) -> jnp.ndarray:
         """

@@ -91,6 +91,31 @@ class CFSafeControl(BaseSafeControl):
         """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New CFSafeControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'Q': self._Q,
+            'c': self._c,
+            'slack_gain': self._slack_gain,
+            'use_softplus': self._use_softplus,
+            'softplus_gain': self._softplus_gain,
+            'buffer': self._buffer
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_state_barrier(self, barrier) -> 'CFSafeControl':
         """
         Assign state barrier to controller.
@@ -101,18 +126,7 @@ class CFSafeControl(BaseSafeControl):
         Returns:
             New CFSafeControl instance with assigned barrier
         """
-        return CFSafeControl(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=self._dynamics,
-            barrier=barrier,
-            Q=self._Q,
-            c=self._c,
-            slack_gain=self._slack_gain,
-            use_softplus=self._use_softplus,
-            softplus_gain=self._softplus_gain,
-            buffer=self._buffer
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics) -> 'CFSafeControl':
         """
@@ -124,18 +138,7 @@ class CFSafeControl(BaseSafeControl):
         Returns:
             New CFSafeControl instance with assigned dynamics
         """
-        return CFSafeControl(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=dynamics,
-            barrier=self._barrier,
-            Q=self._Q,
-            c=self._c,
-            slack_gain=self._slack_gain,
-            use_softplus=self._use_softplus,
-            softplus_gain=self._softplus_gain,
-            buffer=self._buffer
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_cost(self, Q: Callable, c: Callable) -> 'CFSafeControl':
         """
@@ -148,18 +151,7 @@ class CFSafeControl(BaseSafeControl):
         Returns:
             New CFSafeControl instance with assigned cost
         """
-        return CFSafeControl(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            Q=Q,
-            c=c,
-            slack_gain=self._slack_gain,
-            use_softplus=self._use_softplus,
-            softplus_gain=self._softplus_gain,
-            buffer=self._buffer
-        )
+        return self._create_updated_instance(Q=Q, c=c)
 
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
@@ -304,6 +296,30 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New MinIntervCFSafeControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'alpha': self._alpha,
+            'dynamics': self._dynamics,
+            'barrier': self._barrier,
+            'desired_control': self._desired_control,
+            'slack_gain': self._slack_gain,
+            'use_softplus': self._use_softplus,
+            'softplus_gain': self._softplus_gain,
+            'buffer': self._buffer
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
     def assign_state_barrier(self, barrier) -> 'MinIntervCFSafeControl':
         """
         Assign state barrier to controller.
@@ -314,17 +330,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         Returns:
             New MinIntervCFSafeControl instance with assigned barrier
         """
-        return MinIntervCFSafeControl(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=self._dynamics,
-            barrier=barrier,
-            desired_control=self._desired_control,
-            slack_gain=self._slack_gain,
-            use_softplus=self._use_softplus,
-            softplus_gain=self._softplus_gain,
-            buffer=self._buffer
-        )
+        return self._create_updated_instance(barrier=barrier)
 
     def assign_dynamics(self, dynamics) -> 'MinIntervCFSafeControl':
         """
@@ -336,17 +342,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         Returns:
             New MinIntervCFSafeControl instance with assigned dynamics
         """
-        return MinIntervCFSafeControl(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=dynamics,
-            barrier=self._barrier,
-            desired_control=self._desired_control,
-            slack_gain=self._slack_gain,
-            use_softplus=self._use_softplus,
-            softplus_gain=self._softplus_gain,
-            buffer=self._buffer
-        )
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_desired_control(self, desired_control: Callable) -> 'MinIntervCFSafeControl':
         """
@@ -358,17 +354,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         Returns:
             New MinIntervCFSafeControl instance with assigned desired control
         """
-        return MinIntervCFSafeControl(
-            action_dim=self._action_dim,
-            alpha=self._alpha,
-            dynamics=self._dynamics,
-            barrier=self._barrier,
-            desired_control=desired_control,
-            slack_gain=self._slack_gain,
-            use_softplus=self._use_softplus,
-            softplus_gain=self._softplus_gain,
-            buffer=self._buffer
-        )
+        return self._create_updated_instance(desired_control=desired_control)
     @jax.jit
     def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
