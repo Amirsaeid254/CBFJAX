@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "CBFJAX: High-Performance JAX Implementation of Control Barrier Functions"
+version: 0.1.0
+date-released: 2024-01-01
+authors:
+  - family-names: Safari
+    given-names: Amirsaeid
+    orcid: ""
+repository-code: "https://github.com/amirsaeid254/cbfjax"
+url: "https://github.com/amirsaeid254/cbfjax"
+abstract: "CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CBFs) for safe control, adapted from the pioneering CBFTorch framework. This implementation leverages JAX's JIT compilation and functional programming paradigms to deliver superior computational performance for safety-critical control applications."
+keywords:
+  - jax
+  - control
+  - barrier-functions
+  - safe-control
+  - robotics
+  - optimization
+  - control-barrier-functions
+  - safety-critical
+license: MIT

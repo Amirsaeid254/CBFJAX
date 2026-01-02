@@ -1,10 +1,11 @@
 # CBFJAX
 
-CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CBFs) for safe control, adapted from the pioneering [CBFTorch](https://github.com/pedramrabiee/cbftorch) framework. This implementation leverages JAX's JIT compilation and functional programming paradigms to deliver superior computational performance for safety-critical control applications.
-
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![JAX](https://img.shields.io/badge/JAX-0.4.20+-orange.svg)](https://jax.readthedocs.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CBFs) for safe control, adapted from the pioneering [CBFTorch](https://github.com/pedramrabiee/cbftorch) framework. This implementation leverages JAX's JIT compilation and functional programming paradigms to deliver superior computational performance for safety-critical control applications.
+
 
 ## Features
 
@@ -211,7 +212,7 @@ cbfjax/
 CBFs provide safety guarantees by ensuring the system stays in a safe set. For a dynamical system ẋ = f(x) + g(x)u with safe set C = {x | h(x) ≥ 0}, the CBF condition is:
 
 ```
-ḣ(x) = ∇h(x)·ẋ = ∇h(x)·(f(x) + g(x)u) ≥ -α(h(x))
+L_f h(x) + L_g h(x) u ≥ -α(h(x))
 ```
 
 Where α is a class-K function ensuring forward invariance.
