@@ -1,15 +1,13 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "CBFJAX"
-version: 0.1.0
-date-released: 2025-01-01
+title: "{CBFJAX: Control Barrier Functions in JAX} [Online]. Available at https://github.com/amirsaeid254/cbfjax"
 authors:
   - family-names: Safari
     given-names: Amirsaeid
-    orcid: ""
 repository-code: "https://github.com/amirsaeid254/cbfjax"
 url: "https://github.com/amirsaeid254/cbfjax"
+year: 2025
 keywords:
   - jax
   - control
