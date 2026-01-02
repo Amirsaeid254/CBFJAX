@@ -1,4 +1,4 @@
-# CBFJAX
+# CBFJAX: Control Barrier Functions in JAX
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![JAX](https://img.shields.io/badge/JAX-0.4.20+-orange.svg)](https://jax.readthedocs.io/)
