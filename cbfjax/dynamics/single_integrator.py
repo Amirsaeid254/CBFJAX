@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from .base import AffineInControlDynamics
+from .base_dynamic import AffineInControlDynamics
 
 
 class SingleIntegratorDynamics(AffineInControlDynamics):

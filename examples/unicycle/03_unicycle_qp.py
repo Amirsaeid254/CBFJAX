@@ -117,7 +117,7 @@ min_constraint = []
 
 for i, traj in enumerate(trajs_list):
     # Get actions for this trajectory
-    action_vals, _, _ = safety_filter.safe_optimal_control(traj)
+    action_vals, _ = safety_filter.safe_optimal_control(traj)
     actions.append(action_vals)
 
     # Get desired control for this trajectory

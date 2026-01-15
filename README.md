@@ -196,8 +196,10 @@ cbfjax/
 │   ├── bicycle.py                # Bicycle dynamics
 │   ├── inverted_pendulum.py      # Inverted pendulum dynamics
 │   └── unicycle_reduced_order.py # Reduced-order unicycle dynamics
-├── safe_controls/      # Safe control implementations
-│   ├── base_safe_control.py      # Base classes
+├── controls/           # General control implementations
+│   └── base_control.py       # Base control classes
+├── safe_controls/      # Safe control implementations (extends controls)
+│   ├── base_safe_control.py      # Base safe control classes
 │   ├── closed_form_safe_control.py # Analytical solutions
 │   ├── qp_safe_control.py         # QP-based control
 │   └── backup_safe_control.py     # Backup-CBF Control 

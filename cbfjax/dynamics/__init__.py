@@ -4,7 +4,7 @@ Dynamics module for CBF-JAX
 Provides system dynamics implementations using JAX and Equinox.
 """
 
-from .base import AffineInControlDynamics, CustomDynamics
+from .base_dynamic import AffineInControlDynamics, CustomDynamics
 from .unicycle import UnicycleDynamics
 from .double_integrator import DIDynamics
 from .single_integrator import SingleIntegratorDynamics

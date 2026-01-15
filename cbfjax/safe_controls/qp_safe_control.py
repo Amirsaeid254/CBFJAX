@@ -14,11 +14,11 @@ from functools import partial
 
 from qpax import solve_qp_primal
 
-from .base_safe_control import BaseSafeControl, BaseMinIntervSafeControl
+from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
 from ..utils.utils import ensure_batch_dim
 
 
-class QPSafeControl(BaseSafeControl):
+class QPSafeControl(BaseCBFSafeControl):
     """
     QP-based Safe Control with full JAX JIT compatibility.
 

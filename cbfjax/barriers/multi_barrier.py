@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 
 from .barrier import Barrier
 from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple, lie_deriv, ensure_batch_dim
-from cbfjax.dynamics.base import DummyDynamics
+from cbfjax.dynamics.base_dynamic import DummyDynamics
 
 class MultiBarriers(Barrier):
     """
@@ -340,13 +340,13 @@ class MultiBarriers(Barrier):
         Calculate the minimum value among all the barrier values computed at point x.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: State vector (n,) or batch (n,)
 
         Returns:
-            Minimum barrier value with shape (batch, 1)
+            Minimum barrier value with shape (1,)
         """
-        barrier_vals = self.barrier(x)  # (batch, num_barriers, 1)
-        return jnp.min(barrier_vals, axis=-2)  # Min across barriers dimension
+        barrier_vals = self.barrier(x)  # (num_barriers, 1)
+        return jnp.min(barrier_vals, axis=-1)  # Min across barriers dimension
 
 
     @property

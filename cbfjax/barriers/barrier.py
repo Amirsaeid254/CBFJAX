@@ -13,7 +13,7 @@ from typing import List, Callable, Optional, Any, Dict
 from immutabledict import immutabledict
 
 from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple
-from cbfjax.dynamics.base import DummyDynamics
+from cbfjax.dynamics.base_dynamic import DummyDynamics
 
 
 class Barrier(eqx.Module):

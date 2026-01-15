@@ -15,10 +15,16 @@ class AffineInControlDynamics(eqx.Module):
 
     In JAX version, functions work on single examples.
     Use vmap for batching: jax.vmap(dynamics.f)(x_batch)
+
+    Optional discretization via params:
+        - 'discretization_dt': Timestep for discrete dynamics
+        - 'discretization_method': 'euler' or 'rk4'
     """
     _state_dim: int
     _action_dim: int
     _params: Optional[Dict[str, Any]] = eqx.field(static=True)
+    _dt: Optional[float] = eqx.field(static=True)
+    _discretization_method: Optional[str] = eqx.field(static=True)
 
     def __init__(self, params=None, **kwargs):
         self._params = immutabledict(params or {})
@@ -26,6 +32,19 @@ class AffineInControlDynamics(eqx.Module):
             self._state_dim = kwargs["state_dim"]
         if "action_dim" in kwargs:
             self._action_dim = kwargs["action_dim"]
+
+        # Optional discretization config from params
+        self._dt = self._params.get('discretization_dt', None)
+        self._discretization_method = self._params.get('discretization_method', None)
+
+        if self._discretization_method is not None and self._discretization_method not in ('euler', 'rk4'):
+            raise ValueError(f"Unknown discretization method: {self._discretization_method}. Use 'euler' or 'rk4'.")
+
+        if self._discretization_method is not None and self._dt is not None:
+            if self._discretization_method == 'euler':
+                self.discrete_rhs = self._euler_step
+            elif self._discretization_method == 'rk4':
+                self.discrete_rhs = self._rk4_step
 
     @property
     def state_dim(self):
@@ -87,6 +106,36 @@ class AffineInControlDynamics(eqx.Module):
         """
         assert action.shape == (self.action_dim,), f"Expected action shape {(self.action_dim,)}, got {action.shape}"
         return self.f(x) + self.g(x) @ action
+
+    def _euler_step(self, x, action):
+        """
+        Euler integration step: x_{k+1} = x_k + dt * f(x_k, u_k)
+
+        Args:
+            x: (state_dim,) - current state
+            action: (action_dim,) - control action
+
+        Returns:
+            x_next: (state_dim,) - next state
+        """
+        return x + self._dt * self.rhs(x, action)
+
+    def _rk4_step(self, x, action):
+        """
+        4th-order Runge-Kutta integration step with zero-order hold on action.
+
+        Args:
+            x: (state_dim,) - current state
+            action: (action_dim,) - control action (held constant)
+
+        Returns:
+            x_next: (state_dim,) - next state
+        """
+        k1 = self.rhs(x, action)
+        k2 = self.rhs(x + 0.5 * self._dt * k1, action)
+        k3 = self.rhs(x + 0.5 * self._dt * k2, action)
+        k4 = self.rhs(x + self._dt * k3, action)
+        return x + (self._dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
 
 
@@ -169,6 +218,14 @@ class DummyDynamics:
     Should only be used during the construction phase.
     """
 
+    @property
+    def state_dim(self) -> int:
+        return 1
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
     def f(self, x: jnp.ndarray) -> jnp.ndarray:
         """Zero drift dynamics."""
         return jnp.zeros_like(x)
@@ -176,3 +233,7 @@ class DummyDynamics:
     def g(self, x: jnp.ndarray) -> jnp.ndarray:
         """Zero control matrix."""
         return jnp.zeros((x.shape[0], 1))
+
+    def rhs(self, x, action):
+        """Zero right-hand side."""
+        return jnp.zeros_like(x)

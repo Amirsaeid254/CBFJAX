@@ -11,13 +11,13 @@ import equinox as eqx
 from typing import Callable, Optional, Any, Dict, Union
 from immutabledict import immutabledict
 
-from .base_safe_control import BaseSafeControl, BaseMinIntervSafeControl
+from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
 from ..barriers.composite_barrier import SoftCompositionBarrier
-from ..dynamics.base import AffineInControlDynamics
+from ..dynamics.base_dynamic import AffineInControlDynamics
 from cbfjax.utils.utils import make_higher_order_lie_deriv_series, lie_deriv, update_dict_no_overwrite
 
 
-class CFSafeControl(BaseSafeControl):
+class CFSafeControl(BaseCBFSafeControl):
     """
     Closed-Form Safe Control with full JAX JIT compatibility.
 

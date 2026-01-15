@@ -13,7 +13,7 @@ from functools import partial
 
 from cbfjax.barriers.barrier import Barrier
 from cbfjax.barriers.composite_barrier import SoftCompositionBarrier
-from cbfjax.dynamics.base import AffineInControlDynamics
+from cbfjax.dynamics.base_dynamic import AffineInControlDynamics
 from cbfjax.utils.utils import softmin, softmax, apply_and_batchize
 from cbfjax.utils.integration import get_trajs_from_state_action_func
 

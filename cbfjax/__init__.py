@@ -16,6 +16,7 @@ from . import config
 # Core modules
 from . import dynamics
 from . import barriers
+from . import controls
 from . import safe_controls
 from . import utils
 
@@ -24,6 +25,7 @@ from .dynamics import UnicycleDynamics, AffineInControlDynamics
 from .barriers import Barrier
 from .barriers.multi_barrier import MultiBarriers
 from .barriers.composite_barrier import SoftCompositionBarrier, NonSmoothCompositionBarrier
+from .controls import BaseControl
 from .safe_controls import (
     MinIntervCFSafeControl,
     MinIntervQPSafeControl,
@@ -45,6 +47,7 @@ __all__ = [
     "config",
     "dynamics",
     "barriers",
+    "controls",
     "safe_controls",
     "utils",
 
@@ -55,6 +58,7 @@ __all__ = [
     "MultiBarriers",
     "SoftCompositionBarrier",
     "NonSmoothCompositionBarrier",
+    "BaseControl",
     "MinIntervCFSafeControl",
     "MinIntervQPSafeControl",
     "InputConstQPSafeControl",
