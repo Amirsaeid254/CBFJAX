@@ -161,10 +161,7 @@ class CFSafeControl(BaseSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u) where:
-            - u: Control vector (action_dim,)
-            - slack_vars: Slack variable values
-            - constraint_at_u: Constraint value at computed control
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         # Q and c are single-state functions
         Q_matrix = self._Q(x)  # (action_dim, action_dim)
@@ -194,30 +191,13 @@ class CFSafeControl(BaseSafeControl):
         # Compute control
         u = -Q_inv @ (c_vector - lg_hocbf * lam)
 
-        # Always return full info tuple for consistent structure
-        return self._add_optimal_control_info(u, hocbf, lf_hocbf, lg_hocbf, lam)
-
-    def _add_optimal_control_info(self, u: jnp.ndarray, hocbf: jnp.ndarray,
-                                  lf_hocbf: jnp.ndarray, lg_hocbf: jnp.ndarray,
-                                  lam: jnp.ndarray) -> tuple:
-        """
-        Add optimal control information using simple tuple return.
-
-        Args:
-            u: Control vector
-            hocbf: Barrier function value
-            lf_hocbf: Lie derivative of barrier w.r.t. drift
-            lg_hocbf: Lie derivative of barrier w.r.t. control
-            lam: Lagrange multiplier
-
-        Returns:
-            Tuple (u, slack_vars, constraint_at_u)
-        """
+        # Compute info
         slack_vars = hocbf * lam / self._slack_gain
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        return u, slack_vars, constraint_at_u
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
     def eval_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """Evaluate barrier function at state x."""
@@ -364,10 +344,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u) where:
-            - u: Control vector (action_dim,)
-            - slack_vars: Slack variable values
-            - constraint_at_u: Constraint value at computed control
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         # Get barrier values and Lie derivatives (single state version for efficiency)
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
@@ -395,30 +372,13 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         # Compute control
         u = u_d + lg_hocbf * lam
 
-        # Always return full info tuple for consistent structure
-        return self._add_optimal_control_info(u, hocbf, lf_hocbf, lg_hocbf, lam)
-
-    def _add_optimal_control_info(self, u: jnp.ndarray, hocbf: jnp.ndarray,
-                                  lf_hocbf: jnp.ndarray, lg_hocbf: jnp.ndarray,
-                                  lam: jnp.ndarray) -> tuple:
-        """
-        Add optimal control information using simple tuple return.
-
-        Args:
-            u: Control vector
-            hocbf: Barrier function value
-            lf_hocbf: Lie derivative of barrier w.r.t. drift
-            lg_hocbf: Lie derivative of barrier w.r.t. control
-            lam: Lagrange multiplier
-
-        Returns:
-            Tuple (u, slack_vars, constraint_at_u)
-        """
+        # Compute info
         slack_vars = hocbf * lam / self._slack_gain
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        return u, slack_vars, constraint_at_u
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
 
 class InputConstCFSafeControl(CFSafeControl):
@@ -597,13 +557,10 @@ class InputConstCFSafeControl(CFSafeControl):
             x: Single augmented state vector (state_dim + action_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u) where:
-            - u: Control vector (action_dim,)
-            - slack_vars: Slack variable values
-            - constraint_at_u: Constraint value at computed control
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         # Get barrier values and Lie derivatives (single state version for efficiency)
-        hocbf, Lf_hocbf, Lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
 
         # Apply buffer
         hocbf = hocbf - self._buffer
@@ -612,8 +569,8 @@ class InputConstCFSafeControl(CFSafeControl):
         u_d = self.aux_desired_action(x)
 
         # Compute closed-form solution
-        omega = Lf_hocbf + jnp.dot(Lg_hocbf, u_d) + self._alpha(hocbf)
-        den = jnp.dot(Lg_hocbf, Lg_hocbf) + (1 / self._slack_gain) * hocbf ** 2
+        omega = lf_hocbf + jnp.dot(lg_hocbf, u_d) + self._alpha(hocbf)
+        den = jnp.dot(lg_hocbf, lg_hocbf) + (1 / self._slack_gain) * hocbf ** 2
 
         # JIT-friendly conditional
         num = jax.lax.cond(
@@ -626,10 +583,15 @@ class InputConstCFSafeControl(CFSafeControl):
         lam = num / den
 
         # Compute control
-        u = u_d + Lg_hocbf * lam
+        u = u_d + lg_hocbf * lam
 
-        # Always return full info tuple for consistent structure
-        return self._add_optimal_control_info(u, hocbf, Lf_hocbf, Lg_hocbf, lam)
+        # Compute info
+        slack_vars = hocbf * lam / self._slack_gain
+        constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
+                           self._alpha(hocbf) + slack_vars * hocbf)
+
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
     def _make_composed_barrier(self) -> 'InputConstCFSafeControl':
         """Create composed barrier from state and action barriers."""

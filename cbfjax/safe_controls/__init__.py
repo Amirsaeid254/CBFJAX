@@ -17,6 +17,10 @@ from .qp_safe_control import (
     InputConstQPSafeControl,
     MinIntervInputConstQPSafeControl
 )
+from .backup_safe_control import (
+    BackupSafeControl,
+    MinIntervBackupSafeControl
+)
 
 __all__ = [
     # Closed-form controllers
@@ -29,5 +33,8 @@ __all__ = [
     "QPSafeControl",
     "MinIntervQPSafeControl",
     "InputConstQPSafeControl",
-    "MinIntervInputConstQPSafeControl"
+    "MinIntervInputConstQPSafeControl",
+    # Backup controllers
+    "BackupSafeControl",
+    "MinIntervBackupSafeControl"
 ]

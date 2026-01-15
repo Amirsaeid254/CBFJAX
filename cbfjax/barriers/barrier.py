@@ -70,21 +70,12 @@ class Barrier(eqx.Module):
         self._hocbf_func = hocbf_func or self._create_dummy_barrier()
         self.cfg = immutabledict(cfg or {})
 
-        # # Validate hashability
-        # self._validate_hashability()
-
-    def _validate_hashability(self):
-        """Validate that the instance is hashable."""
-        try:
-            hash(self)
-        except TypeError as e:
-            raise ValueError(f"Barrier instance is not hashable: {e}")
 
     @staticmethod
     def _create_dummy_barrier():
-        """Create dummy barrier function that returns zero."""
+        """Create dummy barrier function that returns empty array."""
         def dummy_barrier(x):
-            return 0.0
+            return jnp.array([])
         return dummy_barrier
 
     @classmethod
@@ -183,11 +174,7 @@ class Barrier(eqx.Module):
 
     def _is_dummy_barrier(self, func):
         """Check if function is a dummy barrier."""
-        try:
-            test_input = jnp.array([0.0])
-            return func(test_input) == 0.0 and func.__name__ == 'dummy_barrier'
-        except:
-            return False
+        return func.__name__ == 'dummy_barrier'
 
     def _barrier_single(self, x: jnp.ndarray) -> float:
         """Compute barrier function value for single state vector."""

@@ -60,14 +60,14 @@ class CompositionBarrier(Barrier):
         self._barrier_list = tuple(barrier_list or [])
         self._composition_rule = composition_rule
         self._barriers_raw = tuple(barriers_raw or [])
-        self._barrier_funcs = barrier_funcs or self._create_empty_barrier_func()
+        self._barrier_funcs = barrier_funcs or self._create_dummy_barrier()
 
     @staticmethod
-    def _create_empty_barrier_func():
-        """Create empty barrier function that returns empty array."""
-        def empty_barrier_func(x):
+    def _create_dummy_barrier():
+        """Create dummy barrier function that returns empty array."""
+        def dummy_barrier(x):
             return jnp.array([])
-        return empty_barrier_func
+        return dummy_barrier
 
     @classmethod
     def create_empty(cls, cfg=None):

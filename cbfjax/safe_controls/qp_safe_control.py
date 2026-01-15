@@ -58,7 +58,7 @@ class QPSafeControl(BaseSafeControl):
 
         # Initialize base class
         super().__init__(action_dim, alpha, immutabledict({'slacked': slacked, 'slack_gain': slack_gain}),
-                        dynamics, barrier, Q, c)
+                        dynamics=dynamics, barrier=barrier, Q=Q, c=c)
 
         # Set static parameters
         self._slacked = slacked
@@ -150,7 +150,7 @@ class QPSafeControl(BaseSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         if self._slacked:
             return self._safe_optimal_control_single_slacked(x)
@@ -172,7 +172,8 @@ class QPSafeControl(BaseSafeControl):
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
 
-        return u, slack_vars, constraint_at_u
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
 
     def _safe_optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
@@ -183,7 +184,7 @@ class QPSafeControl(BaseSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         # Make inequality constraints for slacked version
         G, h = self._make_ineq_const_slacked_single(x)
@@ -205,7 +206,8 @@ class QPSafeControl(BaseSafeControl):
         # Compute constraint at solution
         constraint_at_u = jnp.dot(G, res) - h
 
-        return u, slack_vars, constraint_at_u
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
     def _make_objective_single(self, x: jnp.ndarray) -> tuple:
         """
@@ -483,7 +485,7 @@ class InputConstQPSafeControl(QPSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         if self._slacked:
             return self._safe_optimal_control_single_slacked(x)
@@ -519,7 +521,8 @@ class InputConstQPSafeControl(QPSafeControl):
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
 
-        return u, slack_vars, constraint_at_u
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
     def _safe_optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
         """
@@ -529,7 +532,7 @@ class InputConstQPSafeControl(QPSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u)
+            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         # Get CBF constraints with slack (base method)
         G_cbf, h_cbf = super()._make_ineq_const_slacked_single(x)
@@ -568,7 +571,8 @@ class InputConstQPSafeControl(QPSafeControl):
         # Compute constraint at solution
         constraint_at_u = jnp.dot(G, res) - h
 
-        return u, slack_vars, constraint_at_u
+        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        return u, info
 
     def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':
         """Assign state barrier."""

@@ -315,7 +315,7 @@ def make_norm_rectangular_barrier_functional(center, size, rotation=0.0, p=20):
         rotated_points = rotate_tensors(x, center, -rotation)
 
         # Compute normalized distance from center
-        normalized_dist = (rotated_points[:2] - center) / size
+        normalized_dist = (rotated_points - center) / size
 
         # Compute p-norm distance
         return jnp.linalg.norm(normalized_dist, ord=p) - 1.0

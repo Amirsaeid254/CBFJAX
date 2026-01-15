@@ -161,3 +161,4 @@ test_*.py
 *.tmp
 *.bak
 *~
+/examples/backup_examples/unicycle/figs/

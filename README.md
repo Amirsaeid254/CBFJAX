@@ -16,6 +16,7 @@ CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CB
   - QP-based safe control with quadratic programming
   - Input-constrained QP safe control
   - Minimum intervention control
+  - Backup Control Barrier Function 
 - **Advanced Barrier Types**:
   - Single barriers with automatic differentiation
   - MultiBarriers for handling multiple constraints
@@ -185,7 +186,8 @@ cbfjax/
 ├── barriers/           # Barrier function implementations
 │   ├── barrier.py         # Single barrier functions
 │   ├── multi_barrier.py   # Multiple barrier handling
-│   └── composite_barrier.py # Barrier composition
+│   ├── composite_barrier.py # Barrier composition
+│   └── backup_barrier.py    # Backup Control Barrier Function
 ├── dynamics/           # System dynamics
 │   ├── base.py                    # Base dynamics classes
 │   ├── unicycle.py               # Unicycle dynamics
@@ -197,7 +199,8 @@ cbfjax/
 ├── safe_controls/      # Safe control implementations
 │   ├── base_safe_control.py      # Base classes
 │   ├── closed_form_safe_control.py # Analytical solutions
-│   └── qp_safe_control.py         # QP-based control
+│   ├── qp_safe_control.py         # QP-based control
+│   └── backup_safe_control.py     # Backup Control Barrier Function (BCBF)
 ├── utils/              # Utilities and helpers
 │   ├── integration.py     # ODE integration
 │   ├── utils.py           # Mathematical utilities

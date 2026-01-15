@@ -233,10 +233,9 @@ class BaseSafeControl(eqx.Module):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u) where:
+            Tuple (u, info) where:
             - u: Control vector (action_dim,)
-            - slack_vars: Slack variable values
-            - constraint_at_u: Constraint value at computed control
+            - info: Dictionary containing additional information (e.g., slack_vars, constraint_at_u)
         """
         raise NotImplementedError
 
@@ -270,8 +269,7 @@ class BaseSafeControl(eqx.Module):
         Returns:
             Control vector (action_dim,)
         """
-
-        u, _, _ = self._safe_optimal_control_single(x)
+        u, _ = self._safe_optimal_control_single(x)
         return u
 
     def get_safe_optimal_trajs(self, x0: jnp.ndarray, timestep: float = 0.001,
@@ -592,9 +590,8 @@ class BaseMinIntervSafeControl(BaseSafeControl):
             x: Single state vector (state_dim,)
 
         Returns:
-            Tuple (u, slack_vars, constraint_at_u) where:
+            Tuple (u, info) where:
             - u: Control vector (action_dim,)
-            - slack_vars: Slack variable values
-            - constraint_at_u: Constraint value at computed control
+            - info: Dictionary containing additional information (e.g., slack_vars, constraint_at_u)
         """
         raise NotImplementedError
