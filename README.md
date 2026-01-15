@@ -204,7 +204,8 @@ cbfjax/
 ├── utils/              # Utilities and helpers
 │   ├── integration.py     # ODE integration
 │   ├── utils.py           # Mathematical utilities
-│   └── make_map.py        # Environment/map creation
+│   ├── make_map.py        # Environment/map creation
+│   └── profile_utils.py   # Profiling utilities for JAX
 └── config.py           # Configuration and JAX setup
 ```
 
