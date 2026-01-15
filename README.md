@@ -187,7 +187,7 @@ cbfjax/
 │   ├── barrier.py         # Single barrier functions
 │   ├── multi_barrier.py   # Multiple barrier handling
 │   ├── composite_barrier.py # Barrier composition
-│   └── backup_barrier.py    # Backup Control Barrier Function
+│   └── backup_barrier.py    # Backup Barrier Function
 ├── dynamics/           # System dynamics
 │   ├── base.py                    # Base dynamics classes
 │   ├── unicycle.py               # Unicycle dynamics
@@ -200,7 +200,7 @@ cbfjax/
 │   ├── base_safe_control.py      # Base classes
 │   ├── closed_form_safe_control.py # Analytical solutions
 │   ├── qp_safe_control.py         # QP-based control
-│   └── backup_safe_control.py     # Backup Control Barrier Function (BCBF)
+│   └── backup_safe_control.py     # Backup-CBF Control 
 ├── utils/              # Utilities and helpers
 │   ├── integration.py     # ODE integration
 │   ├── utils.py           # Mathematical utilities
