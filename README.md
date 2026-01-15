@@ -229,6 +229,19 @@ For barriers with relative degree > 1, HOCBFs extend the framework:
 L_f^n h(x) + L_g L_f^{n-1} h(x) u ≥ -α(ψ(x))
 ```
 
+## Citation
+
+If you use CBFJAX in your research, please cite it as:
+
+```bibtex
+@software{CBFJAX,
+  author       = {Safari, Amirsaeid},
+  title        = {{CBFJAX}: Control Barrier Functions in {JAX}},
+  howpublished = {[Online]. Available: \url{https://github.com/amirsaeid254/cbfjax}},
+  year         = {2025}
+}
+```
+
 ## Related Work
 
 - [CBFTorch](https://github.com/pedramrabiee/cbftorch): PyTorch implementation of CBFs
