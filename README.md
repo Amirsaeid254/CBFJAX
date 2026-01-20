@@ -16,13 +16,14 @@ CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CB
   - QP-based safe control with quadratic programming
   - Input-constrained QP safe control
   - Minimum intervention control
-  - Backup Control Barrier Function 
+  - Backup Control Barrier Function
+  - **NMPC with barrier constraints** (via acados + jax2casadi)
 - **Advanced Barrier Types**:
   - Single barriers with automatic differentiation
   - MultiBarriers for handling multiple constraints
   - Composite barriers with soft/hard composition
 - **High Performance**: 64-bit precision, JIT compilation, and optimized algorithms
-- **Modern Dependencies**: Diffrax for ODE solving, qpax for QP optimization
+- **Modern Dependencies**: Diffrax for ODE solving, qpax for QP optimization, acados for NMPC
 
 ## Installation
 
@@ -183,32 +184,35 @@ python 02_unicycle_cf.py
 
 ```
 cbfjax/
-├── barriers/           # Barrier function implementations
-│   ├── barrier.py         # Single barrier functions
-│   ├── multi_barrier.py   # Multiple barrier handling
-│   ├── composite_barrier.py # Barrier composition
-│   └── backup_barrier.py    # Backup Barrier Function
-├── dynamics/           # System dynamics
-│   ├── base.py                    # Base dynamics classes
-│   ├── unicycle.py               # Unicycle dynamics
-│   ├── double_integrator.py      # Double integrator dynamics
-│   ├── single_integrator.py      # Single integrator dynamics
-│   ├── bicycle.py                # Bicycle dynamics
-│   ├── inverted_pendulum.py      # Inverted pendulum dynamics
-│   └── unicycle_reduced_order.py # Reduced-order unicycle dynamics
-├── controls/           # General control implementations
-│   └── base_control.py       # Base control classes
-├── safe_controls/      # Safe control implementations (extends controls)
-│   ├── base_safe_control.py      # Base safe control classes
-│   ├── closed_form_safe_control.py # Analytical solutions
-│   ├── qp_safe_control.py         # QP-based control
-│   └── backup_safe_control.py     # Backup-CBF Control 
-├── utils/              # Utilities and helpers
-│   ├── integration.py     # ODE integration
-│   ├── utils.py           # Mathematical utilities
-│   ├── make_map.py        # Environment/map creation
-│   └── profile_utils.py   # Profiling utilities for JAX
-└── config.py           # Configuration and JAX setup
+├── barriers/                       # Barrier function implementations
+│   ├── barrier.py                  # Single barrier functions
+│   ├── multi_barrier.py            # Multiple barrier handling
+│   ├── composite_barrier.py        # Barrier composition
+│   └── backup_barrier.py           # Backup Barrier Function
+├── dynamics/                       # System dynamics
+│   ├── base_dynamic.py             # Base dynamics classes
+│   ├── unicycle.py                 # Unicycle dynamics
+│   ├── double_integrator.py        # Double integrator
+│   ├── single_integrator.py        # Single integrator
+│   ├── bicycle.py                  # Bicycle dynamics
+│   ├── inverted_pendulum.py        # Inverted pendulum
+│   └── unicycle_reduced_order.py   # Reduced-order unicycle
+├── controls/                       # Control implementations
+│   ├── base_control.py             # BaseControl class
+│   └── nmpc_control.py             # NMPC via acados
+├── safe_controls/                  # Safe control implementations
+│   ├── base_safe_control.py        # BaseSafeControl classes
+│   ├── closed_form_safe_control.py # Closed-form CBF
+│   ├── qp_safe_control.py          # QP-based CBF
+│   ├── backup_safe_control.py      # Backup-CBF control
+│   └── nmpc_safe_control.py        # NMPC with barriers
+├── utils/                          # Utilities and helpers
+│   ├── integration.py              # ODE integration (diffrax)
+│   ├── utils.py                    # Mathematical utilities
+│   ├── make_map.py                 # Environment/map creation
+│   ├── jax2casadi.py               # JAX to CasADi conversion
+│   └── profile_utils.py            # Profiling utilities
+└── config.py                       # Configuration and JAX setup
 ```
 
 ## Key Concepts

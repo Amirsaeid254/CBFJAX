@@ -15,7 +15,7 @@ map_config = {
         ('norm_box', {'center': (6.0, 7.0), 'size': (1.8, 1.8)}),
         ('norm_boundary', {'center': (0.0, 0.0), 'size': (10.0, 10.0)}),
     ),
-    'velocity': (2, (-1.0, 9.0)),
+    'velocity': (2, (-2.0, 2.0)),
 }
 
 current_root = os.getcwd()

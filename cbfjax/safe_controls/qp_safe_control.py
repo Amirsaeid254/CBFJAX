@@ -142,7 +142,7 @@ class QPSafeControl(BaseCBFSafeControl):
         return self._create_updated_instance(Q=Q, c=c)
 
     @jax.jit
-    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for a single state using QP.
 
@@ -153,7 +153,7 @@ class QPSafeControl(BaseCBFSafeControl):
             Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         if self._slacked:
-            return self._safe_optimal_control_single_slacked(x)
+            return self._optimal_control_single_slacked(x)
 
         # Make objective for single state
         Q_matrix, c_vector = self._make_objective_single(x)
@@ -176,7 +176,7 @@ class QPSafeControl(BaseCBFSafeControl):
         return u, info
 
 
-    def _safe_optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control with slack variables for single state.
 
@@ -460,7 +460,7 @@ class InputConstQPSafeControl(QPSafeControl):
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_control_bounds(self, low: list, high: list) -> 'InputConstQPSafeControl':
+    def assign_control_bounds(self, low: list, high: list) :
         """
         Assign control input bounds.
 
@@ -477,7 +477,7 @@ class InputConstQPSafeControl(QPSafeControl):
         return self._create_updated_instance(control_low=low, control_high=high)
 
     @jax.jit
-    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for single state with input constraints.
 
@@ -488,7 +488,7 @@ class InputConstQPSafeControl(QPSafeControl):
             Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
         """
         if self._slacked:
-            return self._safe_optimal_control_single_slacked(x)
+            return self._optimal_control_single_slacked(x)
 
         # Make objective for single state
         Q_matrix, c_vector = self._make_objective_single(x)
@@ -524,7 +524,7 @@ class InputConstQPSafeControl(QPSafeControl):
         info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
         return u, info
 
-    def _safe_optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control with slack variables for single state.
 
@@ -641,13 +641,6 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
-
-    def assign_control_bounds(self, low: list, high: list) -> 'MinIntervInputConstQPSafeControl':
-        """Assign control bounds."""
-        assert len(low) == len(high), 'low and high should have the same length'
-        assert len(low) == self._action_dim, 'bounds length should match action dimension'
-
-        return self._create_updated_instance(control_low=low, control_high=high)
 
     def assign_desired_control(self, desired_control: Callable) -> 'MinIntervInputConstQPSafeControl':
         """Assign desired control and set up cost."""

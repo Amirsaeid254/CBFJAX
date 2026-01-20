@@ -162,14 +162,14 @@ def desired_control_func(x):
 safety_filter = safety_filter.assign_desired_control(desired_control_func)
 
 # Test single control computation
-safety_filter._safe_optimal_control_single(x0.squeeze(0))
+safety_filter._optimal_control_single(x0.squeeze(0))
 
 # Simulate trajectories using ZOH (zero-order hold)
 print(f"  - Simulating {sim_time}s with timestep {timestep}s...")
 import time
 start_time = time.time()
 
-trajs = safety_filter.get_safe_optimal_trajs_zoh(
+trajs = safety_filter.get_optimal_trajs_zoh(
     x0=x0,
     sim_time=sim_time,
     timestep=timestep,
@@ -196,7 +196,7 @@ num_points = traj.shape[0]
 time_array = jnp.linspace(0.0, (num_points - 1) * timestep, num_points)
 
 print(f"  - Computing controls and barriers...")
-u_vals, info = safety_filter.safe_optimal_control(traj, ret_info=True)
+u_vals, info = safety_filter.optimal_control(traj, ret_info=True)
 
 # Compute desired controls for each state
 des_ctrls = jax.vmap(desired_control_func)(traj)

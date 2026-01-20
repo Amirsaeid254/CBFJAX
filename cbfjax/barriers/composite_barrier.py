@@ -28,18 +28,18 @@ class CompositionBarrier(Barrier):
         _barrier_list: Tuple of individual Barrier objects being composed
         _composition_rule: String identifier for the composition rule ('union', 'intersection')
         _barriers_raw: Tuple of raw barrier objects for reconstruction
-        _barrier_funcs: Composed barrier function for evaluation
+        _composed_barrier_func: Composed barrier function for evaluation
     """
 
     # Additional fields for composition
     _barrier_list: tuple = eqx.field(static=True)
     _composition_rule: str = eqx.field(static=True)
     _barriers_raw: tuple = eqx.field(static=True)
-    _barrier_funcs: Callable = eqx.field(static=True)
+    _composed_barrier_func: Callable = eqx.field(static=True)
 
     def __init__(self, barrier_func=None, dynamics=None, rel_deg=1, alphas=None,
                  barriers=None, hocbf_func=None, cfg=None,
-                 barrier_list=None, composition_rule="", barriers_raw=None, barrier_funcs=None):
+                 barrier_list=None, composition_rule="", barriers_raw=None, composed_barrier_func=None):
         """
         Initialize CompositionBarrier with all parameters.
 
@@ -54,13 +54,13 @@ class CompositionBarrier(Barrier):
             barrier_list: Tuple of individual Barrier objects
             composition_rule: Composition rule identifier
             barriers_raw: Tuple of raw barrier objects
-            barrier_funcs: Function for computing individual barrier values
+            composed_barrier_func: Function for computing individual barrier values
         """
         super().__init__(barrier_func, dynamics, rel_deg, alphas, barriers, hocbf_func, cfg)
         self._barrier_list = tuple(barrier_list or [])
         self._composition_rule = composition_rule
         self._barriers_raw = tuple(barriers_raw or [])
-        self._barrier_funcs = barrier_funcs or self._create_dummy_barrier()
+        self._composed_barrier_func = composed_barrier_func or self._create_dummy_barrier()
 
     @staticmethod
     def _create_dummy_barrier():
@@ -105,7 +105,7 @@ class CompositionBarrier(Barrier):
             'barrier_list': self._barrier_list,
             'composition_rule': self._composition_rule,
             'barriers_raw': self._barriers_raw,
-            'barrier_funcs': self._barrier_funcs
+            'composed_barrier_func': self._composed_barrier_func
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
@@ -174,7 +174,7 @@ class CompositionBarrier(Barrier):
         dynamics = self._resolve_dynamics(barriers, infer_dynamics, dynamics_override)
 
         # Create composition functions
-        barrier_funcs = self._create_barrier_composition_func(barriers)
+        composed_barrier_func = self._create_barrier_composition_func(barriers)
         hocbf_func = self._create_hocbf_composition_func(barriers, rule)
 
         # Build composed barrier series
@@ -182,7 +182,7 @@ class CompositionBarrier(Barrier):
 
         # Create new composed instance
         return self._create_updated_instance(
-            barrier_func=barrier_funcs,
+            barrier_func=composed_barrier_func,
             dynamics=dynamics,
             rel_deg=1,
             alphas=(),
@@ -191,7 +191,7 @@ class CompositionBarrier(Barrier):
             barrier_list=tuple(barriers),
             composition_rule=rule,
             barriers_raw=tuple(barriers),
-            barrier_funcs=barrier_funcs
+            composed_barrier_func=composed_barrier_func
         )
 
     def _resolve_dynamics(self, barriers: List[Barrier], infer_dynamics: bool,
@@ -297,7 +297,7 @@ class CompositionBarrier(Barrier):
         """
         if not self._barriers_raw:
             raise ValueError("Barriers not assigned. Use assign_barriers_and_rule first.")
-        return apply_and_batchize(self._barrier_funcs, x)
+        return apply_and_batchize(self._composed_barrier_func, x)
 
     def compose(self, rule_key: str) -> Callable:
         """

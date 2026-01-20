@@ -1,0 +1,1008 @@
+"""
+NMPC (Nonlinear Model Predictive Control) using JAX + jax2casadi + acados.
+
+This module provides NMPC controllers where dynamics and cost functions are
+defined in JAX, converted to CasADi via jax2casadi, and solved using acados.
+
+Classes:
+    NMPCControl: Base NMPC controller with EXTERNAL cost (JAX callables)
+    QuadraticNMPCControl: NMPC with LINEAR_LS cost (Q, R matrices)
+"""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import equinox as eqx
+import casadi as ca
+from typing import Callable, Optional, Any, Tuple
+
+from ..utils.jax2casadi import convert
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+
+from .base_control import BaseControl
+from ..dynamics.base_dynamic import DummyDynamics
+
+
+class NMPCControl(BaseControl):
+    """
+    Nonlinear Model Predictive Control using acados with EXTERNAL cost.
+
+    Dynamics and cost are defined in JAX, converted to CasADi via jax2casadi,
+    and the resulting OCP is solved using acados.
+
+    All configuration is stored in params dict following codebase patterns:
+        params = {
+            # Horizon settings
+            'horizon': 2.0,          # Total prediction horizon time [s]
+            'time_steps': 0.04,      # Timestep [s] (horizon/N_horizon)
+
+            # Solver options
+            'qp_solver': 'PARTIAL_CONDENSING_HPIPM',
+            'hessian_approx': 'GAUSS_NEWTON',
+            'integrator_type': 'ERK',
+            'sim_method_num_stages': 4,
+            'nlp_solver_type': 'SQP_RTI',
+            'nlp_solver_max_iter': 200,
+            'qp_solver_iter_max': 100,
+            'tol': 1e-4,
+        }
+
+    Attributes:
+        _control_low: Lower bounds for control inputs (tuple)
+        _control_high: Upper bounds for control inputs (tuple)
+        _state_bounds_idx: Indices of bounded states (tuple)
+        _state_low: Lower bounds for bounded states (tuple)
+        _state_high: Upper bounds for bounded states (tuple)
+        _cost_running: Running cost function (JAX callable)
+        _cost_terminal: Terminal cost function (JAX callable)
+    """
+
+    # Control bounds
+    _control_low: tuple = eqx.field(static=True)
+    _control_high: tuple = eqx.field(static=True)
+    _has_control_bounds: bool = eqx.field(static=True)
+
+    # State bounds (optional)
+    _state_bounds_idx: tuple = eqx.field(static=True)
+    _state_low: tuple = eqx.field(static=True)
+    _state_high: tuple = eqx.field(static=True)
+    _has_state_bounds: bool = eqx.field(static=True)
+
+    # Cost functions (JAX callables)
+    _cost_running: Optional[Callable] = eqx.field(static=True)
+    _cost_terminal: Optional[Callable] = eqx.field(static=True)
+
+    # Build state (non-static since solver is mutable)
+    _is_built: bool
+    _solver: Any
+    _dynamics_casadi: Any
+    _ocp: Any
+
+    def __init__(
+        self,
+        action_dim: int,
+        params: Optional[dict] = None,
+        dynamics=None,
+        control_low: Optional[list] = None,
+        control_high: Optional[list] = None,
+        state_bounds_idx: Optional[list] = None,
+        state_low: Optional[list] = None,
+        state_high: Optional[list] = None,
+        cost_running: Optional[Callable] = None,
+        cost_terminal: Optional[Callable] = None,
+    ):
+        """
+        Initialize NMPCControl.
+
+        Args:
+            action_dim: Dimension of control input
+            params: Configuration parameters dictionary containing:
+                - horizon: Total prediction horizon time [s]
+                - time_steps: Timestep [s]
+                - qp_solver: QP solver type
+                - hessian_approx: Hessian approximation method
+                - integrator_type: Integration method
+                - sim_method_num_stages: Number of stages for integrator
+                - nlp_solver_type: NLP solver type
+                - nlp_solver_max_iter: Max NLP iterations
+                - qp_solver_iter_max: Max QP iterations
+                - tol: Solver tolerance
+            dynamics: System dynamics object (AffineInControlDynamics)
+            control_low: Lower bounds for control inputs
+            control_high: Upper bounds for control inputs
+            state_bounds_idx: Indices of bounded states
+            state_low: Lower bounds for bounded states
+            state_high: Upper bounds for bounded states
+            cost_running: Running cost function f(x, u) -> scalar (JAX)
+            cost_terminal: Terminal cost function f(x) -> scalar (JAX)
+        """
+        # Default params
+        default_params = {
+            # Horizon settings
+            'horizon': 2.0,
+            'time_steps': 0.04,
+            # Solver options
+            'qp_solver': 'PARTIAL_CONDENSING_HPIPM',
+            'hessian_approx': 'GAUSS_NEWTON',
+            'integrator_type': 'ERK',
+            'sim_method_num_stages': 4,
+            'nlp_solver_type': 'SQP_RTI',
+            'nlp_solver_max_iter': 200,
+            'qp_solver_iter_max': 100,
+            'tol': 1e-4,
+        }
+        if params is not None:
+            default_params.update(params)
+
+        super().__init__(action_dim, default_params, dynamics)
+
+        # Control bounds
+        if control_low is not None and control_high is not None:
+            self._control_low = tuple(control_low)
+            self._control_high = tuple(control_high)
+            self._has_control_bounds = True
+        else:
+            self._control_low = tuple()
+            self._control_high = tuple()
+            self._has_control_bounds = False
+
+        # State bounds
+        if state_bounds_idx is not None and state_low is not None and state_high is not None:
+            self._state_bounds_idx = tuple(state_bounds_idx)
+            self._state_low = tuple(state_low)
+            self._state_high = tuple(state_high)
+            self._has_state_bounds = True
+        else:
+            self._state_bounds_idx = ()
+            self._state_low = ()
+            self._state_high = ()
+            self._has_state_bounds = False
+
+        # Cost functions
+        self._cost_running = cost_running
+        self._cost_terminal = cost_terminal
+
+        # Build state
+        self._is_built = False
+        self._solver = None
+        self._dynamics_casadi = None
+        self._ocp = None
+
+    @classmethod
+    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'NMPCControl':
+        """
+        Create an empty NMPC controller for assignment chain.
+
+        Args:
+            action_dim: Dimension of control input
+            params: Optional configuration parameters
+
+        Returns:
+            Empty NMPCControl instance ready for assignment
+        """
+        return cls(action_dim=action_dim, params=params)
+
+    def _create_updated_instance(self, **kwargs):
+        """
+        Create new instance with updated fields.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New NMPCControl instance with updated fields
+        """
+        defaults = {
+            'action_dim': self._action_dim,
+            'params': dict(self._params) if self._params else None,
+            'dynamics': self._dynamics,
+            'control_low': list(self._control_low) if self._has_control_bounds else None,
+            'control_high': list(self._control_high) if self._has_control_bounds else None,
+            'state_bounds_idx': list(self._state_bounds_idx) if self._has_state_bounds else None,
+            'state_low': list(self._state_low) if self._has_state_bounds else None,
+            'state_high': list(self._state_high) if self._has_state_bounds else None,
+            'cost_running': self._cost_running,
+            'cost_terminal': self._cost_terminal,
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
+    # ==========================================
+    # Assignment Methods
+    # ==========================================
+
+    def assign_dynamics(self, dynamics) -> 'NMPCControl':
+        """
+        Assign dynamics to controller.
+
+        Args:
+            dynamics: System dynamics object (AffineInControlDynamics)
+
+        Returns:
+            New NMPCControl instance with assigned dynamics
+        """
+        return self._create_updated_instance(dynamics=dynamics)
+
+    def assign_control_bounds(self, low: list, high: list) -> 'NMPCControl':
+        """
+        Assign control input bounds.
+
+        Args:
+            low: Lower bounds for control inputs
+            high: Upper bounds for control inputs
+
+        Returns:
+            New NMPCControl instance with bounds assigned
+        """
+        assert len(low) == len(high), 'low and high should have the same length'
+        assert len(low) == self._action_dim, 'bounds length should match action dimension'
+        return self._create_updated_instance(control_low=low, control_high=high)
+
+    def assign_state_bounds(self, idx: list, low: list, high: list) -> 'NMPCControl':
+        """
+        Assign state bounds for specific state indices.
+
+        Args:
+            idx: Indices of bounded states
+            low: Lower bounds for bounded states
+            high: Upper bounds for bounded states
+
+        Returns:
+            New NMPCControl instance with state bounds assigned
+        """
+        assert len(idx) == len(low) == len(high), 'idx, low, high should have same length'
+        return self._create_updated_instance(
+            state_bounds_idx=idx, state_low=low, state_high=high
+        )
+
+    def assign_cost_running(self, cost_func: Callable) -> 'NMPCControl':
+        """
+        Assign running (stage) cost function.
+
+        Args:
+            cost_func: JAX function f(x, u) -> scalar
+
+        Returns:
+            New NMPCControl instance with running cost assigned
+        """
+        return self._create_updated_instance(cost_running=cost_func)
+
+    def assign_cost_terminal(self, cost_func: Callable) -> 'NMPCControl':
+        """
+        Assign terminal cost function.
+
+        Args:
+            cost_func: JAX function f(x) -> scalar
+
+        Returns:
+            New NMPCControl instance with terminal cost assigned
+        """
+        return self._create_updated_instance(cost_terminal=cost_func)
+
+    # ==========================================
+    # Properties for horizon/timestep access
+    # ==========================================
+
+    @property
+    def horizon(self) -> float:
+        """Get prediction horizon time [s]."""
+        return self._params['horizon']
+
+    @property
+    def time_steps(self) -> float:
+        """Get timestep [s]."""
+        return self._params['time_steps']
+
+    @property
+    def N_horizon(self) -> int:
+        """Get number of prediction horizon steps."""
+        return int(self.horizon / self.time_steps)
+
+    # ==========================================
+    # Build Methods
+    # ==========================================
+
+    def _convert_dynamics_to_casadi(self) -> ca.Function:
+        """Convert JAX dynamics to CasADi function."""
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        dynamics_ca = convert(
+            self._dynamics.rhs,
+            [('x', (nx,)), ('u', (nu,))],
+            name='dynamics',
+            validate=True,
+            tolerance=1e-6
+        )
+        return dynamics_ca
+
+    def _convert_cost_running_to_casadi(self) -> ca.Function:
+        """Convert JAX running cost to CasADi function."""
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        cost_ca = convert(
+            self._cost_running,
+            [('x', (nx,)), ('u', (nu,))],
+            name='cost_running',
+            validate=True,
+            tolerance=1e-4
+        )
+        return cost_ca
+
+    def _convert_cost_terminal_to_casadi(self) -> ca.Function:
+        """Convert JAX terminal cost to CasADi function."""
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        cost_ca = convert(
+                self._cost_terminal,
+                [('x', (nx,))],
+                name='cost_terminal',
+                validate=True,
+                tolerance=1e-3
+            )
+        return cost_ca
+
+    def _create_acados_model(self, dynamics_casadi: ca.Function) -> AcadosModel:
+        """Create acados model using converted dynamics."""
+        model_name = "nmpc_model"
+
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        # CasADi symbolic variables
+        x = ca.SX.sym('x', nx)
+        u = ca.SX.sym('u', nu)
+        xdot = ca.SX.sym('xdot', nx)
+
+        # Use JAX-converted dynamics
+        f_expl = dynamics_casadi(x, u)
+        f_impl = xdot - f_expl
+
+        # Create model
+        model = AcadosModel()
+        model.f_impl_expr = f_impl
+        model.f_expl_expr = f_expl
+        model.x = x
+        model.xdot = xdot
+        model.u = u
+        model.name = model_name
+
+        return model
+
+    def _setup_cost(self, ocp: AcadosOcp, model: AcadosModel):
+        """Setup EXTERNAL cost function in OCP using JAX-converted functions."""
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        assert self._cost_running is not None, \
+            "Running cost must be assigned. Use assign_cost_running()."
+
+        # Use EXTERNAL cost with JAX-converted functions
+        ocp.cost.cost_type = "EXTERNAL"
+        ocp.cost.cost_type_e = "EXTERNAL"
+
+        # Convert cost functions to CasADi
+        cost_running_ca = self._convert_cost_running_to_casadi()
+
+        if self._cost_terminal is not None:
+            cost_terminal_ca = self._convert_cost_terminal_to_casadi()
+        else:
+            # Default terminal cost: same as running cost with u=0
+            cost_terminal_ca = lambda x: cost_running_ca(x, ca.DM.zeros(nu))
+
+        model.cost_expr_ext_cost = cost_running_ca(model.x, model.u)
+        model.cost_expr_ext_cost_e = cost_terminal_ca(model.x)
+
+    def _setup_constraints(self, ocp: AcadosOcp, model: AcadosModel, x0: np.ndarray):
+        """Setup constraints in OCP."""
+        nu = self._action_dim
+
+        # Control constraints
+        if self._has_control_bounds:
+            ocp.constraints.lbu = np.array(self._control_low)
+            ocp.constraints.ubu = np.array(self._control_high)
+            ocp.constraints.idxbu = np.arange(nu)
+
+        # State constraints
+        if self._has_state_bounds:
+            ocp.constraints.lbx = np.array(self._state_low)
+            ocp.constraints.ubx = np.array(self._state_high)
+            ocp.constraints.idxbx = np.array(self._state_bounds_idx)
+
+        # Initial state constraint
+        ocp.constraints.x0 = x0
+
+    def _setup_solver_options(self, ocp: AcadosOcp):
+        """Setup solver options in OCP from params."""
+        ocp.solver_options.N_horizon = self.N_horizon
+        ocp.solver_options.tf = self.horizon
+
+        ocp.solver_options.qp_solver = self._params['qp_solver']
+        ocp.solver_options.hessian_approx = self._params['hessian_approx']
+        ocp.solver_options.integrator_type = self._params['integrator_type']
+        ocp.solver_options.sim_method_num_stages = self._params['sim_method_num_stages']
+        ocp.solver_options.nlp_solver_type = self._params['nlp_solver_type']
+        ocp.solver_options.nlp_solver_max_iter = self._params['nlp_solver_max_iter']
+        ocp.solver_options.qp_solver_iter_max = self._params['qp_solver_iter_max']
+        ocp.solver_options.tol = self._params['tol']
+
+    def make(self, x0: Optional[np.ndarray] = None) -> 'NMPCControl':
+        """
+        Build the NMPC controller.
+
+        Converts JAX functions to CasADi, creates acados OCP, and initializes solver.
+
+        Args:
+            x0: Initial state for the OCP (required for acados)
+
+        Returns:
+            Self with solver built
+
+        Raises:
+            AssertionError: If required components are not assigned
+        """
+        # Assertions
+        assert self.has_dynamics, "Dynamics must be assigned before make()"
+        assert self._has_control_bounds, "Control bounds must be assigned before make()"
+        assert self._cost_running is not None, \
+            "Running cost must be assigned. Use assign_cost_running()."
+
+        if x0 is None:
+            # Default initial state
+            x0 = np.zeros(self._dynamics.state_dim)
+
+        print("Converting JAX dynamics to CasADi...")
+        dynamics_casadi = self._convert_dynamics_to_casadi()
+        object.__setattr__(self, '_dynamics_casadi', dynamics_casadi)
+
+        print("Building acados OCP...")
+        ocp = AcadosOcp()
+
+        # Create model
+        model = self._create_acados_model(dynamics_casadi)
+        ocp.model = model
+
+        # Setup cost
+        self._setup_cost(ocp, model)
+
+        # Setup constraints
+        self._setup_constraints(ocp, model, x0)
+
+        # Setup solver options
+        self._setup_solver_options(ocp)
+
+        # Store OCP
+        object.__setattr__(self, '_ocp', ocp)
+
+        # Create solver
+        print("Creating acados solver...")
+        solver = AcadosOcpSolver(ocp)
+        object.__setattr__(self, '_solver', solver)
+
+        object.__setattr__(self, '_is_built', True)
+        print("NMPC ready!")
+
+        return self
+
+    # ==========================================
+    # Control Methods
+    # ==========================================
+
+    def _optimal_control_single(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
+        """
+        Compute optimal control for a single state.
+
+        Args:
+            x: Single state vector (state_dim,)
+
+        Returns:
+            Tuple (u, info) where:
+            - u: Control vector (action_dim,) as jnp.ndarray
+            - info: Dictionary with solver status, cost, and predicted trajectory
+        """
+        assert self._is_built, "Must call make() before computing control"
+
+        # Convert JAX array to numpy for acados
+        x_np = np.array(x)
+
+        # Set initial state constraint
+        self._solver.set(0, "lbx", x_np)
+        self._solver.set(0, "ubx", x_np)
+
+        # Solve
+        status = self._solver.solve()
+        u_opt = self._solver.get(0, "u")
+
+        # Get cost
+        cost = self._solver.get_cost()
+
+        # Get predicted trajectory from this solve
+        x_traj, u_traj = self._extract_trajectory()
+
+        # Convert back to JAX
+        u_jax = jnp.array(u_opt)
+
+        info = {
+            'status': status,
+            'cost': cost,
+            'solver_status': status,
+            'x_traj': x_traj,  # (N+1, nx)
+            'u_traj': u_traj,  # (N, nu)
+        }
+
+        return u_jax, info
+
+    def _extract_trajectory(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Extract predicted trajectory from solver after a solve.
+
+        Returns:
+            Tuple (x_traj, u_traj) where:
+            - x_traj: Predicted states (N+1, nx)
+            - u_traj: Predicted controls (N, nu)
+        """
+        N = self.N_horizon
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        x_traj = np.zeros((N + 1, nx))
+        u_traj = np.zeros((N, nu))
+
+        for k in range(N + 1):
+            x_traj[k] = self._solver.get(k, "x")
+        for k in range(N):
+            u_traj[k] = self._solver.get(k, "u")
+
+        return x_traj, u_traj
+
+    def get_predicted_trajectory(self, x: jnp.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Solve OCP for given state and return predicted trajectory.
+
+        This method solves the OCP starting from state x and returns
+        the full predicted state and control trajectory.
+
+        Args:
+            x: Initial state vector (state_dim,)
+
+        Returns:
+            Tuple (x_traj, u_traj) where:
+            - x_traj: Predicted states (N+1, nx)
+            - u_traj: Predicted controls (N, nu)
+        """
+        assert self._is_built, "Must call make() before getting trajectory"
+
+        # Convert JAX array to numpy for acados
+        x_np = np.array(x)
+
+        # Set initial state constraint
+        self._solver.set(0, "lbx", x_np)
+        self._solver.set(0, "ubx", x_np)
+
+        # Solve
+        self._solver.solve()
+
+        # Extract and return trajectory
+        return self._extract_trajectory()
+
+    def optimal_control(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
+        """
+        Compute optimal control with batch support.
+
+        Note: NMPC is not JIT-compatible since it uses acados.
+        For batched inputs, controls are computed sequentially.
+
+        Args:
+            x: State(s) (state_dim,) or (batch, state_dim)
+
+        Returns:
+            Tuple (u, info) with control(s)
+        """
+        if x.ndim == 1:
+            return self._optimal_control_single(x)
+        else:
+            # Batch processing (sequential, not parallelized)
+            u_list = []
+            info_list = []
+            for i in range(x.shape[0]):
+                u_i, info_i = self._optimal_control_single(x[i])
+                u_list.append(u_i)
+                info_list.append(info_i)
+
+            u_batch = jnp.stack(u_list)
+            info_batch = {
+                'status': jnp.array([info['status'] for info in info_list]),
+                'cost': jnp.array([info['cost'] for info in info_list]),
+            }
+            return u_batch, info_batch
+
+    def _optimal_control_for_ode(self, x: jnp.ndarray) -> jnp.ndarray:
+        """
+        Internal method for ODE integration.
+
+        Args:
+            x: State vector (state_dim,) - single state
+
+        Returns:
+            Control vector (action_dim,)
+        """
+        u, _ = self._optimal_control_single(x)
+        return u
+
+    # ==========================================
+    # Trajectory Integration (ZOH)
+    # ==========================================
+
+    def get_optimal_trajs_zoh(
+        self,
+        s0: jnp.ndarray,
+        sim_time: float,
+        timestep: float,
+        method: str = 'tsit5',
+        intermediate_steps: int = 10,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Compute optimal trajectories using Zero-Order Hold (ZOH) control.
+
+        Since NMPC uses acados (not JIT-compatible), this uses a Python loop
+        for time stepping with JIT-compiled integration between steps.
+
+        Args:
+            s0: Initial states (batch, state_dim) or (state_dim,)
+            sim_time: Total simulation time [s]
+            timestep: Control timestep [s]
+            method: ODE solver method ('tsit5', 'dopri5', 'euler', etc.)
+            intermediate_steps: Number of integration substeps per control step
+
+        Returns:
+            Tuple (trajectories, actions) where:
+            - trajectories: (num_steps, batch, state_dim)
+            - actions: (num_steps-1, batch, action_dim)
+        """
+        import diffrax
+        from ..utils.integration import get_solver
+
+        assert self._is_built, "Must call make() before computing trajectories"
+
+        # Handle single state
+        if s0.ndim == 1:
+            s0 = s0[None, :]
+        batch_size = s0.shape[0]
+
+        num_steps = int(sim_time / timestep) + 1
+        solver = get_solver(method)
+        adjoint = diffrax.RecursiveCheckpointAdjoint()
+
+        # JIT-compiled ODE step with fixed control (ZOH)
+        @jax.jit
+        def integrate_with_fixed_control(current_state, control):
+            def ode_func(t, y, args):
+                return self._dynamics.rhs(y, args)
+
+            term = diffrax.ODETerm(ode_func)
+            solution = diffrax.diffeqsolve(
+                terms=term,
+                solver=solver,
+                t0=0.0,
+                t1=timestep,
+                dt0=timestep / intermediate_steps,
+                y0=current_state,
+                args=control,
+                adjoint=adjoint,
+                saveat=diffrax.SaveAt(t1=True),
+                max_steps=intermediate_steps * 5,
+            )
+            return solution.ys[0]
+
+        # Process each initial state independently
+        trajectories = []
+        actions_list = []
+
+        for i in range(batch_size):
+            traj = [s0[i]]
+            actions = []
+            current_state = s0[i]
+
+            # Python loop over timesteps (cannot use lax.scan due to acados)
+            for _ in range(num_steps - 1):
+                # Get optimal control from NMPC
+                u_opt, _ = self._optimal_control_single(current_state)
+
+                # Store action
+                actions.append(u_opt)
+
+                # Integrate with this control
+                next_state = integrate_with_fixed_control(current_state, u_opt)
+                traj.append(next_state)
+                current_state = next_state
+
+            trajectories.append(jnp.stack(traj, axis=0))
+            actions_list.append(jnp.stack(actions, axis=0))
+
+        # Stack: trajectories (num_steps, batch, state_dim), actions (num_steps-1, batch, action_dim)
+        trajs = jnp.stack(trajectories, axis=1)
+        actions = jnp.stack(actions_list, axis=1)
+
+        return trajs, actions
+
+    # ==========================================
+    # Properties
+    # ==========================================
+
+    @property
+    def is_built(self) -> bool:
+        """Check if controller has been built."""
+        return self._is_built
+
+    @property
+    def solver(self):
+        """Get acados solver (None if not built)."""
+        return self._solver
+
+
+class QuadraticNMPCControl(NMPCControl):
+    """
+    NMPC Control with quadratic (LINEAR_LS) cost.
+
+    Uses Q, R matrices for cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
+
+    Attributes:
+        _Q: State cost matrix tuple
+        _R: Control cost matrix tuple
+        _Q_e: Terminal state cost matrix tuple
+        _x_ref: Reference state tuple
+    """
+
+    # Cost matrices (stored as tuples for static fields)
+    _Q: Optional[tuple] = eqx.field(static=True)
+    _R: Optional[tuple] = eqx.field(static=True)
+    _Q_e: Optional[tuple] = eqx.field(static=True)
+    _x_ref: Optional[tuple] = eqx.field(static=True)
+
+    def __init__(
+        self,
+        action_dim: int,
+        params: Optional[dict] = None,
+        dynamics=None,
+        control_low: Optional[list] = None,
+        control_high: Optional[list] = None,
+        state_bounds_idx: Optional[list] = None,
+        state_low: Optional[list] = None,
+        state_high: Optional[list] = None,
+        Q: Optional[np.ndarray] = None,
+        R: Optional[np.ndarray] = None,
+        Q_e: Optional[np.ndarray] = None,
+        x_ref: Optional[np.ndarray] = None,
+    ):
+        """
+        Initialize QuadraticNMPCControl.
+
+        Args:
+            action_dim: Dimension of control input
+            params: Configuration parameters dictionary
+            dynamics: System dynamics object (AffineInControlDynamics)
+            control_low: Lower bounds for control inputs
+            control_high: Upper bounds for control inputs
+            state_bounds_idx: Indices of bounded states
+            state_low: Lower bounds for bounded states
+            state_high: Upper bounds for bounded states
+            Q: State cost matrix (nx, nx)
+            R: Control cost matrix (nu, nu)
+            Q_e: Terminal state cost matrix (nx, nx), defaults to Q
+            x_ref: Reference state (nx,), defaults to zero
+        """
+        # Initialize parent (without cost functions)
+        super().__init__(
+            action_dim=action_dim,
+            params=params,
+            dynamics=dynamics,
+            control_low=control_low,
+            control_high=control_high,
+            state_bounds_idx=state_bounds_idx,
+            state_low=state_low,
+            state_high=state_high,
+            cost_running=None,
+            cost_terminal=None,
+        )
+
+        # Cost matrices (convert to tuples for static fields)
+        self._Q = tuple(map(tuple, Q)) if Q is not None else None
+        self._R = tuple(map(tuple, R)) if R is not None else None
+        self._Q_e = tuple(map(tuple, Q_e)) if Q_e is not None else None
+        self._x_ref = tuple(x_ref) if x_ref is not None else None
+
+    def _create_updated_instance(self, **kwargs):
+        """Create new instance with updated fields."""
+        # Convert numpy arrays back if needed
+        Q = kwargs.get('Q', self._Q)
+        R = kwargs.get('R', self._R)
+        Q_e = kwargs.get('Q_e', self._Q_e)
+        x_ref = kwargs.get('x_ref', self._x_ref)
+
+        # Convert tuples back to numpy for constructor
+        if Q is not None and isinstance(Q, tuple):
+            Q = np.array(Q)
+        if R is not None and isinstance(R, tuple):
+            R = np.array(R)
+        if Q_e is not None and isinstance(Q_e, tuple):
+            Q_e = np.array(Q_e)
+        if x_ref is not None and isinstance(x_ref, tuple):
+            x_ref = np.array(x_ref)
+
+        defaults = {
+            'action_dim': self._action_dim,
+            'params': dict(self._params) if self._params else None,
+            'dynamics': self._dynamics,
+            'control_low': list(self._control_low) if self._has_control_bounds else None,
+            'control_high': list(self._control_high) if self._has_control_bounds else None,
+            'state_bounds_idx': list(self._state_bounds_idx) if self._has_state_bounds else None,
+            'state_low': list(self._state_low) if self._has_state_bounds else None,
+            'state_high': list(self._state_high) if self._has_state_bounds else None,
+            'Q': Q,
+            'R': R,
+            'Q_e': Q_e,
+            'x_ref': x_ref,
+        }
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
+    def assign_cost_matrices(
+        self,
+        Q: np.ndarray,
+        R: np.ndarray,
+        Q_e: Optional[np.ndarray] = None,
+        x_ref: Optional[np.ndarray] = None
+    ) -> 'QuadraticNMPCControl':
+        """
+        Assign quadratic cost matrices.
+
+        Cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
+
+        Args:
+            Q: State cost matrix (nx, nx)
+            R: Control cost matrix (nu, nu)
+            Q_e: Terminal state cost matrix (nx, nx), defaults to Q
+            x_ref: Reference state (nx,), defaults to zero
+
+        Returns:
+            New QuadraticNMPCControl instance with cost matrices assigned
+        """
+        if Q_e is None:
+            Q_e = Q
+        return self._create_updated_instance(Q=Q, R=R, Q_e=Q_e, x_ref=x_ref)
+
+    def assign_reference(self, x_ref: np.ndarray) -> 'QuadraticNMPCControl':
+        """
+        Assign reference state for tracking.
+
+        Args:
+            x_ref: Reference state (nx,)
+
+        Returns:
+            New QuadraticNMPCControl instance with reference assigned
+        """
+        return self._create_updated_instance(x_ref=x_ref)
+
+    def _setup_cost(self, ocp: AcadosOcp, model: AcadosModel):
+        """Setup LINEAR_LS cost function in OCP."""
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        assert self._Q is not None and self._R is not None, \
+            "Cost matrices must be assigned. Use assign_cost_matrices()."
+
+        # Use LINEAR_LS cost type
+        ocp.cost.cost_type = "LINEAR_LS"
+        ocp.cost.cost_type_e = "LINEAR_LS"
+
+        Q = np.array(self._Q)
+        R = np.array(self._R)
+        Q_e = np.array(self._Q_e) if self._Q_e is not None else Q
+
+        # Reference
+        if self._x_ref is not None:
+            x_ref = np.array(self._x_ref)
+        else:
+            x_ref = np.zeros(nx)
+
+        # Output dimension: y = [x; u]
+        ny = nx + nu
+
+        # Weight matrices
+        ocp.cost.W = np.block([
+            [Q, np.zeros((nx, nu))],
+            [np.zeros((nu, nx)), R]
+        ])
+        ocp.cost.W_e = Q_e
+
+        # Output selection matrices: y = Vx @ x + Vu @ u
+        # Vx: (ny, nx), Vu: (ny, nu)
+        ocp.cost.Vx = np.vstack([np.eye(nx), np.zeros((nu, nx))])
+        ocp.cost.Vu = np.vstack([np.zeros((nx, nu)), np.eye(nu)])
+        ocp.cost.Vx_e = np.eye(nx)
+
+        # Reference (y = [x; u] for stage, y_e = x for terminal)
+        ocp.cost.yref = np.concatenate([x_ref, np.zeros(nu)])
+        ocp.cost.yref_e = x_ref
+
+    def make(self, x0: Optional[np.ndarray] = None) -> 'QuadraticNMPCControl':
+        """
+        Build the NMPC controller.
+
+        Args:
+            x0: Initial state for the OCP (required for acados)
+
+        Returns:
+            Self with solver built
+        """
+        # Check quadratic cost is assigned
+        assert self._Q is not None and self._R is not None, \
+            "Cost matrices must be assigned. Use assign_cost_matrices()."
+
+        # Skip parent's cost check by calling grandparent's assertions
+        assert self.has_dynamics, "Dynamics must be assigned before make()"
+        assert self._has_control_bounds, "Control bounds must be assigned before make()"
+
+        if x0 is None:
+            x0 = np.zeros(self._dynamics.state_dim)
+
+        print("Converting JAX dynamics to CasADi...")
+        dynamics_casadi = self._convert_dynamics_to_casadi()
+        object.__setattr__(self, '_dynamics_casadi', dynamics_casadi)
+
+        print("Building acados OCP...")
+        ocp = AcadosOcp()
+
+        model = self._create_acados_model(dynamics_casadi)
+        ocp.model = model
+
+        self._setup_cost(ocp, model)
+        self._setup_constraints(ocp, model, x0)
+        self._setup_solver_options(ocp)
+
+        object.__setattr__(self, '_ocp', ocp)
+
+        print("Creating acados solver...")
+        solver = AcadosOcpSolver(ocp)
+        object.__setattr__(self, '_solver', solver)
+
+        object.__setattr__(self, '_is_built', True)
+        print("NMPC ready!")
+
+        return self
+
+    def update_reference(self, x_ref: np.ndarray, u_ref: Optional[np.ndarray] = None):
+        """
+        Update the reference trajectory online.
+
+        Args:
+            x_ref: Reference state (nx,) or trajectory (N+1, nx)
+            u_ref: Reference control (nu,) or trajectory (N, nu), optional
+        """
+        assert self._is_built, "Must call make() before updating reference"
+
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+
+        # Handle single reference vs trajectory
+        if x_ref.ndim == 1:
+            x_ref_traj = np.tile(x_ref, (self.N_horizon + 1, 1))
+        else:
+            x_ref_traj = x_ref
+
+        if u_ref is None:
+            u_ref_traj = np.zeros((self.N_horizon, nu))
+        elif u_ref.ndim == 1:
+            u_ref_traj = np.tile(u_ref, (self.N_horizon, 1))
+        else:
+            u_ref_traj = u_ref
+
+        # Update references in solver
+        for k in range(self.N_horizon):
+            yref = np.concatenate([x_ref_traj[k], u_ref_traj[k]])
+            self._solver.set(k, "yref", yref)
+
+        # Terminal reference
+        self._solver.set(self.N_horizon, "yref", x_ref_traj[self.N_horizon])

@@ -36,6 +36,7 @@ class Barrier(eqx.Module):
 
     # Core barrier configuration
     _barrier_func: Callable = eqx.field(static=True)
+    _barrier_funcs: tuple = eqx.field(static=True)
     _dynamics: Any = eqx.field(static=True)
     _rel_deg: int = eqx.field(static=True)
     _alphas: tuple = eqx.field(static=True)
@@ -43,6 +44,7 @@ class Barrier(eqx.Module):
     # Computed barrier functions
     _barriers: tuple = eqx.field(static=True)
     _hocbf_func: Callable = eqx.field(static=True)
+    _hocbf_funcs: tuple = eqx.field(static=True)
 
     # Configuration
     cfg: immutabledict = eqx.field(static=True)
@@ -69,6 +71,10 @@ class Barrier(eqx.Module):
         self._barriers = tuple(barriers or [])
         self._hocbf_func = hocbf_func or self._create_dummy_barrier()
         self.cfg = immutabledict(cfg or {})
+
+        # Tuple versions derived from singular
+        self._barrier_funcs = (self._barrier_func,)
+        self._hocbf_funcs = (self._hocbf_func,)
 
 
     @staticmethod
@@ -431,5 +437,10 @@ class Barrier(eqx.Module):
     def num_barriers(self) -> int:
         """Number of barrier functions in the series."""
         return len(self._barriers)
+
+    @property
+    def num_constraints(self) -> int:
+        """Number of barrier constraints (for NMPC/optimization)."""
+        return len(self._hocbf_funcs)
 
 

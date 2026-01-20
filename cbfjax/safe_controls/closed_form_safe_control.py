@@ -153,7 +153,7 @@ class CFSafeControl(BaseCBFSafeControl):
         """
         return self._create_updated_instance(Q=Q, c=c)
 
-    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for a single state using closed-form solution.
 
@@ -336,7 +336,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         """
         return self._create_updated_instance(desired_control=desired_control)
     @jax.jit
-    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute minimum intervention safe control for a single state.
 
@@ -549,7 +549,7 @@ class InputConstCFSafeControl(CFSafeControl):
         return updated_ctrl
 
     @jax.jit
-    def _safe_optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
         """
         Compute safe optimal control for input-constrained system.
 

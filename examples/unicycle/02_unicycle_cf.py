@@ -48,7 +48,6 @@ dynamics = UnicycleDynamics()
 
 # Create barrier map
 map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-
 # Goal positions
 # goal_pos = jnp.array([
 #     [3.0, 4.5],
@@ -84,13 +83,13 @@ safety_filter = safety_filter.assign_desired_control(
     desired_control=lambda x: desired_control(x, goal_pos)
 )
 
-safety_filter._safe_optimal_control_single(x0.squeeze(0))
+safety_filter._optimal_control_single(x0.squeeze(0))
 
 print("Starting trajectory simulation...")
 print(f"  - Device: {jax.devices()[0]}")
 # Simulate trajectories
 start_time = time()
-trajs = safety_filter.get_safe_optimal_trajs(x0=x0, sim_time=sim_time, timestep=timestep, method='euler')
+trajs = safety_filter.get_optimal_trajs(x0=x0, sim_time=sim_time, timestep=timestep, method='euler')
 simulation_time = time() - start_time
 print(f"Simulation completed in {simulation_time:.4f} seconds")
 
@@ -107,7 +106,7 @@ min_constraint = []
 
 for i, traj in enumerate(trajs_list):
 
-    actions.append(safety_filter.safe_optimal_control(traj)[0])
+    actions.append(safety_filter.optimal_control(traj)[0])
 
     # Compute barrier values
     h_vals.append(map_.barrier.hocbf(traj))

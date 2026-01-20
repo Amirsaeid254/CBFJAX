@@ -21,6 +21,10 @@ from .backup_safe_control import (
     BackupSafeControl,
     MinIntervBackupSafeControl
 )
+from .nmpc_safe_control import (
+    NMPCSafeControl,
+    QuadraticNMPCSafeControl,
+)
 
 __all__ = [
     # Closed-form controllers
@@ -36,5 +40,8 @@ __all__ = [
     "MinIntervInputConstQPSafeControl",
     # Backup controllers
     "BackupSafeControl",
-    "MinIntervBackupSafeControl"
+    "MinIntervBackupSafeControl",
+    # NMPC controllers
+    "NMPCSafeControl",
+    "QuadraticNMPCSafeControl",
 ]

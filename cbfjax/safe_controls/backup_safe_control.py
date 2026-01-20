@@ -76,7 +76,7 @@ class BackupSafeControl(InputConstQPSafeControl):
         """Assign dynamics."""
         return self._create_updated_instance(dynamics=dynamics)
 
-    def safe_optimal_control(self, x: jnp.ndarray, ret_info: bool = False):
+    def optimal_control(self, x: jnp.ndarray, ret_info: bool = False):
         """
         Compute backup safe optimal control with automatic batch support.
 
@@ -91,7 +91,7 @@ class BackupSafeControl(InputConstQPSafeControl):
         x = jnp.atleast_2d(x)
 
         # Vmap over batch dimension
-        u, info = jax.vmap(self._safe_optimal_control_single)(x)
+        u, info = jax.vmap(self._optimal_control_single)(x)
 
         if not ret_info:
             return u
@@ -99,7 +99,7 @@ class BackupSafeControl(InputConstQPSafeControl):
             return u, info
 
     @profile_jax("_safe_optimal_control_single")
-    def _safe_optimal_control_single(self, x: jnp.ndarray):
+    def _optimal_control_single(self, x: jnp.ndarray):
         """
         Compute backup safe optimal control for SINGLE state.
 
