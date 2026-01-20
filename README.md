@@ -17,7 +17,7 @@ CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CB
   - Input-constrained QP safe control
   - Minimum intervention control
   - Backup Control Barrier Function
-  - **NMPC with barrier constraints** (via acados + jax2casadi)
+  - Nonlinear Model Predictive Control
 - **Advanced Barrier Types**:
   - Single barriers with automatic differentiation
   - MultiBarriers for handling multiple constraints
@@ -108,6 +108,7 @@ constrained_filter = cbfjax.safe_controls.MinIntervInputConstQPSafeControl(
 ### MultiBarriers for Multiple Constraints
 
 ```python
+import jax.numpy as jnp
 import cbfjax
 
 # Create multiple barriers
