@@ -17,13 +17,15 @@ CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CB
   - Input-constrained QP safe control
   - Minimum intervention control
   - Backup Control Barrier Function
-  - Nonlinear Model Predictive Control
+  - Nonlinear Model Predictive Control (NMPC)
+  - Constrained iLQR
 - **Advanced Barrier Types**:
   - Single barriers with automatic differentiation
   - MultiBarriers for handling multiple constraints
   - Composite barriers with soft/hard composition
+  - Backup barriers with forward invariance
 - **High Performance**: 64-bit precision, JIT compilation, and optimized algorithms
-- **Modern Dependencies**: Diffrax for ODE solving, qpax for QP optimization, acados for NMPC
+- **Modern Dependencies**: Diffrax for ODE solving, qpax for QP optimization, trajax for iLQR, acados for NMPC
 
 ## Installation
 
@@ -169,13 +171,13 @@ print(f"Trajectory shape: {trajectory.shape}")
 
 ## Examples
 
-The `examples/` directory contains complete examples:
+The `examples/` directory contains comprehensive examples demonstrating various safe control methods:
 
-- `02_unicycle_cf.py`: Closed-form safe control for unicycle
-- `03_unicycle_qp.py`: QP-based safe control
-- `06_unicycle_input_constrained_qp.py`: Input-constrained QP safe control
+- **`examples/unicycle/`**: Unicycle dynamics examples including closed-form control, QP-based control, input-constrained QP, NMPC, iLQR, and hierarchical control architectures
+- **`examples/backup_examples/`**: Backup barrier function examples with forward invariance guarantees
 
-Run examples:
+Each example includes trajectory visualization, control plots, barrier value analysis, and animations.
+
 ```bash
 cd examples/unicycle
 python 02_unicycle_cf.py
@@ -200,12 +202,14 @@ cbfjax/
 │   └── unicycle_reduced_order.py   # Reduced-order unicycle
 ├── controls/                       # Control implementations
 │   ├── base_control.py             # BaseControl class
+│   ├── ilqr_control.py             # iLQR trajectory optimization
 │   └── nmpc_control.py             # NMPC via acados
 ├── safe_controls/                  # Safe control implementations
 │   ├── base_safe_control.py        # BaseSafeControl classes
 │   ├── closed_form_safe_control.py # Closed-form CBF
 │   ├── qp_safe_control.py          # QP-based CBF
 │   ├── backup_safe_control.py      # Backup-CBF control
+│   ├── ilqr_safe_control.py        # iLQR with barrier-aware cost
 │   └── nmpc_safe_control.py        # NMPC with barriers
 ├── utils/                          # Utilities and helpers
 │   ├── integration.py              # ODE integration (diffrax)
