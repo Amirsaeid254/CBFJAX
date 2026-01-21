@@ -145,7 +145,6 @@ class BaseControl(eqx.Module):
         """
         u, _ = self._optimal_control_single(x)
         return u
-
     def get_optimal_trajs(self, x0: jnp.ndarray, timestep: float = 0.001,
                           sim_time: float = 4.0, method: str = 'tsit5') -> jnp.ndarray:
         """

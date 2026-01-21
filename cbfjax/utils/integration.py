@@ -57,6 +57,7 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
     t_eval = jnp.linspace(0.0, sim_time, steps)
 
     # Define ODE function
+    @jax.jit
     def ode_func(t, y, args):
         # y shape: (batch, state_dim)
         control = jax.vmap(action_func)(y)  # Vectorize action function over batch

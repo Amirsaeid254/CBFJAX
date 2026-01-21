@@ -1,10 +1,14 @@
 """
-Input-constrained minimum intervention QP-based safe control for unicycle dynamics.
+Hierarchical iLQR + QP Safe Control for unicycle dynamics.
 
-Demonstrates:
-- MultiBarriers creation via Map
-- MinIntervInputConstQPSafeControl with control bounds
-- QP-based CBF solution with input constraints
+Demonstrates a two-layer hierarchical control architecture:
+1. High-level: QuadraticiLQRControl computes optimal trajectory-tracking control
+2. Low-level: MinIntervInputConstQPSafeControl filters the iLQR control
+              to enforce CBF safety constraints and input bounds
+
+This approach combines:
+- iLQR's ability to plan ahead and track references
+- QP safety filter's guarantees for CBF constraint satisfaction
 """
 
 import jax
@@ -15,16 +19,18 @@ import numpy as np
 from time import time
 import datetime
 import os
-from immutabledict import immutabledict
 
 # CBFJAX imports
 import cbfjax.config
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.utils.make_map import Map
-from cbfjax.barriers.multi_barrier import MultiBarriers
+from cbfjax.controls.ilqr_control import QuadraticiLQRControl
 from cbfjax.safe_controls.qp_safe_control import MinIntervInputConstQPSafeControl
+from cbfjax.barriers.multi_barrier import MultiBarriers
+from immutabledict import immutabledict
+
+# Local imports
 from map_config import map_config
-from unicycle_desired_control import desired_control
 
 # Get script directory for saving figures
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -37,7 +43,7 @@ mpl.rcParams['font.family'] = 'serif'
 # Configuration
 # ============================================
 
-# Barrier configuration
+# Barrier configuration for QP (use HOCBF with relative degree)
 cfg = immutabledict({
     'softmax_rho': 20,
     'softmin_rho': 10,
@@ -48,30 +54,23 @@ cfg = immutabledict({
     'velocity_alpha': (),
 })
 
-# QP safety filter parameters
-qp_params = {
-    'slack_gain': 200,
-    'slacked': True,
-    'use_softplus': False,
-    'softplus_gain': 2.0
+# iLQR parameters (no constraints - QP handles safety)
+ilqr_params = {
+    'horizon': 4.0,
+    'time_steps': 0.05,
+    'maxiter': 10,
+    'grad_norm_threshold': 1e-4,
 }
 
-# Control bounds for unicycle dynamics
-control_low = [-2.0, -1.0]   # [min acceleration, min angular velocity]
-control_high = [2.0, 1.0]    # [max acceleration, max angular velocity]
+# QP safety filter parameters
+qp_params = {
+    'slacked': True,
+    'slack_gain': 100.0,
+}
 
-# Control gains for desired control
-control_gains = immutabledict(k1=0.2, k2=1.0, k3=2.0)
-
-# Goal position
-goal_pos = jnp.array([[3.0, 4.5]])
-
-# Initial condition
-x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
-
-# Simulation parameters
-sim_time = 20.0
-dt_sim = 0.01
+# Control bounds
+control_low = [-2.0, -1.0]   # [min accel, min omega]
+control_high = [2.0, 1.0]    # [max accel, max omega]
 
 # ============================================
 # Setup Dynamics
@@ -79,11 +78,16 @@ dt_sim = 0.01
 
 print("Setting up dynamics...")
 
-dynamics = UnicycleDynamics()
+# Dynamics for iLQR (needs discretization)
+dynamics_params = {
+    'discretization_dt': ilqr_params['time_steps'],
+    'discretization_method': 'rk4',
+}
+dynamics = UnicycleDynamics(params=dynamics_params)
+
+# State/action dimensions
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
-
-print(f"  State dim: {nx}, Action dim: {nu}")
 
 # ============================================
 # Setup Barriers
@@ -91,93 +95,153 @@ print(f"  State dim: {nx}, Action dim: {nu}")
 
 print("Setting up barriers...")
 
-# Create barrier map and get individual barriers
+# Create barrier map for QP safety filter
 map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
 pos_barriers, vel_barriers = map_.get_barriers()
 
-# Create MultiBarriers and add all barriers
+# Create MultiBarriers for QP (needs HOCBF + Lie derivatives)
 barrier = MultiBarriers.create_empty(cfg=cfg)
 barrier = barrier.add_barriers([*pos_barriers, *vel_barriers], infer_dynamics=True)
 
-print(f"  MultiBarriers with {len(pos_barriers)} position and {len(vel_barriers)} velocity barriers")
+print(f"  Number of barriers: {len(pos_barriers) + len(vel_barriers)}")
 
 # ============================================
-# Setup Input-Constrained QP Safety Filter
+# Setup iLQR Controller (High-Level)
 # ============================================
 
-print("Setting up input-constrained QP safety filter...")
+print("Setting up iLQR controller...")
 
+# Cost matrices for trajectory tracking
+Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))   # State cost
+R = jnp.diag(jnp.array([10.0, 10.0]))               # Control cost
+Q_e = 100.0 * Q                                    # Terminal cost
+
+# Goal position
+goal_pos = jnp.array([3.0, 4.5])
+x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
+
+# Create unconstrained iLQR controller
+ilqr_controller = (
+    QuadraticiLQRControl.create_empty(action_dim=nu, params=ilqr_params)
+    .assign_dynamics(dynamics)
+    .assign_cost_matrices(Q, R, Q_e, x_ref)
+)
+
+print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
+
+# ============================================
+# Setup QP Safety Filter (Low-Level)
+# ============================================
+
+print("Setting up QP safety filter...")
+
+# Create function that wraps iLQR controller as desired control
+def ilqr_desired_control(x: jnp.ndarray) -> jnp.ndarray:
+    """Compute iLQR optimal control for state x."""
+    u, _ = ilqr_controller._optimal_control_single(x)
+    return u
+
+# Create QP safety filter with iLQR as desired control
 safety_filter = (
     MinIntervInputConstQPSafeControl(
         action_dim=nu,
-        alpha=lambda x: 1.0 * x,
+        alpha=lambda h: 1.0 * h,
         params=qp_params,
         control_low=control_low,
-        control_high=control_high
+        control_high=control_high,
     )
     .assign_dynamics(dynamics)
     .assign_state_barrier(barrier)
-    .assign_desired_control(lambda x: desired_control(x, goal_pos))
+    .assign_desired_control(ilqr_desired_control)
 )
 
-print(f"  Alpha: 1.0 * h")
 print(f"  Control bounds: low={control_low}, high={control_high}")
+print(f"  Slacked: {qp_params['slacked']}, slack_gain: {qp_params['slack_gain']}")
 
 # ============================================
-# Test Controller
+# Test Controllers
 # ============================================
 
-print("\nTesting controller...")
+print("\nTesting controllers...")
 
-u_test, _ = safety_filter._optimal_control_single(x0)
-print(f"  Test control: u = {np.array(u_test)}")
+# Initial state
+x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
+
+# Test iLQR alone
+print("  Testing iLQR controller...")
+u_ilqr_test, info_ilqr = ilqr_controller.optimal_control(x0)
+print(f"    iLQR control: u = {np.array(u_ilqr_test)}")
+
+# Test QP safety filter (uses _optimal_control_single for single state)
+print("  Testing QP safety filter...")
+u_safe_test, info_qp = safety_filter._optimal_control_single(x0)
+print(f"    Safe control: u = {np.array(u_safe_test)}")
+print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
 
 # ============================================
 # Closed-Loop Simulation
 # ============================================
 
 print("\nStarting closed-loop simulation...")
-print(f"  Device: {jax.devices()[0]}")
 
-x0_batch = x0.reshape(1, -1)
+# Simulation parameters
+sim_time = 20.0
+dt_sim = 0.01
+
+x0_batch = x0.reshape(1, -1)  # (1, state_dim)
 
 start_time = time()
+
+# Use safety filter's simulation method
 trajs = safety_filter.get_optimal_trajs(
     x0=x0_batch,
     sim_time=sim_time,
     timestep=dt_sim,
     method='euler'
 )
+
 simulation_time = time() - start_time
-
 print(f"Simulation completed in {simulation_time:.2f} seconds")
-
-# ============================================
-# Compute Control Actions and Barrier Values
-# ============================================
-
-print("\nComputing control actions and barrier values...")
 
 # Extract trajectory
 x_hist = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = x_hist.shape[0] - 1
 time_array = np.linspace(0, sim_time, n_steps + 1)
 
-# Compute controls
-u_hist, _ = safety_filter.optimal_control(x_hist)
+# ============================================
+# Compute Control Actions and Barrier Values
+# ============================================
 
-# Compute barrier values
-h_vals = map_.barrier.hocbf(x_hist)
-min_barrier_at = barrier.get_min_barrier_at(x_hist)
-min_barrier_vals = barrier.min_barrier(x_hist)
+print("\nComputing control actions and analysis data...")
+
+# Compute safe actions (what was actually applied)
+u_safe_hist, info_safe_hist = safety_filter.optimal_control(x_hist[:-1])
+
+# Compute iLQR actions (what iLQR would have applied)
+u_ilqr_hist, _ = ilqr_controller.optimal_control(x_hist[:-1])
+
+# Compute barrier values along trajectory
+h_vals = barrier.hocbf(x_hist)
+
+# Compute intervention magnitude
+intervention = u_safe_hist - u_ilqr_hist
+intervention_norm = jnp.linalg.norm(intervention, axis=1)
+
+# Store predicted trajectories for animation (sample every 100 steps)
+pred_trajs = []
+sample_indices = np.arange(0, n_steps, 100)
+for i in sample_indices:
+    x_traj_pred, _ = ilqr_controller.get_predicted_trajectory(x_hist[i])
+    pred_trajs.append(np.array(x_traj_pred))
 
 # Convert to numpy
 x_hist_np = np.array(x_hist)
-u_hist_np = np.array(u_hist)
+u_safe_np = np.array(u_safe_hist)
+u_ilqr_np = np.array(u_ilqr_hist)
 h_vals_np = np.array(h_vals)
-min_barrier_at_np = np.array(min_barrier_at)
-min_barrier_np = np.array(min_barrier_vals)
-goal_pos_np = np.array(goal_pos[0])
+intervention_np = np.array(intervention)
+intervention_norm_np = np.array(intervention_norm)
+goal_pos_np = np.array(goal_pos)
 
 # ============================================
 # Statistics
@@ -188,14 +252,23 @@ print(f"Simulation statistics ({n_steps} steps):")
 print(f"  Total time: {simulation_time:.2f} s")
 print(f"  Avg time per step: {simulation_time/n_steps*1000:.3f} ms")
 print(f"{'='*60}")
-print(f"Barrier statistics:")
+print(f"Barrier statistics (HOCBF values):")
 print(f"  Min h(x): {np.min(h_vals_np):.6f}")
-print(f"  Min composite barrier: {np.min(min_barrier_np):.6f}")
+print(f"  Violations (h < 0): {np.sum(np.min(h_vals_np, axis=1) < 0)}")
 print(f"{'='*60}")
-print(f"Control statistics:")
-print(f"  u1: min={u_hist_np[:, 0].min():.3f}, max={u_hist_np[:, 0].max():.3f}")
-print(f"  u2: min={u_hist_np[:, 1].min():.3f}, max={u_hist_np[:, 1].max():.3f}")
+print(f"Control statistics (Safe):")
+print(f"  u1 (accel): min={u_safe_np[:, 0].min():.3f}, max={u_safe_np[:, 0].max():.3f}")
+print(f"  u2 (omega): min={u_safe_np[:, 1].min():.3f}, max={u_safe_np[:, 1].max():.3f}")
 print(f"  Bounds: u1 in [{control_low[0]}, {control_high[0]}], u2 in [{control_low[1]}, {control_high[1]}]")
+print(f"{'='*60}")
+print(f"Control statistics (iLQR desired):")
+print(f"  u1 (accel): min={u_ilqr_np[:, 0].min():.3f}, max={u_ilqr_np[:, 0].max():.3f}")
+print(f"  u2 (omega): min={u_ilqr_np[:, 1].min():.3f}, max={u_ilqr_np[:, 1].max():.3f}")
+print(f"{'='*60}")
+print(f"Intervention statistics (QP modification):")
+print(f"  Avg intervention norm: {intervention_norm_np.mean():.4f}")
+print(f"  Max intervention norm: {intervention_norm_np.max():.4f}")
+print(f"  Steps with intervention > 0.01: {np.sum(intervention_norm_np > 0.01)}/{n_steps}")
 print(f"{'='*60}")
 print(f"State statistics:")
 print(f"  Velocity: min={x_hist_np[:, 2].min():.3f}, max={x_hist_np[:, 2].max():.3f}")
@@ -219,7 +292,9 @@ points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
 points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
-Z = map_.barrier.min_barrier(points_jax)
+# Use map barrier for contour plot
+map_composite = map_.create_barriers()
+Z = map_composite.barrier.min_barrier(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---
@@ -254,11 +329,11 @@ ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.12),
 
 plt.tight_layout()
 os.makedirs(os.path.join(script_dir, 'figs'), exist_ok=True)
-plt.savefig(os.path.join(script_dir, f'figs/06_Input_Const_QP_Trajectory_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/09_iLQR_QP_Trajectory_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- States and Control Plot ---
-fig, axs = plt.subplots(5, 1, figsize=(8, 8))
+fig, axs = plt.subplots(6, 1, figsize=(8, 10))
 
 # Position
 axs[0].plot(time_array, x_hist_np[:, 0], label=r'$q_{\rm x}$', color='red')
@@ -276,63 +351,66 @@ axs[1].set_ylabel(r'$v$', fontsize=16)
 axs[2].plot(time_array, x_hist_np[:, 3], color='black')
 axs[2].set_ylabel(r'$\theta$', fontsize=16)
 
-# Control 1 with bounds
-axs[3].plot(time_array, u_hist_np[:, 0], color='black')
-axs[3].axhline(y=control_low[0], color='gray', linestyle=':', alpha=0.7, label='Bounds')
+# Control 1 (acceleration) - comparing iLQR vs safe
+axs[3].plot(time_array[:-1], u_ilqr_np[:, 0], 'r--', alpha=0.7, label=r'$u_{\rm iLQR}$')
+axs[3].plot(time_array[:-1], u_safe_np[:, 0], 'k-', label=r'$u_{\rm safe}$')
+axs[3].axhline(y=control_low[0], color='gray', linestyle=':', alpha=0.7)
 axs[3].axhline(y=control_high[0], color='gray', linestyle=':', alpha=0.7)
 axs[3].set_ylabel(r'$u_1$ (a)', fontsize=16)
-axs[3].legend(loc='lower center', ncol=2, frameon=False, fontsize=12)
+axs[3].legend(loc='lower center', ncol=3, frameon=False, fontsize=12)
 
-# Control 2 with bounds
-axs[4].plot(time_array, u_hist_np[:, 1], color='black')
-axs[4].axhline(y=control_low[1], color='gray', linestyle=':', alpha=0.7, label='Bounds')
+# Control 2 (angular velocity) - comparing iLQR vs safe
+axs[4].plot(time_array[:-1], u_ilqr_np[:, 1], 'r--', alpha=0.7, label=r'$u_{\rm iLQR}$')
+axs[4].plot(time_array[:-1], u_safe_np[:, 1], 'k-', label=r'$u_{\rm safe}$')
+axs[4].axhline(y=control_low[1], color='gray', linestyle=':', alpha=0.7)
 axs[4].axhline(y=control_high[1], color='gray', linestyle=':', alpha=0.7)
 axs[4].set_ylabel(r'$u_2$ ($\omega$)', fontsize=16)
-axs[4].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
-axs[4].legend(loc='lower center', ncol=2, frameon=False, fontsize=12)
+axs[4].legend(loc='lower center', ncol=3, frameon=False, fontsize=12)
 
-for i in range(4):
+# Intervention magnitude
+axs[5].plot(time_array[:-1], intervention_norm_np, color='purple')
+axs[5].set_ylabel(r'$\|u_{\rm safe} - u_{\rm iLQR}\|$', fontsize=16)
+axs[5].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
+
+for i in range(5):
     axs[i].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=False)
 
 for ax in axs:
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.tick_params(labelsize=16)
+    ax.tick_params(labelsize=14)
     ax.set_xlim(time_array[0], time_array[-1])
 
 plt.subplots_adjust(wspace=0, hspace=0.2)
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/06_Input_Const_QP_States_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/09_iLQR_QP_States_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- Barrier Values Plot ---
-fig, axs = plt.subplots(3, 1, figsize=(8, 4.5))
+fig, axs = plt.subplots(2, 1, figsize=(8, 4))
 
-axs[0].plot(time_array, h_vals_np, color='black')
+# HOCBF values
+axs[0].plot(time_array, h_vals_np, alpha=0.7)
 axs[0].axhline(y=0, color='red', linestyle='--', linewidth=1.5)
-axs[0].set_ylabel(r'$h(x)$', fontsize=16)
+axs[0].set_ylabel(r'$h_i(x)$', fontsize=16)
 
-axs[1].plot(time_array, min_barrier_at_np, color='black')
-axs[1].axhline(y=0, color='red', linestyle='--', linewidth=1.5)
-axs[1].set_ylabel(r'$\min_i b_i(x)$', fontsize=16)
+# Min barrier
+axs[1].plot(time_array, np.min(h_vals_np, axis=1), color='black')
+axs[1].axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='Constraint')
+axs[1].set_ylabel(r'$\min_i h_i(x)$', fontsize=16)
+axs[1].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
+axs[1].legend(loc='lower right', frameon=False, fontsize=12)
 
-axs[2].plot(time_array, min_barrier_np, color='black')
-axs[2].axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='Constraint')
-axs[2].set_ylabel(r'$\min_j h_j(x)$', fontsize=16)
-axs[2].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
-axs[2].legend(loc='lower right', frameon=False, fontsize=12)
-
-for i in range(2):
-    axs[i].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=False)
+axs[0].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=False)
 
 for ax in axs:
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.tick_params(labelsize=16)
+    ax.tick_params(labelsize=14)
     ax.set_xlim(time_array[0], time_array[-1])
 
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/06_Input_Const_QP_Barrier_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/09_iLQR_QP_Barrier_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- Animation ---
@@ -342,26 +420,44 @@ import matplotlib.animation as animation
 def create_animation():
     fig_anim, ax_anim = plt.subplots(figsize=(8, 8))
 
+    # Sample frames for animation (every 10 steps)
     frame_indices = np.arange(0, n_steps, 10)
 
     def animate(frame_idx):
         frame = frame_indices[frame_idx]
         ax_anim.clear()
 
+        # Current state
         current_x = x_hist_np[frame, 0]
         current_y = x_hist_np[frame, 1]
         current_v = x_hist_np[frame, 2]
 
+        # Past trajectory
         past_x = x_hist_np[:frame + 1, 0]
         past_y = x_hist_np[:frame + 1, 1]
 
+        # Draw map contour
         ax_anim.contour(X_grid, Y_grid, Z, levels=[0], colors='red', linewidths=2)
+
+        # Draw goal
         ax_anim.plot(goal_pos_np[0], goal_pos_np[1], '*', markersize=15,
                      color='limegreen', label='Goal', zorder=5)
+
+        # Draw past trajectory
         ax_anim.plot(past_x, past_y, 'b-', linewidth=2, label='Trajectory', zorder=3)
+
+        # Draw current position
         ax_anim.scatter([current_x], [current_y], s=100, c='blue', marker='o',
                         edgecolors='black', linewidths=2, label='Current', zorder=4)
 
+        # Draw iLQR predicted trajectory (if available)
+        pred_idx = frame // 100
+        if pred_idx < len(pred_trajs):
+            pred_traj = pred_trajs[pred_idx]
+            ax_anim.plot(pred_traj[:, 0], pred_traj[:, 1], 'c--', linewidth=2,
+                         alpha=0.6, label='iLQR Prediction', zorder=2)
+
+        # Set plot properties
         ax_anim.set_xlabel(r'$q_{\rm x}$', fontsize=14)
         ax_anim.set_ylabel(r'$q_{\rm y}$', fontsize=14)
         ax_anim.set_xlim(-10.5, 10.5)
@@ -371,19 +467,25 @@ def create_animation():
         ax_anim.spines['right'].set_visible(False)
         ax_anim.spines['top'].set_visible(False)
 
+        # Info text
         current_time_val = frame * dt_sim
+        intervention_val = intervention_norm_np[frame] if frame < len(intervention_norm_np) else 0
         ax_anim.text(0.98, 0.98,
-                     f'Time: {current_time_val:.2f}s\nVel: {current_v:.2f} m/s',
+                     f'Time: {current_time_val:.2f}s\n'
+                     f'Vel: {current_v:.2f} m/s\n'
+                     f'Intervention: {intervention_val:.3f}',
                      transform=ax_anim.transAxes, fontsize=11, verticalalignment='top',
                      horizontalalignment='right',
                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
         return []
 
+    # Create animation
     anim = animation.FuncAnimation(fig_anim, animate, frames=len(frame_indices),
                                    interval=50, blit=True)
 
-    animation_file = os.path.join(script_dir, f'figs/06_Input_Const_QP_Animation_{current_time}.mp4')
+    # Save animation
+    animation_file = os.path.join(script_dir, f'figs/09_iLQR_QP_Animation_{current_time}.mp4')
     writer = animation.FFMpegWriter(fps=20, metadata=dict(artist='CBFJAX'), bitrate=1800)
     anim.save(animation_file, writer=writer)
     print(f"Animation saved as: {animation_file}")

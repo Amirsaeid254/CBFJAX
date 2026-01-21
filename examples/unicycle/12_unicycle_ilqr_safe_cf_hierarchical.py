@@ -1,10 +1,16 @@
 """
-Minimum intervention closed-form safe control for unicycle dynamics.
+Hierarchical iLQR-Safe + Closed-Form Safe Control for unicycle dynamics.
 
-Demonstrates:
-- Composite barrier function creation via Map
-- MinIntervCFSafeControl for safety filtering
-- Closed-form CBF solution (no QP needed)
+Demonstrates a two-layer hierarchical control architecture where BOTH layers
+are safety-aware:
+1. High-level: QuadraticiLQRSafeControl - iLQR with barrier penalty in cost
+   (plans ahead while considering obstacles as soft constraints)
+2. Low-level: MinIntervCFSafeControl - CF filter for hard CBF constraint
+   enforcement (closed-form solution)
+
+This double-layer safety approach:
+- iLQR plans trajectories that proactively avoid barriers (soft penalty)
+- CF provides hard safety guarantees via closed-form solution
 """
 
 import jax
@@ -15,15 +21,17 @@ import numpy as np
 from time import time
 import datetime
 import os
-from immutabledict import immutabledict
 
 # CBFJAX imports
 import cbfjax.config
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.utils.make_map import Map
+from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
 from cbfjax.safe_controls.closed_form_safe_control import MinIntervCFSafeControl
+from immutabledict import immutabledict
+
+# Local imports
 from map_config import map_config
-from unicycle_desired_control import desired_control
 
 # Get script directory for saving figures
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,8 +44,19 @@ mpl.rcParams['font.family'] = 'serif'
 # Configuration
 # ============================================
 
-# Barrier configuration
-cfg = immutabledict({
+# Barrier configuration for iLQR (rel_deg=1 for penalty)
+cfg_ilqr = immutabledict({
+    'softmax_rho': 20,
+    'softmin_rho': 20,
+    'pos_barrier_rel_deg': 1,
+    'vel_barrier_rel_deg': 1,
+    'obstacle_alpha': (),
+    'boundary_alpha': (),
+    'velocity_alpha': (),
+})
+
+# Barrier configuration for CF (needs HOCBF)
+cfg_cf = immutabledict({
     'softmax_rho': 20,
     'softmin_rho': 20,
     'pos_barrier_rel_deg': 2,
@@ -47,6 +66,19 @@ cfg = immutabledict({
     'velocity_alpha': (),
 })
 
+# iLQR parameters (with barrier penalty)
+ilqr_params = {
+    'horizon': 4.0,
+    'time_steps': 0.05,
+    'maxiter': 5,
+    'grad_norm_threshold': 1e-4,
+    'maxiter_al': 2,
+    'constraints_threshold': 1e-4,
+    'penalty_init': 20.0,
+    'penalty_update_rate': 15.0,
+    'barrier_gain': 1e5,  # Penalty weight for barrier violations in iLQR cost
+}
+
 # CF safety filter parameters
 cf_params = {
     'slack_gain': 1e24,
@@ -54,18 +86,9 @@ cf_params = {
     'softplus_gain': 2.0,
 }
 
-# Control gains for desired control
-control_gains = immutabledict(k1=0.2, k2=1.0, k3=2.0)
-
-# Goal position
-goal_pos = jnp.array([[3.0, 4.5]])
-
-# Initial condition
-x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
-
-# Simulation parameters
-sim_time = 10.0
-dt_sim = 0.01
+# Control bounds for iLQR (CF doesn't enforce these, but iLQR can)
+control_low = [-2.0, -1.0]
+control_high = [2.0, 1.0]
 
 # ============================================
 # Setup Dynamics
@@ -73,11 +96,16 @@ dt_sim = 0.01
 
 print("Setting up dynamics...")
 
-dynamics = UnicycleDynamics()
+# Dynamics for iLQR (needs discretization)
+dynamics_params = {
+    'discretization_dt': ilqr_params['time_steps'],
+    'discretization_method': 'rk4',
+}
+dynamics = UnicycleDynamics(params=dynamics_params)
+
+# State/action dimensions
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
-
-print(f"  State dim: {nx}, Action dim: {nu}")
 
 # ============================================
 # Setup Barriers
@@ -85,83 +113,156 @@ print(f"  State dim: {nx}, Action dim: {nu}")
 
 print("Setting up barriers...")
 
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-barrier = map_.barrier
+# Create barrier for iLQR (uses simple barrier for cost penalty)
+map_ilqr = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg_ilqr).create_barriers()
+barrier_ilqr = map_ilqr.barrier
 
-print(f"  Barrier setup complete")
+# Create barrier for CF (uses composite barrier with HOCBF)
+map_cf = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg_cf).create_barriers()
+barrier_cf = map_cf.barrier
+
+print(f"  iLQR barrier: composite barrier for cost penalty")
+print(f"  CF barrier: composite barrier for closed-form safety")
 
 # ============================================
-# Setup CF Safety Filter
+# Setup iLQR Safe Controller (High-Level)
+# ============================================
+
+print("Setting up iLQR safe controller...")
+
+# Cost matrices for trajectory tracking
+Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))   # State cost
+R = jnp.diag(jnp.array([10.0, 10.0]))              # Control cost
+Q_e = 100.0 * Q                                    # Terminal cost
+
+# Goal position
+goal_pos = jnp.array([3.0, 4.5])
+x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
+
+# Create iLQR controller WITH barrier penalty in cost
+ilqr_controller = (
+    QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
+    .assign_dynamics(dynamics)
+    .assign_control_bounds(control_low, control_high)
+    .assign_cost_matrices(Q, R, Q_e, x_ref)
+    .assign_state_barrier(barrier_ilqr)  # Barrier added to cost!
+)
+
+print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
+print(f"  Barrier gain in cost: {ilqr_params['barrier_gain']}")
+
+# ============================================
+# Setup CF Safety Filter (Low-Level)
 # ============================================
 
 print("Setting up CF safety filter...")
 
+# Create function that wraps iLQR safe controller as desired control
+def ilqr_safe_desired_control(x: jnp.ndarray) -> jnp.ndarray:
+    """Compute iLQR safe optimal control for state x."""
+    u, _ = ilqr_controller._optimal_control_single(x)
+    return u
+
+# Create CF safety filter with iLQR-safe as desired control
 safety_filter = (
     MinIntervCFSafeControl(
         action_dim=nu,
-        alpha=lambda x: 0.5 * x,
+        alpha=lambda h: 0.5 * h,
         params=cf_params,
     )
     .assign_dynamics(dynamics)
-    .assign_state_barrier(barrier)
-    .assign_desired_control(lambda x: desired_control(x, goal_pos))
+    .assign_state_barrier(barrier_cf)
+    .assign_desired_control(ilqr_safe_desired_control)
 )
 
 print(f"  Alpha: 0.5 * h")
 
 # ============================================
-# Test Controller
+# Test Controllers
 # ============================================
 
-print("\nTesting controller...")
+print("\nTesting controllers...")
 
-u_test, _ = safety_filter._optimal_control_single(x0)
-print(f"  Test control: u = {np.array(u_test)}")
+# Initial state
+x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
+
+# Test iLQR-safe alone
+print("  Testing iLQR-safe controller...")
+u_ilqr_test, info_ilqr = ilqr_controller.optimal_control(x0)
+print(f"    iLQR-safe control: u = {np.array(u_ilqr_test)}")
+
+# Test CF safety filter
+print("  Testing CF safety filter...")
+u_safe_test, info_cf = safety_filter._optimal_control_single(x0)
+print(f"    CF-safe control: u = {np.array(u_safe_test)}")
+print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
 
 # ============================================
 # Closed-Loop Simulation
 # ============================================
 
 print("\nStarting closed-loop simulation...")
-print(f"  Device: {jax.devices()[0]}")
 
-x0_batch = x0.reshape(1, -1)
+# Simulation parameters
+sim_time = 20.0
+dt_sim = 0.01
+
+x0_batch = x0.reshape(1, -1)  # (1, state_dim)
 
 start_time = time()
+
+# Use safety filter's simulation method
 trajs = safety_filter.get_optimal_trajs(
     x0=x0_batch,
     sim_time=sim_time,
     timestep=dt_sim,
     method='euler'
 )
+
 simulation_time = time() - start_time
-
 print(f"Simulation completed in {simulation_time:.2f} seconds")
-
-# ============================================
-# Compute Control Actions and Barrier Values
-# ============================================
-
-print("\nComputing control actions and barrier values...")
 
 # Extract trajectory
 x_hist = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = x_hist.shape[0] - 1
 time_array = np.linspace(0, sim_time, n_steps + 1)
 
-# Compute controls
-u_hist, _ = safety_filter.optimal_control(x_hist)
+# ============================================
+# Compute Control Actions and Barrier Values
+# ============================================
 
-# Compute barrier values
-h_vals = barrier.hocbf(x_hist)
-min_barrier_vals = barrier.min_barrier(x_hist)
+print("\nComputing control actions and analysis data...")
+
+# Compute safe actions (what was actually applied)
+u_safe_hist, _ = safety_filter.optimal_control(x_hist[:-1])
+
+# Compute iLQR-safe actions (what iLQR-safe would have applied)
+u_ilqr_hist, _ = ilqr_controller.optimal_control(x_hist[:-1])
+
+# Compute barrier values along trajectory
+h_vals = barrier_cf.hocbf(x_hist)
+min_barrier_vals = barrier_cf.min_barrier(x_hist)
+
+# Compute intervention magnitude
+intervention = u_safe_hist - u_ilqr_hist
+intervention_norm = jnp.linalg.norm(intervention, axis=1)
+
+# Store predicted trajectories for animation
+pred_trajs = []
+sample_indices = np.arange(0, n_steps, 100)
+for i in sample_indices:
+    x_traj_pred, _ = ilqr_controller.get_predicted_trajectory(x_hist[i])
+    pred_trajs.append(np.array(x_traj_pred))
 
 # Convert to numpy
 x_hist_np = np.array(x_hist)
-u_hist_np = np.array(u_hist)
+u_safe_np = np.array(u_safe_hist)
+u_ilqr_np = np.array(u_ilqr_hist)
 h_vals_np = np.array(h_vals)
 min_barrier_np = np.array(min_barrier_vals)
-goal_pos_np = np.array(goal_pos[0])
+intervention_np = np.array(intervention)
+intervention_norm_np = np.array(intervention_norm)
+goal_pos_np = np.array(goal_pos)
 
 # ============================================
 # Statistics
@@ -172,13 +273,22 @@ print(f"Simulation statistics ({n_steps} steps):")
 print(f"  Total time: {simulation_time:.2f} s")
 print(f"  Avg time per step: {simulation_time/n_steps*1000:.3f} ms")
 print(f"{'='*60}")
-print(f"Barrier statistics:")
+print(f"Barrier statistics (HOCBF values):")
 print(f"  Min h(x): {np.min(h_vals_np):.6f}")
 print(f"  Min composite barrier: {np.min(min_barrier_np):.6f}")
 print(f"{'='*60}")
-print(f"Control statistics:")
-print(f"  u1: min={u_hist_np[:, 0].min():.3f}, max={u_hist_np[:, 0].max():.3f}")
-print(f"  u2: min={u_hist_np[:, 1].min():.3f}, max={u_hist_np[:, 1].max():.3f}")
+print(f"Control statistics (CF-safe, actually applied):")
+print(f"  u1 (accel): min={u_safe_np[:, 0].min():.3f}, max={u_safe_np[:, 0].max():.3f}")
+print(f"  u2 (omega): min={u_safe_np[:, 1].min():.3f}, max={u_safe_np[:, 1].max():.3f}")
+print(f"{'='*60}")
+print(f"Control statistics (iLQR-safe desired):")
+print(f"  u1 (accel): min={u_ilqr_np[:, 0].min():.3f}, max={u_ilqr_np[:, 0].max():.3f}")
+print(f"  u2 (omega): min={u_ilqr_np[:, 1].min():.3f}, max={u_ilqr_np[:, 1].max():.3f}")
+print(f"{'='*60}")
+print(f"Intervention statistics (CF modification of iLQR-safe):")
+print(f"  Avg intervention norm: {intervention_norm_np.mean():.4f}")
+print(f"  Max intervention norm: {intervention_norm_np.max():.4f}")
+print(f"  Steps with intervention > 0.01: {np.sum(intervention_norm_np > 0.01)}/{n_steps}")
 print(f"{'='*60}")
 print(f"State statistics:")
 print(f"  Velocity: min={x_hist_np[:, 2].min():.3f}, max={x_hist_np[:, 2].max():.3f}")
@@ -202,7 +312,8 @@ points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
 points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
-Z = barrier.min_barrier(points_jax)
+# Use map barrier for contour plot
+Z = barrier_cf.min_barrier(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---
@@ -237,11 +348,11 @@ ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.12),
 
 plt.tight_layout()
 os.makedirs(os.path.join(script_dir, 'figs'), exist_ok=True)
-plt.savefig(os.path.join(script_dir, f'figs/02_CF_Trajectory_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/12_iLQR_Safe_CF_Trajectory_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- States and Control Plot ---
-fig, axs = plt.subplots(5, 1, figsize=(8, 8))
+fig, axs = plt.subplots(6, 1, figsize=(8, 10))
 
 # Position
 axs[0].plot(time_array, x_hist_np[:, 0], label=r'$q_{\rm x}$', color='red')
@@ -259,36 +370,46 @@ axs[1].set_ylabel(r'$v$', fontsize=16)
 axs[2].plot(time_array, x_hist_np[:, 3], color='black')
 axs[2].set_ylabel(r'$\theta$', fontsize=16)
 
-# Control 1
-axs[3].plot(time_array, u_hist_np[:, 0], color='black')
+# Control 1 - comparing iLQR-safe vs CF-safe
+axs[3].plot(time_array[:-1], u_ilqr_np[:, 0], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
+axs[3].plot(time_array[:-1], u_safe_np[:, 0], 'k-', label=r'$u_{\rm CF-safe}$')
 axs[3].set_ylabel(r'$u_1$ (a)', fontsize=16)
+axs[3].legend(loc='lower center', ncol=3, frameon=False, fontsize=12)
 
 # Control 2
-axs[4].plot(time_array, u_hist_np[:, 1], color='black')
+axs[4].plot(time_array[:-1], u_ilqr_np[:, 1], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
+axs[4].plot(time_array[:-1], u_safe_np[:, 1], 'k-', label=r'$u_{\rm CF-safe}$')
 axs[4].set_ylabel(r'$u_2$ ($\omega$)', fontsize=16)
-axs[4].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
+axs[4].legend(loc='lower center', ncol=3, frameon=False, fontsize=12)
 
-for i in range(4):
+# Intervention magnitude
+axs[5].plot(time_array[:-1], intervention_norm_np, color='purple')
+axs[5].set_ylabel(r'$\|u_{\rm CF} - u_{\rm iLQR}\|$', fontsize=16)
+axs[5].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
+
+for i in range(5):
     axs[i].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=False)
 
 for ax in axs:
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.tick_params(labelsize=16)
+    ax.tick_params(labelsize=14)
     ax.set_xlim(time_array[0], time_array[-1])
 
 plt.subplots_adjust(wspace=0, hspace=0.2)
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/02_CF_States_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/12_iLQR_Safe_CF_States_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- Barrier Values Plot ---
 fig, axs = plt.subplots(2, 1, figsize=(8, 4))
 
+# HOCBF value
 axs[0].plot(time_array, h_vals_np, color='black')
 axs[0].axhline(y=0, color='red', linestyle='--', linewidth=1.5)
 axs[0].set_ylabel(r'$h(x)$', fontsize=16)
 
+# Min barrier (composite)
 axs[1].plot(time_array, min_barrier_np, color='black')
 axs[1].axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='Constraint')
 axs[1].set_ylabel(r'$\min_i b_i(x)$', fontsize=16)
@@ -300,11 +421,11 @@ axs[0].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=F
 for ax in axs:
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.tick_params(labelsize=16)
+    ax.tick_params(labelsize=14)
     ax.set_xlim(time_array[0], time_array[-1])
 
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/02_CF_Barrier_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/12_iLQR_Safe_CF_Barrier_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- Animation ---
@@ -314,26 +435,44 @@ import matplotlib.animation as animation
 def create_animation():
     fig_anim, ax_anim = plt.subplots(figsize=(8, 8))
 
+    # Sample frames for animation (every 10 steps)
     frame_indices = np.arange(0, n_steps, 10)
 
     def animate(frame_idx):
         frame = frame_indices[frame_idx]
         ax_anim.clear()
 
+        # Current state
         current_x = x_hist_np[frame, 0]
         current_y = x_hist_np[frame, 1]
         current_v = x_hist_np[frame, 2]
 
+        # Past trajectory
         past_x = x_hist_np[:frame + 1, 0]
         past_y = x_hist_np[:frame + 1, 1]
 
+        # Draw map contour
         ax_anim.contour(X_grid, Y_grid, Z, levels=[0], colors='red', linewidths=2)
+
+        # Draw goal
         ax_anim.plot(goal_pos_np[0], goal_pos_np[1], '*', markersize=15,
                      color='limegreen', label='Goal', zorder=5)
+
+        # Draw past trajectory
         ax_anim.plot(past_x, past_y, 'b-', linewidth=2, label='Trajectory', zorder=3)
+
+        # Draw current position
         ax_anim.scatter([current_x], [current_y], s=100, c='blue', marker='o',
                         edgecolors='black', linewidths=2, label='Current', zorder=4)
 
+        # Draw iLQR predicted trajectory (if available)
+        pred_idx = frame // 100
+        if pred_idx < len(pred_trajs):
+            pred_traj = pred_trajs[pred_idx]
+            ax_anim.plot(pred_traj[:, 0], pred_traj[:, 1], 'c--', linewidth=2,
+                         alpha=0.6, label='iLQR Prediction', zorder=2)
+
+        # Set plot properties
         ax_anim.set_xlabel(r'$q_{\rm x}$', fontsize=14)
         ax_anim.set_ylabel(r'$q_{\rm y}$', fontsize=14)
         ax_anim.set_xlim(-10.5, 10.5)
@@ -343,19 +482,25 @@ def create_animation():
         ax_anim.spines['right'].set_visible(False)
         ax_anim.spines['top'].set_visible(False)
 
+        # Info text
         current_time_val = frame * dt_sim
+        intervention_val = intervention_norm_np[frame] if frame < len(intervention_norm_np) else 0
         ax_anim.text(0.98, 0.98,
-                     f'Time: {current_time_val:.2f}s\nVel: {current_v:.2f} m/s',
+                     f'Time: {current_time_val:.2f}s\n'
+                     f'Vel: {current_v:.2f} m/s\n'
+                     f'Intervention: {intervention_val:.3f}',
                      transform=ax_anim.transAxes, fontsize=11, verticalalignment='top',
                      horizontalalignment='right',
                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
         return []
 
+    # Create animation
     anim = animation.FuncAnimation(fig_anim, animate, frames=len(frame_indices),
                                    interval=50, blit=True)
 
-    animation_file = os.path.join(script_dir, f'figs/02_CF_Animation_{current_time}.mp4')
+    # Save animation
+    animation_file = os.path.join(script_dir, f'figs/12_iLQR_Safe_CF_Animation_{current_time}.mp4')
     writer = animation.FFMpegWriter(fps=20, metadata=dict(artist='CBFJAX'), bitrate=1800)
     anim.save(animation_file, writer=writer)
     print(f"Animation saved as: {animation_file}")

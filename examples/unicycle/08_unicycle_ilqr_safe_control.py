@@ -1,15 +1,16 @@
 """
-NMPC Safe Control for unicycle dynamics with barrier constraints.
+iLQR Safe Control for unicycle dynamics with barrier penalty.
 
-Demonstrates QuadraticNMPCSafeControl with:
-- Position barriers (obstacles + boundary) using MultiBarriers
-- Velocity constraints via state bounds (not barrier)
+Demonstrates QuadraticiLQRSafeControl with:
+- Barrier violations added as penalty in cost function
+- Uses map_.barrier directly (all barriers combined)
 - Quadratic tracking cost (Q, R matrices)
+- Control bounds via constrained iLQR
 
-Uses acados for NMPC solving with JAX-defined dynamics and barriers
-converted to CasADi via jax2casadi.
+Uses trajax for iLQR solving - pure JAX, no external dependencies.
 """
 
+import jax
 import jax.numpy as jnp
 import matplotlib as mpl
 from math import pi
@@ -22,8 +23,7 @@ import os
 import cbfjax.config
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.utils.make_map import Map
-from cbfjax.barriers.multi_barrier import MultiBarriers
-from cbfjax.safe_controls.nmpc_safe_control import QuadraticNMPCSafeControl
+from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
 from immutabledict import immutabledict
 
 # Local imports
@@ -40,33 +40,28 @@ mpl.rcParams['font.family'] = 'serif'
 # Configuration
 # ============================================
 
-# Barrier configuration
+# Barrier configuration (rel_deg=1 since we use barrier as penalty, not CBF)
 cfg = immutabledict({
     'softmax_rho': 20,
-    'softmin_rho': 10,
-    'pos_barrier_rel_deg': 1,  # rel_deg=1 for NMPC (no CBF derivative needed)
+    'softmin_rho': 20,
+    'pos_barrier_rel_deg': 1,
     'vel_barrier_rel_deg': 1,
     'obstacle_alpha': (),
     'boundary_alpha': (),
     'velocity_alpha': (),
 })
 
-
-# NMPC parameters
-nmpc_params = {
+# iLQR parameters
+ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'qp_solver': 'PARTIAL_CONDENSING_HPIPM',
-    'hessian_approx': 'GAUSS_NEWTON',
-    'integrator_type': 'ERK',
-    'sim_method_num_stages': 4,
-    'nlp_solver_type': 'SQP',
-    'nlp_solver_max_iter': 200,
-    'qp_solver_iter_max': 100,
-    'tol': 1e-4,
-    'slacked': True,
-    'slack_gain_l1': 0.0,
-    'slack_gain_l2': 1e6,
+    'maxiter': 5,
+    'grad_norm_threshold': 1e-4,
+    'maxiter_al': 2,
+    'constraints_threshold': 1e-4,
+    'penalty_init': 20.0,
+    'penalty_update_rate': 15.0,
+    'barrier_gain': 1e6,  # Penalty weight for barrier violations
 }
 
 # ============================================
@@ -75,64 +70,55 @@ nmpc_params = {
 
 print("Setting up dynamics and barriers...")
 
-# Instantiate dynamics
-dynamics = UnicycleDynamics()
+dynamics_params = {
+    'discretization_dt': ilqr_params['time_steps'],
+    'discretization_method': 'rk4',
+}
+dynamics = UnicycleDynamics(params=dynamics_params)
 
-# Create barrier map and get position barriers only
+# Create barrier map
 map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-pos_barriers, _ = map_.get_barriers()
+barrier = map_.barrier
 
-# Create MultiBarriers for position constraints
-barrier = MultiBarriers.create_empty(cfg=cfg)
-barrier = barrier.add_barriers(pos_barriers, infer_dynamics=True)
-
-print(f"  Number of position barriers: {barrier.num_constraints}")
+print(f"  Barrier setup complete")
 
 # ============================================
-# Setup NMPC Controller
+# Setup iLQR Controller
 # ============================================
 
-print("Setting up NMPC controller...")
+print("Setting up iLQR controller...")
 
 # State dimensions: [q_x, q_y, v, theta]
 nx = dynamics.state_dim  # 4
 nu = dynamics.action_dim  # 2
 
 # Cost matrices for tracking
-Q = np.diag([10.0, 10.0, 1.0, 1.0])  # State cost
-R = np.diag([0.1, 0.1])               # Control cost
-Q_e = 100.0 * Q                        # Terminal cost
+Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))  # State cost
+R = jnp.diag(jnp.array([0.1, 0.1]))               # Control cost
+Q_e = 100.0 * Q                                    # Terminal cost
 
 # Control bounds: [acceleration, angular velocity]
 control_low = [-2.0, -1.0]
 control_high = [2.0, 1.0]
 
-# State bounds: velocity constraint (state index 2)
-vel_idx, vel_bounds = map_config['velocity']
-state_bounds_idx = [vel_idx]
-state_low = [vel_bounds[0]]
-state_high = [vel_bounds[1]]
-
 # Goal position
-goal_pos = np.array([3.0, 4.5])
-x_ref = np.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
+goal_pos = jnp.array([3.0, 4.5])
+x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
 # Initial state
-x0 = np.array([-1.0, -8.5, 0.0, pi / 2])
+x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
-# Create NMPC controller
+# Create iLQR controller
 controller = (
-    QuadraticNMPCSafeControl.create_empty(action_dim=nu, params=nmpc_params)
+    QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
     .assign_dynamics(dynamics)
     .assign_control_bounds(control_low, control_high)
-    .assign_state_bounds(state_bounds_idx, state_low, state_high)
     .assign_cost_matrices(Q, R, Q_e, x_ref)
     .assign_state_barrier(barrier)
 )
 
-# Build the controller
-print("Building NMPC solver (this may take a moment)...")
-controller = controller.make(x0)
+print(f"  Horizon: {controller.horizon}s, N={controller.N_horizon}")
+print(f"  Barrier gain: {ilqr_params['barrier_gain']}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -142,50 +128,60 @@ print("\nStarting closed-loop simulation...")
 
 # Simulation parameters
 sim_time = 20.0
-dt_sim = 0.01  # Control timestep
+dt_sim = 0.01
 
 start_time = time()
 
-# Use get_optimal_trajs_zoh for simulation
-trajs, actions = controller.get_optimal_trajs_zoh(
-    s0=jnp.array(x0),
+# Use get_optimal_trajs for simulation
+trajs = controller.get_optimal_trajs_zoh(
+    x0=x0,
     sim_time=sim_time,
     timestep=dt_sim,
-    method='euler',
+    method='tsit5'
 )
 
 simulation_time = time() - start_time
 print(f"\nSimulation completed in {simulation_time:.2f} seconds")
 
-# Convert to arrays: trajs is (num_steps, batch, state_dim), actions is (num_steps-1, batch, action_dim)
-x_hist = np.array(trajs[:, 0, :])  # (num_steps, state_dim)
-u_hist = np.array(actions[:, 0, :])  # (num_steps-1, action_dim)
+# trajs shape: (time_steps, batch, state_dim) -> squeeze batch dim
+x_hist = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = x_hist.shape[0] - 1
-time_array = np.linspace(0, sim_time, n_steps + 1)
 
-# Compute predicted trajectories and min barrier along each prediction horizon
-print("\nComputing predicted trajectories and barrier values...")
-pred_trajs = []  # Predicted trajectory at each step (for animation)
-h_pred_min = []  # Min barrier over prediction horizon at each step
+# Compute actions along trajectory
+print("\nComputing control actions...")
+u_hist, _ = controller.optimal_control(x_hist[:-1])  # (n_steps, action_dim)
+
+# Compute predicted trajectories and barrier values for analysis/animation
+print("Computing predicted trajectories and barrier values...")
+pred_trajs = []
+h_pred_min = []
+
 for i in range(n_steps):
     # Get predicted trajectory at this state
-    x_traj_pred, u_traj_pred = controller.get_predicted_trajectory(jnp.array(x_hist[i]))
+    x_traj_pred, u_traj_pred = controller.get_predicted_trajectory(x_hist[i])
     pred_trajs.append(x_traj_pred)
 
-    # Compute barrier along predicted trajectory and take min over time
-    h_along_pred = barrier.hocbf(jnp.array(x_traj_pred))  # (N+1, num_barriers)
-    h_min = jnp.min(h_along_pred, axis=0)  # min over time -> (num_barriers,)
+    # Compute min barrier along predicted trajectory
+    h_along_pred = barrier.hocbf(x_traj_pred)
+    h_min = jnp.min(h_along_pred, axis=0)
     h_pred_min.append(np.array(h_min))
 
-    if (i + 1) % 100 == 0:
+    if (i + 1) % 500 == 0:
         print(f"  Step {i + 1}/{n_steps}")
 
 pred_trajs = np.array(pred_trajs)  # (n_steps, N+1, state_dim)
 h_pred_min = np.array(h_pred_min)  # (n_steps, num_barriers)
 
+time_array = np.linspace(0, sim_time, n_steps + 1)
+
 # ============================================
 # Statistics
 # ============================================
+
+# Convert to numpy for plotting and statistics
+x_hist_np = np.array(x_hist)
+u_hist_np = np.array(u_hist)
+goal_pos_np = np.array(goal_pos)
 
 print(f"\n{'='*50}")
 print(f"Simulation statistics ({n_steps} steps):")
@@ -197,12 +193,12 @@ print(f"  Min h(x): {np.min(h_pred_min):.6f}")
 print(f"  Violations (h < 0): {np.sum(np.min(h_pred_min, axis=1) < 0)}")
 print(f"{'='*50}")
 print(f"Control statistics:")
-print(f"  u1 (accel): min={u_hist[:, 0].min():.3f}, max={u_hist[:, 0].max():.3f}")
-print(f"  u2 (omega): min={u_hist[:, 1].min():.3f}, max={u_hist[:, 1].max():.3f}")
+print(f"  u1 (accel): min={u_hist_np[:, 0].min():.3f}, max={u_hist_np[:, 0].max():.3f}")
+print(f"  u2 (omega): min={u_hist_np[:, 1].min():.3f}, max={u_hist_np[:, 1].max():.3f}")
 print(f"{'='*50}")
 print(f"State statistics:")
-print(f"  Velocity: min={x_hist[:, 2].min():.3f}, max={x_hist[:, 2].max():.3f}")
-print(f"  Final position: ({x_hist[-1, 0]:.3f}, {x_hist[-1, 1]:.3f})")
+print(f"  Velocity: min={x_hist_np[:, 2].min():.3f}, max={x_hist_np[:, 2].max():.3f}")
+print(f"  Final position: ({x_hist_np[-1, 0]:.3f}, {x_hist_np[-1, 1]:.3f})")
 print(f"{'='*50}")
 
 # ============================================
@@ -241,10 +237,10 @@ ax.set_xticks([-10, -5, 0, 5, 10])
 ax.set_yticks([-10, -5, 0, 5, 10])
 
 # Plot trajectory
-ax.plot(x_hist[0, 0], x_hist[0, 1], 'x', color='blue', markersize=8, label=r'$x_0$')
-ax.plot(goal_pos[0], goal_pos[1], '*', markersize=10, color='limegreen', label='Goal')
-ax.plot(x_hist[-1, 0], x_hist[-1, 1], '+', color='blue', markersize=8, label=r'$x_f$')
-ax.plot(x_hist[:, 0], x_hist[:, 1], color='black', label='Trajectory')
+ax.plot(x_hist_np[0, 0], x_hist_np[0, 1], 'x', color='blue', markersize=8, label=r'$x_0$')
+ax.plot(goal_pos_np[0], goal_pos_np[1], '*', markersize=10, color='limegreen', label='Goal')
+ax.plot(x_hist_np[-1, 0], x_hist_np[-1, 1], '+', color='blue', markersize=8, label=r'$x_f$')
+ax.plot(x_hist_np[:, 0], x_hist_np[:, 1], color='black', label='Trajectory')
 
 # Legend
 from matplotlib.lines import Line2D
@@ -257,40 +253,37 @@ ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.12),
 
 plt.tight_layout()
 os.makedirs(os.path.join(script_dir, 'figs'), exist_ok=True)
-plt.savefig(os.path.join(script_dir, f'figs/07_NMPC_Trajectory_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/08_iLQR_Trajectory_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- States Plot ---
 fig, axs = plt.subplots(5, 1, figsize=(8, 8))
 
 # Position
-axs[0].plot(time_array, x_hist[:, 0], label=r'$q_{\rm x}$', color='red')
-axs[0].plot(time_array, x_hist[:, 1], label=r'$q_{\rm y}$', color='blue')
-axs[0].axhline(y=goal_pos[0], color='red', linestyle=':', alpha=0.7)
-axs[0].axhline(y=goal_pos[1], color='blue', linestyle=':', alpha=0.7)
+axs[0].plot(time_array, x_hist_np[:, 0], label=r'$q_{\rm x}$', color='red')
+axs[0].plot(time_array, x_hist_np[:, 1], label=r'$q_{\rm y}$', color='blue')
+axs[0].axhline(y=goal_pos_np[0], color='red', linestyle=':', alpha=0.7)
+axs[0].axhline(y=goal_pos_np[1], color='blue', linestyle=':', alpha=0.7)
 axs[0].set_ylabel(r'$q_{\rm x}, q_{\rm y}$', fontsize=16)
 axs[0].legend(loc='lower center', ncol=4, frameon=False, fontsize=14)
 
 # Velocity
-axs[1].plot(time_array, x_hist[:, 2], color='black')
-axs[1].axhline(y=state_low[0], color='gray', linestyle=':', alpha=0.7, label='Bounds')
-axs[1].axhline(y=state_high[0], color='gray', linestyle=':', alpha=0.7)
+axs[1].plot(time_array, x_hist_np[:, 2], color='black')
 axs[1].set_ylabel(r'$v$', fontsize=16)
-axs[1].legend(loc='lower right', frameon=False, fontsize=12)
 
 # Heading
-axs[2].plot(time_array, x_hist[:, 3], color='black')
+axs[2].plot(time_array, x_hist_np[:, 3], color='black')
 axs[2].set_ylabel(r'$\theta$', fontsize=16)
 
 # Control 1 (acceleration)
-axs[3].plot(time_array[:-1], u_hist[:, 0], color='black')
+axs[3].plot(time_array[:-1], u_hist_np[:, 0], color='black')
 axs[3].axhline(y=control_low[0], color='gray', linestyle=':', alpha=0.7, label='Bounds')
 axs[3].axhline(y=control_high[0], color='gray', linestyle=':', alpha=0.7)
 axs[3].set_ylabel(r'$u_1$ (a)', fontsize=16)
 axs[3].legend(loc='lower right', frameon=False, fontsize=12)
 
 # Control 2 (angular velocity)
-axs[4].plot(time_array[:-1], u_hist[:, 1], color='black')
+axs[4].plot(time_array[:-1], u_hist_np[:, 1], color='black')
 axs[4].axhline(y=control_low[1], color='gray', linestyle=':', alpha=0.7, label='Bounds')
 axs[4].axhline(y=control_high[1], color='gray', linestyle=':', alpha=0.7)
 axs[4].set_ylabel(r'$u_2$ ($\omega$)', fontsize=16)
@@ -309,7 +302,7 @@ for ax in axs:
 
 plt.subplots_adjust(wspace=0, hspace=0.2)
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/07_NMPC_States_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/08_iLQR_States_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- Barrier Values Plot (min over predicted horizon) ---
@@ -327,33 +320,33 @@ ax.set_xlim(time_array[0], time_array[-1])
 ax.legend(loc='lower right', frameon=False, fontsize=12)
 
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/07_NMPC_Barrier_{current_time}.png'), dpi=200)
+plt.savefig(os.path.join(script_dir, f'figs/08_iLQR_Barrier_{current_time}.png'), dpi=200)
 plt.show()
 
 # --- Animation with predicted trajectories ---
 print("\nCreating animation with predicted trajectories...")
 import matplotlib.animation as animation
 
-def create_nmpc_animation():
+def create_ilqr_animation():
     fig_anim, ax_anim = plt.subplots(figsize=(8, 8))
 
     def animate(frame):
         ax_anim.clear()
 
         # Current state
-        current_x = x_hist[frame, 0]
-        current_y = x_hist[frame, 1]
-        current_v = x_hist[frame, 2]
+        current_x = x_hist_np[frame, 0]
+        current_y = x_hist_np[frame, 1]
+        current_v = x_hist_np[frame, 2]
 
         # Past trajectory
-        past_x = x_hist[:frame + 1, 0]
-        past_y = x_hist[:frame + 1, 1]
+        past_x = x_hist_np[:frame + 1, 0]
+        past_y = x_hist_np[:frame + 1, 1]
 
         # Draw static elements (map contour)
         ax_anim.contour(X_grid, Y_grid, Z, levels=[0], colors='red', linewidths=2)
 
         # Draw goal
-        ax_anim.plot(goal_pos[0], goal_pos[1], '*', markersize=15,
+        ax_anim.plot(goal_pos_np[0], goal_pos_np[1], '*', markersize=15,
                      color='limegreen', label='Goal', zorder=5)
 
         # Draw past trajectory
@@ -363,13 +356,13 @@ def create_nmpc_animation():
         ax_anim.scatter([current_x], [current_y], s=100, c='blue', marker='o',
                         edgecolors='black', linewidths=2, label='Current Position', zorder=4)
 
-        # Draw predicted trajectory from NMPC
+        # Draw predicted trajectory from iLQR
         if frame < len(pred_trajs):
             pred_traj = pred_trajs[frame]  # (N+1, state_dim)
             pred_x = pred_traj[:, 0]
             pred_y = pred_traj[:, 1]
             ax_anim.plot(pred_x, pred_y, 'c--', linewidth=2, alpha=0.8,
-                         label='NMPC Prediction', zorder=2)
+                         label='iLQR Prediction', zorder=2)
 
             # Mark prediction horizon points
             sample_indices = np.arange(0, len(pred_x), max(1, len(pred_x) // 10))
@@ -401,13 +394,13 @@ def create_nmpc_animation():
                                    interval=50, blit=True)
 
     # Save animation
-    animation_file = os.path.join(script_dir, f'figs/07_NMPC_Animation_{current_time}.mp4')
+    animation_file = os.path.join(script_dir, f'figs/08_iLQR_Animation_{current_time}.mp4')
     writer = animation.FFMpegWriter(fps=20, metadata=dict(artist='CBFJAX'), bitrate=1800)
     anim.save(animation_file, writer=writer)
     print(f"Animation saved as: {animation_file}")
     plt.show()
 
-create_nmpc_animation()
+create_ilqr_animation()
 
 print(f"\nPlots saved with timestamp: {current_time}")
 print("Simulation complete!")

@@ -25,6 +25,10 @@ from .nmpc_safe_control import (
     NMPCSafeControl,
     QuadraticNMPCSafeControl,
 )
+from .ilqr_safe_control import (
+    iLQRSafeControl,
+    QuadraticiLQRSafeControl,
+)
 
 __all__ = [
     # Closed-form controllers
@@ -44,4 +48,7 @@ __all__ = [
     # NMPC controllers
     "NMPCSafeControl",
     "QuadraticNMPCSafeControl",
+    # iLQR controllers
+    "iLQRSafeControl",
+    "QuadraticiLQRSafeControl",
 ]

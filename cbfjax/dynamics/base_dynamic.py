@@ -40,12 +40,6 @@ class AffineInControlDynamics(eqx.Module):
         if self._discretization_method is not None and self._discretization_method not in ('euler', 'rk4'):
             raise ValueError(f"Unknown discretization method: {self._discretization_method}. Use 'euler' or 'rk4'.")
 
-        if self._discretization_method is not None and self._dt is not None:
-            if self._discretization_method == 'euler':
-                self.discrete_rhs = self._euler_step
-            elif self._discretization_method == 'rk4':
-                self.discrete_rhs = self._rk4_step
-
     @property
     def state_dim(self):
         return self._state_dim
@@ -137,6 +131,24 @@ class AffineInControlDynamics(eqx.Module):
         k4 = self.rhs(x + self._dt * k3, action)
         return x + (self._dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
+    def discrete_rhs(self, x, action):
+        """
+        Discrete dynamics: x_{k+1} = f(x_k, u_k)
+
+        Uses euler or rk4 based on discretization_method param.
+        Since _discretization_method is static, JIT eliminates the branch.
+
+        Args:
+            x: (state_dim,) - current state
+            action: (action_dim,) - control action
+
+        Returns:
+            x_next: (state_dim,) - next state
+        """
+        if self._discretization_method == 'euler':
+            return self._euler_step(x, action)
+        else:
+            return self._rk4_step(x, action)
 
 
 class CustomDynamics(AffineInControlDynamics):
