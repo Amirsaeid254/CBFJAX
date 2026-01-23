@@ -266,6 +266,11 @@ class QPSafeControl(BaseCBFSafeControl):
         # Get barrier values and Lie derivatives for single state
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
 
+        # Ensure proper shapes (handles both scalar and array barriers)
+        hocbf = jnp.atleast_1d(hocbf)
+        lf_hocbf = jnp.atleast_1d(lf_hocbf)
+        lg_hocbf = jnp.atleast_2d(lg_hocbf)
+
         # Convert to QP form: Gu <= h
         # CBF constraint: -Lg_hocbf * u <= Lf_hocbf + alpha(hocbf)
         G = -lg_hocbf  # Shape: (num_barriers, action_dim)
@@ -287,6 +292,11 @@ class QPSafeControl(BaseCBFSafeControl):
         """
         # Get barrier values and Lie derivatives for single state
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+
+        # Ensure proper shapes (handles both scalar and array barriers)
+        hocbf = jnp.atleast_1d(hocbf)
+        lf_hocbf = jnp.atleast_1d(lf_hocbf)
+        lg_hocbf = jnp.atleast_2d(lg_hocbf)
 
         # Create constraint matrix for [u, slack]
         # -Lg_hocbf * u - hocbf * slack <= Lf_hocbf + alpha(hocbf)
@@ -495,6 +505,12 @@ class InputConstQPSafeControl(QPSafeControl):
 
         # Get CBF constraints
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+
+        # Ensure proper shapes (handles both scalar and array barriers)
+        hocbf = jnp.atleast_1d(hocbf)
+        lf_hocbf = jnp.atleast_1d(lf_hocbf)
+        lg_hocbf = jnp.atleast_2d(lg_hocbf)
+
         G_cbf = -lg_hocbf
         h_cbf = (lf_hocbf + jax.vmap(self._alpha)(hocbf))
 

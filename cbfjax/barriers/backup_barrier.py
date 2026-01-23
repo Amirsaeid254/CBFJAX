@@ -228,7 +228,7 @@ class BackupBarrier(Barrier):
             h_traj = self._state_barrier.hocbf(traj[:-1, :]).squeeze(-1)  # (time_steps-1,)
 
             # Evaluate backup barrier at terminal state
-            h_terminal = backup_barrier._hocbf_single(traj[-1])  # scalar
+            h_terminal = (backup_barrier._hocbf_single(traj[-1]))          # scalar
 
             # Concatenate and compute softmin
             h_combined = jnp.concatenate([h_traj, h_terminal])

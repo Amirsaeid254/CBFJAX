@@ -1,8 +1,9 @@
 """
-iLQR Safe Control for unicycle dynamics with barrier penalty.
+iLQR Safe Control for unicycle dynamics with barrier constraints.
 
 Demonstrates QuadraticiLQRSafeControl with:
-- Barrier violations added as penalty in cost function
+- Barrier as AL inequality constraint (h(x) >= 0 -> -h(x) <= 0)
+- Optional log barrier penalty for smooth gradient repulsion
 - Uses map_.barrier directly (all barriers combined)
 - Quadratic tracking cost (Q, R matrices)
 - Control bounds via constrained iLQR
@@ -55,18 +56,21 @@ cfg = immutabledict({
 ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'maxiter': 5,
+    'maxiter': 2,
     'grad_norm_threshold': 1e-4,
-    'maxiter_al': 2,
+    'maxiter_al': 4,
     'constraints_threshold': 1e-4,
-    'penalty_init': 20.0,
-    'penalty_update_rate': 15.0,
-    'barrier_gain': 1e6,  # Penalty weight for barrier violations
+    'penalty_init': 1000.0,
+    'penalty_update_rate': 200.0,
+    'log_barrier_gain': 10.0,
+    'safety_margin': 0.0,
 }
 
 # ============================================
 # Setup Dynamics and Barriers
 # ============================================
+
+
 
 print("Setting up dynamics and barriers...")
 
@@ -94,8 +98,8 @@ nu = dynamics.action_dim  # 2
 
 # Cost matrices for tracking
 Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))  # State cost
-R = jnp.diag(jnp.array([0.1, 0.1]))               # Control cost
-Q_e = 100.0 * Q                                    # Terminal cost
+R = jnp.diag(jnp.array([5.0, 5.0]))               # Control cost
+Q_e = 5.0 * Q                                    # Terminal cost
 
 # Control bounds: [acceleration, angular velocity]
 control_low = [-2.0, -1.0]
@@ -118,7 +122,6 @@ controller = (
 )
 
 print(f"  Horizon: {controller.horizon}s, N={controller.N_horizon}")
-print(f"  Barrier gain: {ilqr_params['barrier_gain']}")
 
 # ============================================
 # Closed-Loop Simulation

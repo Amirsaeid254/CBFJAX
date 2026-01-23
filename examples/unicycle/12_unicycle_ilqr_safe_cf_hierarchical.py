@@ -3,7 +3,7 @@ Hierarchical iLQR-Safe + Closed-Form Safe Control for unicycle dynamics.
 
 Demonstrates a two-layer hierarchical control architecture where BOTH layers
 are safety-aware:
-1. High-level: QuadraticiLQRSafeControl - iLQR with barrier penalty in cost
+1. High-level: QuadraticiLQRSafeControl - iLQR with barrier as AL constraint
    (plans ahead while considering obstacles as soft constraints)
 2. Low-level: MinIntervCFSafeControl - CF filter for hard CBF constraint
    enforcement (closed-form solution)
@@ -66,17 +66,18 @@ cfg_cf = immutabledict({
     'velocity_alpha': (),
 })
 
-# iLQR parameters (with barrier penalty)
+# iLQR parameters
 ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'maxiter': 5,
+    'maxiter': 2,
     'grad_norm_threshold': 1e-4,
-    'maxiter_al': 2,
+    'maxiter_al': 4,
     'constraints_threshold': 1e-4,
-    'penalty_init': 20.0,
-    'penalty_update_rate': 15.0,
-    'barrier_gain': 1e5,  # Penalty weight for barrier violations in iLQR cost
+    'penalty_init': 300.0,
+    'penalty_update_rate': 200.0,
+    'log_barrier_gain': 10.0,
+    'safety_margin': 0.0,
 }
 
 # CF safety filter parameters
@@ -113,7 +114,7 @@ nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 print("Setting up barriers...")
 
-# Create barrier for iLQR (uses simple barrier for cost penalty)
+# Create barrier for iLQR (uses barrier as AL inequality constraint)
 map_ilqr = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg_ilqr).create_barriers()
 barrier_ilqr = map_ilqr.barrier
 
@@ -121,7 +122,7 @@ barrier_ilqr = map_ilqr.barrier
 map_cf = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg_cf).create_barriers()
 barrier_cf = map_cf.barrier
 
-print(f"  iLQR barrier: composite barrier for cost penalty")
+print(f"  iLQR barrier: composite barrier as AL inequality constraint")
 print(f"  CF barrier: composite barrier for closed-form safety")
 
 # ============================================
@@ -139,17 +140,17 @@ Q_e = 100.0 * Q                                    # Terminal cost
 goal_pos = jnp.array([3.0, 4.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
-# Create iLQR controller WITH barrier penalty in cost
+# Create iLQR controller WITH barrier as AL inequality constraint
 ilqr_controller = (
     QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
     .assign_dynamics(dynamics)
     .assign_control_bounds(control_low, control_high)
     .assign_cost_matrices(Q, R, Q_e, x_ref)
-    .assign_state_barrier(barrier_ilqr)  # Barrier added to cost!
+    .assign_state_barrier(barrier_ilqr)  # Barrier as AL constraint
 )
 
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
-print(f"  Barrier gain in cost: {ilqr_params['barrier_gain']}")
+print(f"  Barrier: handled as AL inequality constraint")
 
 # ============================================
 # Setup CF Safety Filter (Low-Level)
@@ -212,7 +213,7 @@ x0_batch = x0.reshape(1, -1)  # (1, state_dim)
 start_time = time()
 
 # Use safety filter's simulation method
-trajs = safety_filter.get_optimal_trajs(
+trajs = safety_filter.get_optimal_trajs_zoh(
     x0=x0_batch,
     sim_time=sim_time,
     timestep=dt_sim,

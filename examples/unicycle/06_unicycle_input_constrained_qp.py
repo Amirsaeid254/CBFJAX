@@ -142,7 +142,7 @@ print(f"  Device: {jax.devices()[0]}")
 x0_batch = x0.reshape(1, -1)
 
 start_time = time()
-trajs = safety_filter.get_optimal_trajs(
+trajs = safety_filter.get_optimal_trajs_zoh(
     x0=x0_batch,
     sim_time=sim_time,
     timestep=dt_sim,
