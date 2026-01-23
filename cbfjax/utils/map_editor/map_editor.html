@@ -1,0 +1,1712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CBFJAX Map Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        .app-container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Left Toolbar */
+        .toolbar {
+            width: 180px;
+            background: #16213e;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border-right: 1px solid #0f3460;
+            overflow-y: auto;
+        }
+
+        .toolbar h3 {
+            color: #e94560;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 10px;
+        }
+
+        .toolbar h3:first-child {
+            margin-top: 0;
+        }
+
+        .toolbar button {
+            padding: 10px 15px;
+            background: #0f3460;
+            border: none;
+            color: #eee;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            text-align: left;
+        }
+
+        .toolbar button:hover {
+            background: #1a4f7a;
+        }
+
+        .toolbar button.active {
+            background: #e94560;
+        }
+
+        .toolbar button .shortcut {
+            float: right;
+            opacity: 0.5;
+            font-size: 11px;
+        }
+
+        /* Main Canvas Area */
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #mapCanvas {
+            display: block;
+            background: #0f0f23;
+        }
+
+        .canvas-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        /* Right Properties Panel */
+        .properties {
+            width: 250px;
+            background: #16213e;
+            padding: 15px;
+            border-left: 1px solid #0f3460;
+            overflow-y: auto;
+        }
+
+        .properties h2 {
+            color: #e94560;
+            font-size: 14px;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .properties .no-selection {
+            color: #666;
+            font-style: italic;
+            padding: 20px 0;
+        }
+
+        .prop-group {
+            margin-bottom: 15px;
+        }
+
+        .prop-group label {
+            display: block;
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .prop-group input, .prop-group select {
+            width: 100%;
+            padding: 8px 10px;
+            background: #0f3460;
+            border: 1px solid #1a4f7a;
+            color: #eee;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .prop-group input:focus, .prop-group select:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        .prop-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .prop-row > div {
+            flex: 1;
+        }
+
+        .btn-danger {
+            background: #c0392b !important;
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        .btn-danger:hover {
+            background: #e74c3c !important;
+        }
+
+        /* Menu Bar */
+        .menu-bar {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 5px;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 8px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+
+        .menu-bar button {
+            padding: 8px 15px;
+            background: transparent;
+            border: none;
+            color: #eee;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .menu-bar button:hover {
+            background: #0f3460;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #16213e;
+            padding: 25px;
+            border-radius: 10px;
+            min-width: 400px;
+            max-width: 90%;
+            max-height: 90%;
+            overflow-y: auto;
+        }
+
+        .modal-content h2 {
+            color: #e94560;
+            margin-bottom: 20px;
+        }
+
+        .modal-content pre {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+            line-height: 1.5;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: flex-end;
+        }
+
+        .modal-buttons button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .btn-primary {
+            background: #e94560;
+            color: white;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #eee;
+        }
+
+        /* Toast notifications */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0f3460;
+            color: #eee;
+            padding: 12px 24px;
+            border-radius: 6px;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        /* Velocity constraint section */
+        .velocity-section {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #0f3460;
+        }
+
+        .velocity-section h3 {
+            color: #e94560;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Left Toolbar -->
+        <div class="toolbar">
+            <h3>Tools</h3>
+            <button id="tool-select" class="active" onclick="setTool('select')">
+                Select <span class="shortcut">V</span>
+            </button>
+            <button id="tool-move" onclick="setTool('move')">
+                Move <span class="shortcut">M</span>
+            </button>
+
+            <h3>Obstacles</h3>
+            <button id="tool-cylinder" onclick="setTool('cylinder')">
+                Cylinder <span class="shortcut">C</span>
+            </button>
+            <button id="tool-norm_box" onclick="setTool('norm_box')">
+                Norm Box <span class="shortcut">N</span>
+            </button>
+            <button id="tool-box" onclick="setTool('box')">
+                Box <span class="shortcut">B</span>
+            </button>
+            <button id="tool-ellipse" onclick="setTool('ellipse')">
+                Ellipse <span class="shortcut">E</span>
+            </button>
+
+            <h3>Boundaries</h3>
+            <button id="tool-norm_boundary" onclick="setTool('norm_boundary')">
+                Norm Boundary
+            </button>
+            <button id="tool-boundary" onclick="setTool('boundary')">
+                Boundary
+            </button>
+
+            <h3>Generate</h3>
+            <button onclick="showRandomDialog()">
+                Random Map
+            </button>
+            <button onclick="showGridDialog()">
+                Grid Layout
+            </button>
+            <button onclick="showBoundaryDialog()">
+                Add Boundary
+            </button>
+        </div>
+
+        <!-- Main Canvas -->
+        <div class="canvas-container">
+            <div class="menu-bar">
+                <button onclick="newMap()">New</button>
+                <button onclick="showLoadDialog()">Load</button>
+                <button onclick="saveMapJson()">Save JSON</button>
+                <button onclick="showExportDialog()">Export Python</button>
+                <button onclick="showShortcuts()">Help</button>
+            </div>
+            <canvas id="mapCanvas"></canvas>
+            <div class="canvas-info" id="canvasInfo">Position: (0.00, 0.00)</div>
+        </div>
+
+        <!-- Right Properties Panel -->
+        <div class="properties">
+            <h2>Properties</h2>
+            <div id="propsContent">
+                <p class="no-selection">No geometry selected</p>
+                <p class="no-selection" style="margin-top:10px; font-size:11px;">Click on canvas to add geometry, or select existing ones.</p>
+            </div>
+
+            <div class="velocity-section">
+                <h3>Velocity Constraint</h3>
+                <div class="prop-row">
+                    <div class="prop-group">
+                        <label>Axis</label>
+                        <input type="number" id="vel-axis" value="2" min="0" max="10">
+                    </div>
+                </div>
+                <div class="prop-row">
+                    <div class="prop-group">
+                        <label>Min</label>
+                        <input type="number" id="vel-min" value="-2.0" step="0.1">
+                    </div>
+                    <div class="prop-group">
+                        <label>Max</label>
+                        <input type="number" id="vel-max" value="2.0" step="0.1">
+                    </div>
+                </div>
+                <div class="prop-group">
+                    <label style="display:flex; align-items:center; gap:5px; cursor:pointer;">
+                        <input type="checkbox" id="vel-enabled" style="width:auto;">
+                        <span>Enable velocity constraint</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal" id="exportModal">
+        <div class="modal-content">
+            <h2>Export Python Code</h2>
+            <pre id="exportCode"></pre>
+            <div class="modal-buttons">
+                <button class="btn-secondary" onclick="closeModal('exportModal')">Close</button>
+                <button class="btn-primary" onclick="copyExportCode()">Copy to Clipboard</button>
+                <button class="btn-primary" onclick="downloadExport()">Download</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="loadModal">
+        <div class="modal-content">
+            <h2>Load Map Configuration</h2>
+            <p style="margin-bottom:15px; color:#888; font-size:13px;">
+                Paste a Python map_config dictionary or JSON configuration below.
+            </p>
+            <div class="prop-group">
+                <label>Configuration:</label>
+                <textarea id="loadInput" rows="15" style="width:100%; background:#0f3460; color:#eee; border:1px solid #1a4f7a; border-radius:4px; padding:10px; font-family:monospace; font-size:12px;" placeholder="Paste your map_config here..."></textarea>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-secondary" onclick="closeModal('loadModal')">Cancel</button>
+                <button class="btn-primary" onclick="loadFromInput()">Load</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="randomModal">
+        <div class="modal-content">
+            <h2>Generate Random Obstacles</h2>
+            <div class="prop-group">
+                <label>Number of obstacles:</label>
+                <input type="number" id="randomCount" value="5" min="1" max="50">
+            </div>
+            <div class="prop-group">
+                <label>Geometry type:</label>
+                <select id="randomType">
+                    <option value="mixed">Mixed</option>
+                    <option value="cylinder">Cylinders only</option>
+                    <option value="norm_box">Norm Boxes only</option>
+                </select>
+            </div>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>X Min:</label>
+                    <input type="number" id="randomXMin" value="-8" step="0.5">
+                </div>
+                <div class="prop-group">
+                    <label>X Max:</label>
+                    <input type="number" id="randomXMax" value="8" step="0.5">
+                </div>
+            </div>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>Y Min:</label>
+                    <input type="number" id="randomYMin" value="-8" step="0.5">
+                </div>
+                <div class="prop-group">
+                    <label>Y Max:</label>
+                    <input type="number" id="randomYMax" value="8" step="0.5">
+                </div>
+            </div>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>Size Min:</label>
+                    <input type="number" id="randomSizeMin" value="0.5" step="0.1" min="0.1">
+                </div>
+                <div class="prop-group">
+                    <label>Size Max:</label>
+                    <input type="number" id="randomSizeMax" value="2.0" step="0.1" min="0.1">
+                </div>
+            </div>
+            <div class="prop-group">
+                <label style="display:flex; align-items:center; gap:5px; cursor:pointer;">
+                    <input type="checkbox" id="randomClearFirst" style="width:auto;" checked>
+                    <span>Clear existing obstacles first</span>
+                </label>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-secondary" onclick="closeModal('randomModal')">Cancel</button>
+                <button class="btn-primary" onclick="generateRandom()">Generate</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="gridModal">
+        <div class="modal-content">
+            <h2>Generate Grid Layout</h2>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>Rows:</label>
+                    <input type="number" id="gridRows" value="3" min="1" max="20">
+                </div>
+                <div class="prop-group">
+                    <label>Columns:</label>
+                    <input type="number" id="gridCols" value="3" min="1" max="20">
+                </div>
+            </div>
+            <div class="prop-group">
+                <label>Spacing:</label>
+                <input type="number" id="gridSpacing" value="4.0" step="0.5" min="1">
+            </div>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>Center X:</label>
+                    <input type="number" id="gridCenterX" value="0" step="0.5">
+                </div>
+                <div class="prop-group">
+                    <label>Center Y:</label>
+                    <input type="number" id="gridCenterY" value="0" step="0.5">
+                </div>
+            </div>
+            <div class="prop-group">
+                <label>Geometry type:</label>
+                <select id="gridType">
+                    <option value="cylinder">Cylinders</option>
+                    <option value="norm_box">Norm Boxes</option>
+                </select>
+            </div>
+            <div class="prop-group">
+                <label>Size:</label>
+                <input type="number" id="gridSize" value="0.5" step="0.1" min="0.1">
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-secondary" onclick="closeModal('gridModal')">Cancel</button>
+                <button class="btn-primary" onclick="generateGrid()">Generate</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="boundaryModal">
+        <div class="modal-content">
+            <h2>Add Boundary</h2>
+            <p style="margin-bottom:15px; color:#888; font-size:13px;">
+                Boundaries define safe zones - the robot must stay inside.
+            </p>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>Center X:</label>
+                    <input type="number" id="boundCenterX" value="0" step="0.5">
+                </div>
+                <div class="prop-group">
+                    <label>Center Y:</label>
+                    <input type="number" id="boundCenterY" value="0" step="0.5">
+                </div>
+            </div>
+            <div class="prop-row">
+                <div class="prop-group">
+                    <label>Half-width:</label>
+                    <input type="number" id="boundWidth" value="10" step="0.5" min="0.5">
+                </div>
+                <div class="prop-group">
+                    <label>Half-height:</label>
+                    <input type="number" id="boundHeight" value="10" step="0.5" min="0.5">
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn-secondary" onclick="closeModal('boundaryModal')">Cancel</button>
+                <button class="btn-primary" onclick="addBoundary()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="shortcutsModal">
+        <div class="modal-content">
+            <h2>Keyboard Shortcuts</h2>
+            <pre style="background:transparent; padding:0;">
+Navigation:
+  Scroll Wheel     - Zoom in/out
+  Right Click+Drag - Pan view
+  Middle Drag      - Pan view
+  Home             - Center view
+  +/-              - Zoom in/out
+  G                - Toggle grid
+
+Tools:
+  V                - Select tool
+  M                - Move tool
+  C                - Cylinder tool
+  N                - Norm Box tool
+  B                - Box tool
+  E                - Ellipse tool
+
+Editing:
+  Delete/Backspace - Delete selected
+  Ctrl+D           - Duplicate selected
+  Escape           - Deselect all
+
+File:
+  Ctrl+E           - Export Python
+
+Mouse:
+  Left Click       - Select/Create geometry
+  Left Drag        - Move selected geometry
+  Right Drag       - Pan view
+            </pre>
+            <div class="modal-buttons">
+                <button class="btn-primary" onclick="closeModal('shortcutsModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ====================
+        // State
+        // ====================
+        let geoms = [];
+        let selectedGeom = null;
+        let currentTool = 'select';
+
+        // View transformation
+        let scale = 30;  // pixels per unit
+        let offsetX = 0;
+        let offsetY = 0;
+        let showGrid = true;
+
+        // Interaction state
+        let isDragging = false;
+        let isPanning = false;
+        let dragStart = null;
+        let dragOffset = {x: 0, y: 0};
+
+        // Canvas
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ====================
+        // Initialization
+        // ====================
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            // Canvas events
+            canvas.addEventListener('mousedown', onMouseDown);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('mouseleave', onMouseUp);
+            canvas.addEventListener('wheel', onWheel);
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+            // Keyboard events
+            document.addEventListener('keydown', onKeyDown);
+
+            // Initial render
+            centerView();
+            render();
+        }
+
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            render();
+        }
+
+        function centerView() {
+            offsetX = canvas.width / 2;
+            offsetY = canvas.height / 2;
+        }
+
+        // ====================
+        // Coordinate transforms
+        // ====================
+        function worldToCanvas(x, y) {
+            return {
+                x: offsetX + x * scale,
+                y: offsetY - y * scale
+            };
+        }
+
+        function canvasToWorld(cx, cy) {
+            return {
+                x: (cx - offsetX) / scale,
+                y: (offsetY - cy) / scale
+            };
+        }
+
+        // ====================
+        // Rendering
+        // ====================
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (showGrid) {
+                drawGrid();
+            }
+
+            // Draw all geoms (boundaries first, then obstacles)
+            const boundaries = geoms.filter(g => g.type.includes('boundary'));
+            const obstacles = geoms.filter(g => !g.type.includes('boundary'));
+
+            boundaries.forEach(geom => drawGeom(geom));
+            obstacles.forEach(geom => drawGeom(geom));
+        }
+
+        function drawGrid() {
+            const w = canvas.width;
+            const h = canvas.height;
+
+            // Calculate visible bounds
+            const topLeft = canvasToWorld(0, 0);
+            const bottomRight = canvasToWorld(w, h);
+
+            // Determine grid spacing
+            let gridSize = 1;
+            while (gridSize * scale < 20) gridSize *= 2;
+            while (gridSize * scale > 100) gridSize /= 2;
+
+            ctx.strokeStyle = '#252525';
+            ctx.lineWidth = 1;
+
+            // Vertical lines
+            let x = Math.floor(topLeft.x / gridSize) * gridSize;
+            while (x <= bottomRight.x) {
+                const p = worldToCanvas(x, 0);
+                ctx.beginPath();
+                ctx.moveTo(p.x, 0);
+                ctx.lineTo(p.x, h);
+                ctx.stroke();
+                x += gridSize;
+            }
+
+            // Horizontal lines
+            let y = Math.floor(bottomRight.y / gridSize) * gridSize;
+            while (y <= topLeft.y) {
+                const p = worldToCanvas(0, y);
+                ctx.beginPath();
+                ctx.moveTo(0, p.y);
+                ctx.lineTo(w, p.y);
+                ctx.stroke();
+                y += gridSize;
+            }
+
+            // Draw axes
+            ctx.strokeStyle = '#404040';
+            ctx.lineWidth = 2;
+
+            const origin = worldToCanvas(0, 0);
+            ctx.beginPath();
+            ctx.moveTo(0, origin.y);
+            ctx.lineTo(w, origin.y);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(origin.x, 0);
+            ctx.lineTo(origin.x, h);
+            ctx.stroke();
+        }
+
+        function drawGeom(geom) {
+            const isBoundary = geom.type === 'norm_boundary' || geom.type === 'boundary';
+            const isSelected = geom === selectedGeom;
+
+            // Colors
+            let fillColor, strokeColor;
+            if (isSelected) {
+                fillColor = isBoundary ? 'rgba(68, 255, 136, 0.3)' : 'rgba(68, 136, 255, 0.5)';
+                strokeColor = isBoundary ? '#88ffcc' : '#88ccff';
+            } else {
+                fillColor = isBoundary ? 'rgba(51, 204, 102, 0.2)' : 'rgba(51, 102, 204, 0.4)';
+                strokeColor = isBoundary ? '#66ff99' : '#6699ff';
+            }
+
+            ctx.fillStyle = fillColor;
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = isSelected ? 3 : 2;
+
+            if (isBoundary) {
+                ctx.setLineDash([8, 4]);
+            } else {
+                ctx.setLineDash([]);
+            }
+
+            const center = worldToCanvas(geom.center[0], geom.center[1]);
+
+            if (geom.type === 'cylinder') {
+                const r = geom.params.radius * scale;
+                ctx.beginPath();
+                ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            }
+            else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                const size = geom.params.size || [1, 1];
+                const rotation = geom.params.rotation || 0;
+                const hw = size[0] * scale;
+                const hh = size[1] * scale;
+
+                ctx.save();
+                ctx.translate(center.x, center.y);
+                ctx.rotate(-rotation);  // Negative because canvas Y is flipped
+
+                ctx.beginPath();
+                ctx.rect(-hw, -hh, hw * 2, hh * 2);
+                if (!isBoundary) ctx.fill();
+                ctx.stroke();
+
+                ctx.restore();
+            }
+            else if (geom.type === 'ellipse') {
+                const A = geom.params.A || [[1, 0], [0, 1]];
+
+                ctx.beginPath();
+                for (let i = 0; i <= 36; i++) {
+                    const theta = (2 * Math.PI * i) / 36;
+                    const cosT = Math.cos(theta);
+                    const sinT = Math.sin(theta);
+
+                    const denom = A[0][0]*cosT*cosT + (A[0][1]+A[1][0])*cosT*sinT + A[1][1]*sinT*sinT;
+                    if (denom > 0) {
+                        const r = 1.0 / Math.sqrt(denom);
+                        const wx = geom.center[0] + r * cosT;
+                        const wy = geom.center[1] + r * sinT;
+                        const p = worldToCanvas(wx, wy);
+
+                        if (i === 0) {
+                            ctx.moveTo(p.x, p.y);
+                        } else {
+                            ctx.lineTo(p.x, p.y);
+                        }
+                    }
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            }
+
+            ctx.setLineDash([]);
+
+            // Draw center marker for selected
+            if (isSelected) {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(center.x - 8, center.y);
+                ctx.lineTo(center.x + 8, center.y);
+                ctx.moveTo(center.x, center.y - 8);
+                ctx.lineTo(center.x, center.y + 8);
+                ctx.stroke();
+            }
+        }
+
+        // ====================
+        // Mouse events
+        // ====================
+        function onMouseDown(e) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const world = canvasToWorld(cx, cy);
+
+            // Right click or middle click = pan
+            if (e.button === 2 || e.button === 1) {
+                isPanning = true;
+                dragStart = {x: cx, y: cy, ox: offsetX, oy: offsetY};
+                canvas.style.cursor = 'grabbing';
+                return;
+            }
+
+            if (currentTool === 'select' || currentTool === 'move') {
+                const clicked = findGeomAt(world.x, world.y);
+                selectGeom(clicked);
+
+                if (clicked) {
+                    isDragging = true;
+                    dragStart = {x: cx, y: cy};
+                    dragOffset = {
+                        x: clicked.center[0] - world.x,
+                        y: clicked.center[1] - world.y
+                    };
+                }
+            } else {
+                // Create new geom
+                createGeomAt(world.x, world.y);
+            }
+        }
+
+        function onMouseMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const world = canvasToWorld(cx, cy);
+
+            // Update info
+            document.getElementById('canvasInfo').textContent =
+                `Position: (${world.x.toFixed(2)}, ${world.y.toFixed(2)}) | Scale: ${scale.toFixed(1)} | Geoms: ${geoms.length}`;
+
+            if (isPanning && dragStart) {
+                const dx = cx - dragStart.x;
+                const dy = cy - dragStart.y;
+                offsetX = dragStart.ox + dx;
+                offsetY = dragStart.oy + dy;
+                render();
+            } else if (isDragging && selectedGeom && dragStart) {
+                selectedGeom.center[0] = world.x + dragOffset.x;
+                selectedGeom.center[1] = world.y + dragOffset.y;
+                updatePropertiesPanel();
+                render();
+            }
+        }
+
+        function onMouseUp(e) {
+            isDragging = false;
+            isPanning = false;
+            dragStart = null;
+            canvas.style.cursor = '';
+        }
+
+        function onWheel(e) {
+            e.preventDefault();
+
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const world = canvasToWorld(cx, cy);
+
+            const factor = e.deltaY < 0 ? 1.1 : 0.9;
+            const oldScale = scale;
+            scale *= factor;
+            scale = Math.max(5, Math.min(200, scale));
+
+            if (scale !== oldScale) {
+                offsetX = cx - world.x * scale;
+                offsetY = cy + world.y * scale;
+            }
+
+            render();
+        }
+
+        function onKeyDown(e) {
+            // Handle shortcuts
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'd') {
+                    e.preventDefault();
+                    duplicateSelected();
+                } else if (e.key === 'e') {
+                    e.preventDefault();
+                    showExportDialog();
+                }
+                return;
+            }
+
+            switch(e.key.toLowerCase()) {
+                case 'v': setTool('select'); break;
+                case 'm': setTool('move'); break;
+                case 'c': setTool('cylinder'); break;
+                case 'n': setTool('norm_box'); break;
+                case 'b': setTool('box'); break;
+                case 'e': setTool('ellipse'); break;
+                case 'g': showGrid = !showGrid; render(); break;
+                case 'delete':
+                case 'backspace':
+                    deleteSelected();
+                    break;
+                case 'escape':
+                    selectGeom(null);
+                    setTool('select');
+                    break;
+                case 'home':
+                    centerView();
+                    render();
+                    break;
+                case '+':
+                case '=':
+                    scale *= 1.2;
+                    scale = Math.min(200, scale);
+                    render();
+                    break;
+                case '-':
+                    scale *= 0.8;
+                    scale = Math.max(5, scale);
+                    render();
+                    break;
+            }
+        }
+
+        // ====================
+        // Geometry operations
+        // ====================
+        function findGeomAt(x, y) {
+            // Search in reverse (top to bottom), obstacles first
+            const obstacles = geoms.filter(g => !g.type.includes('boundary'));
+            const boundaries = geoms.filter(g => g.type.includes('boundary'));
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                if (pointInGeom(x, y, obstacles[i])) {
+                    return obstacles[i];
+                }
+            }
+            for (let i = boundaries.length - 1; i >= 0; i--) {
+                if (pointInGeom(x, y, boundaries[i])) {
+                    return boundaries[i];
+                }
+            }
+            return null;
+        }
+
+        function pointInGeom(x, y, geom) {
+            const dx = x - geom.center[0];
+            const dy = y - geom.center[1];
+
+            if (geom.type === 'cylinder') {
+                const r = geom.params.radius || 1;
+                return dx*dx + dy*dy <= r*r;
+            }
+            else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                const size = geom.params.size || [1, 1];
+                const rotation = geom.params.rotation || 0;
+
+                // Rotate point to local coordinates
+                const cos_r = Math.cos(-rotation);
+                const sin_r = Math.sin(-rotation);
+                const lx = dx * cos_r - dy * sin_r;
+                const ly = dx * sin_r + dy * cos_r;
+
+                return Math.abs(lx) <= size[0] && Math.abs(ly) <= size[1];
+            }
+            else if (geom.type === 'ellipse') {
+                const A = geom.params.A || [[1, 0], [0, 1]];
+                const val = A[0][0]*dx*dx + (A[0][1]+A[1][0])*dx*dy + A[1][1]*dy*dy;
+                return val <= 1.0;
+            }
+            return false;
+        }
+
+        function createGeomAt(x, y) {
+            let geom = null;
+
+            switch(currentTool) {
+                case 'cylinder':
+                    geom = {
+                        type: 'cylinder',
+                        center: [x, y],
+                        params: {radius: 1.0}
+                    };
+                    break;
+                case 'norm_box':
+                    geom = {
+                        type: 'norm_box',
+                        center: [x, y],
+                        params: {size: [1.0, 1.0], rotation: 0, p: 20}
+                    };
+                    break;
+                case 'box':
+                    geom = {
+                        type: 'box',
+                        center: [x, y],
+                        params: {size: [1.0, 1.0], rotation: 0, smooth: false, rho: 40}
+                    };
+                    break;
+                case 'ellipse':
+                    geom = {
+                        type: 'ellipse',
+                        center: [x, y],
+                        params: {A: [[1.0, 0.0], [0.0, 1.0]]}
+                    };
+                    break;
+                case 'norm_boundary':
+                    geom = {
+                        type: 'norm_boundary',
+                        center: [x, y],
+                        params: {size: [5.0, 5.0], rotation: 0, p: 20}
+                    };
+                    break;
+                case 'boundary':
+                    geom = {
+                        type: 'boundary',
+                        center: [x, y],
+                        params: {size: [5.0, 5.0], rotation: 0, smooth: false, rho: 40}
+                    };
+                    break;
+            }
+
+            if (geom) {
+                geoms.push(geom);
+                selectGeom(geom);
+                render();
+                showToast(`Added ${geom.type}`);
+            }
+        }
+
+        function selectGeom(geom) {
+            selectedGeom = geom;
+            updatePropertiesPanel();
+            render();
+        }
+
+        function deleteSelected() {
+            if (selectedGeom) {
+                const idx = geoms.indexOf(selectedGeom);
+                if (idx !== -1) {
+                    geoms.splice(idx, 1);
+                    selectGeom(null);
+                    render();
+                    showToast('Geometry deleted');
+                }
+            }
+        }
+
+        function duplicateSelected() {
+            if (selectedGeom) {
+                const newGeom = JSON.parse(JSON.stringify(selectedGeom));
+                newGeom.center[0] += 1;
+                newGeom.center[1] += 1;
+                geoms.push(newGeom);
+                selectGeom(newGeom);
+                render();
+                showToast('Geometry duplicated');
+            }
+        }
+
+        // ====================
+        // Tool selection
+        // ====================
+        function setTool(tool) {
+            currentTool = tool;
+            document.querySelectorAll('.toolbar button').forEach(btn => btn.classList.remove('active'));
+            const btn = document.getElementById('tool-' + tool);
+            if (btn) btn.classList.add('active');
+        }
+
+        // ====================
+        // Properties panel
+        // ====================
+        function updatePropertiesPanel() {
+            const container = document.getElementById('propsContent');
+
+            if (!selectedGeom) {
+                container.innerHTML = `
+                    <p class="no-selection">No geometry selected</p>
+                    <p class="no-selection" style="margin-top:10px; font-size:11px;">
+                        Click on canvas to add geometry, or select existing ones.
+                    </p>
+                `;
+                return;
+            }
+
+            const geom = selectedGeom;
+            let html = `
+                <div class="prop-group">
+                    <label>Type</label>
+                    <input type="text" value="${geom.type}" readonly style="background:#1a1a2e;">
+                </div>
+                <div class="prop-row">
+                    <div class="prop-group">
+                        <label>Center X</label>
+                        <input type="number" id="prop-cx" value="${geom.center[0].toFixed(3)}" step="0.1" onchange="updateGeomFromProps()">
+                    </div>
+                    <div class="prop-group">
+                        <label>Center Y</label>
+                        <input type="number" id="prop-cy" value="${geom.center[1].toFixed(3)}" step="0.1" onchange="updateGeomFromProps()">
+                    </div>
+                </div>
+            `;
+
+            if (geom.type === 'cylinder') {
+                html += `
+                    <div class="prop-group">
+                        <label>Radius</label>
+                        <input type="number" id="prop-radius" value="${geom.params.radius.toFixed(3)}" step="0.1" min="0.1" onchange="updateGeomFromProps()">
+                    </div>
+                `;
+            }
+            else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                const size = geom.params.size || [1, 1];
+                const rotation = geom.params.rotation || 0;
+
+                html += `
+                    <div class="prop-row">
+                        <div class="prop-group">
+                            <label>Width (half)</label>
+                            <input type="number" id="prop-w" value="${size[0].toFixed(3)}" step="0.1" min="0.1" onchange="updateGeomFromProps()">
+                        </div>
+                        <div class="prop-group">
+                            <label>Height (half)</label>
+                            <input type="number" id="prop-h" value="${size[1].toFixed(3)}" step="0.1" min="0.1" onchange="updateGeomFromProps()">
+                        </div>
+                    </div>
+                    <div class="prop-group">
+                        <label>Rotation (degrees)</label>
+                        <input type="number" id="prop-rot" value="${(rotation * 180 / Math.PI).toFixed(1)}" step="5" onchange="updateGeomFromProps()">
+                    </div>
+                `;
+
+                if (geom.type === 'norm_box' || geom.type === 'norm_boundary') {
+                    html += `
+                        <div class="prop-group">
+                            <label>P-norm (higher = sharper corners)</label>
+                            <input type="number" id="prop-p" value="${geom.params.p || 20}" step="1" min="2" onchange="updateGeomFromProps()">
+                        </div>
+                    `;
+                }
+
+                if (geom.type === 'box' || geom.type === 'boundary') {
+                    html += `
+                        <div class="prop-group">
+                            <label>Smooth</label>
+                            <select id="prop-smooth" onchange="updateGeomFromProps()">
+                                <option value="false" ${!geom.params.smooth ? 'selected' : ''}>No</option>
+                                <option value="true" ${geom.params.smooth ? 'selected' : ''}>Yes</option>
+                            </select>
+                        </div>
+                        <div class="prop-group">
+                            <label>Rho</label>
+                            <input type="number" id="prop-rho" value="${geom.params.rho || 40}" step="1" min="1" onchange="updateGeomFromProps()">
+                        </div>
+                    `;
+                }
+            }
+            else if (geom.type === 'ellipse') {
+                const A = geom.params.A || [[1, 0], [0, 1]];
+                html += `
+                    <div class="prop-group">
+                        <label>Matrix A (defines ellipse shape)</label>
+                    </div>
+                    <div class="prop-row">
+                        <div class="prop-group">
+                            <label>A[0][0]</label>
+                            <input type="number" id="prop-a11" value="${A[0][0].toFixed(3)}" step="0.1" onchange="updateGeomFromProps()">
+                        </div>
+                        <div class="prop-group">
+                            <label>A[0][1]</label>
+                            <input type="number" id="prop-a12" value="${A[0][1].toFixed(3)}" step="0.1" onchange="updateGeomFromProps()">
+                        </div>
+                    </div>
+                    <div class="prop-row">
+                        <div class="prop-group">
+                            <label>A[1][0]</label>
+                            <input type="number" id="prop-a21" value="${A[1][0].toFixed(3)}" step="0.1" onchange="updateGeomFromProps()">
+                        </div>
+                        <div class="prop-group">
+                            <label>A[1][1]</label>
+                            <input type="number" id="prop-a22" value="${A[1][1].toFixed(3)}" step="0.1" onchange="updateGeomFromProps()">
+                        </div>
+                    </div>
+                `;
+            }
+
+            html += `<button class="btn-danger" onclick="deleteSelected()">Delete Geometry</button>`;
+
+            container.innerHTML = html;
+        }
+
+        function updateGeomFromProps() {
+            if (!selectedGeom) return;
+
+            const geom = selectedGeom;
+
+            geom.center[0] = parseFloat(document.getElementById('prop-cx').value) || 0;
+            geom.center[1] = parseFloat(document.getElementById('prop-cy').value) || 0;
+
+            if (geom.type === 'cylinder') {
+                geom.params.radius = parseFloat(document.getElementById('prop-radius').value) || 1;
+            }
+            else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                geom.params.size = [
+                    parseFloat(document.getElementById('prop-w').value) || 1,
+                    parseFloat(document.getElementById('prop-h').value) || 1
+                ];
+                geom.params.rotation = (parseFloat(document.getElementById('prop-rot').value) || 0) * Math.PI / 180;
+
+                if (geom.type === 'norm_box' || geom.type === 'norm_boundary') {
+                    geom.params.p = parseInt(document.getElementById('prop-p').value) || 20;
+                }
+                if (geom.type === 'box' || geom.type === 'boundary') {
+                    geom.params.smooth = document.getElementById('prop-smooth').value === 'true';
+                    geom.params.rho = parseFloat(document.getElementById('prop-rho').value) || 40;
+                }
+            }
+            else if (geom.type === 'ellipse') {
+                geom.params.A = [
+                    [parseFloat(document.getElementById('prop-a11').value) || 1, parseFloat(document.getElementById('prop-a12').value) || 0],
+                    [parseFloat(document.getElementById('prop-a21').value) || 0, parseFloat(document.getElementById('prop-a22').value) || 1]
+                ];
+            }
+
+            render();
+        }
+
+        // ====================
+        // Velocity constraint
+        // ====================
+        function getVelocityConstraint() {
+            const enabled = document.getElementById('vel-enabled').checked;
+            if (!enabled) return null;
+
+            return [
+                parseInt(document.getElementById('vel-axis').value) || 2,
+                [
+                    parseFloat(document.getElementById('vel-min').value) || -2.0,
+                    parseFloat(document.getElementById('vel-max').value) || 2.0
+                ]
+            ];
+        }
+
+        // ====================
+        // File operations
+        // ====================
+        function newMap() {
+            if (geoms.length > 0 && !confirm('Discard current map?')) return;
+            geoms = [];
+            selectGeom(null);
+            render();
+            showToast('New map created');
+        }
+
+        function saveMapJson() {
+            const data = {
+                geoms: geoms.map(g => ({type: g.type, info: geomToConfig(g)}))
+            };
+
+            const velocity = getVelocityConstraint();
+            if (velocity) {
+                data.velocity = velocity;
+            }
+
+            const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'map_config.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('Map saved as JSON');
+        }
+
+        function geomToConfig(geom) {
+            const info = {center: [geom.center[0], geom.center[1]]};
+
+            if (geom.type === 'cylinder') {
+                info.radius = geom.params.radius;
+            }
+            else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                info.size = [...geom.params.size];
+                if (geom.params.rotation && geom.params.rotation !== 0) {
+                    info.rotation = geom.params.rotation;
+                }
+                if ((geom.type === 'norm_box' || geom.type === 'norm_boundary') && geom.params.p !== 20) {
+                    info.p = geom.params.p;
+                }
+                if ((geom.type === 'box' || geom.type === 'boundary')) {
+                    if (geom.params.smooth) info.smooth = true;
+                    if (geom.params.rho !== 40) info.rho = geom.params.rho;
+                }
+            }
+            else if (geom.type === 'ellipse') {
+                info.A = geom.params.A;
+            }
+
+            return info;
+        }
+
+        function generatePythonCode() {
+            let code = '"""\nMap configuration generated by CBFJAX Map Editor.\n"""\n\n';
+            code += 'map_config = {\n';
+            code += "    'geoms': (\n";
+
+            geoms.forEach(geom => {
+                const info = geomToConfig(geom);
+                const centerStr = `(${info.center[0].toFixed(4)}, ${info.center[1].toFixed(4)})`;
+
+                let paramsStr = `'center': ${centerStr}`;
+
+                if (geom.type === 'cylinder') {
+                    paramsStr += `, 'radius': ${info.radius.toFixed(4)}`;
+                }
+                else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                    paramsStr += `, 'size': (${info.size[0].toFixed(4)}, ${info.size[1].toFixed(4)})`;
+                    if (info.rotation) paramsStr += `, 'rotation': ${info.rotation.toFixed(4)}`;
+                    if (info.p) paramsStr += `, 'p': ${info.p}`;
+                    if (info.smooth) paramsStr += `, 'smooth': True`;
+                    if (info.rho) paramsStr += `, 'rho': ${info.rho}`;
+                }
+                else if (geom.type === 'ellipse') {
+                    const A = info.A;
+                    paramsStr += `, 'A': [[${A[0][0]}, ${A[0][1]}], [${A[1][0]}, ${A[1][1]}]]`;
+                }
+
+                code += `        ('${geom.type}', {${paramsStr}}),\n`;
+            });
+
+            code += '    ),\n';
+
+            const velocity = getVelocityConstraint();
+            if (velocity) {
+                code += `    'velocity': (${velocity[0]}, (${velocity[1][0]}, ${velocity[1][1]})),\n`;
+            }
+
+            code += '}\n';
+
+            return code;
+        }
+
+        function showExportDialog() {
+            const code = generatePythonCode();
+            document.getElementById('exportCode').textContent = code;
+            document.getElementById('exportModal').classList.add('active');
+        }
+
+        function copyExportCode() {
+            const code = document.getElementById('exportCode').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                showToast('Code copied to clipboard');
+            }).catch(() => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = code;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showToast('Code copied to clipboard');
+            });
+        }
+
+        function downloadExport() {
+            const code = generatePythonCode();
+            const blob = new Blob([code], {type: 'text/plain'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'map_config.py';
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('Python file downloaded');
+            closeModal('exportModal');
+        }
+
+        function showLoadDialog() {
+            document.getElementById('loadInput').value = '';
+            document.getElementById('loadModal').classList.add('active');
+        }
+
+        function loadFromInput() {
+            const input = document.getElementById('loadInput').value.trim();
+
+            try {
+                // Try JSON first
+                if (input.startsWith('{')) {
+                    const data = JSON.parse(input);
+                    loadFromJson(data);
+                } else {
+                    // Try to parse Python-like syntax
+                    loadFromPythonString(input);
+                }
+                closeModal('loadModal');
+                showToast('Map loaded successfully');
+            } catch (e) {
+                alert('Failed to parse input: ' + e.message);
+            }
+        }
+
+        function loadFromJson(data) {
+            geoms = [];
+            (data.geoms || []).forEach(g => {
+                const geom = {
+                    type: g.type,
+                    center: [...g.info.center.slice(0, 2)],
+                    params: {}
+                };
+
+                if (g.type === 'cylinder') {
+                    geom.params.radius = g.info.radius || 1;
+                }
+                else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(g.type)) {
+                    geom.params.size = [...(g.info.size || [1, 1]).slice(0, 2)];
+                    geom.params.rotation = g.info.rotation || 0;
+                    geom.params.p = g.info.p || 20;
+                    geom.params.smooth = g.info.smooth || false;
+                    geom.params.rho = g.info.rho || 40;
+                }
+                else if (g.type === 'ellipse') {
+                    geom.params.A = g.info.A || [[1, 0], [0, 1]];
+                }
+
+                geoms.push(geom);
+            });
+
+            if (data.velocity) {
+                document.getElementById('vel-enabled').checked = true;
+                document.getElementById('vel-axis').value = data.velocity[0];
+                document.getElementById('vel-min').value = data.velocity[1][0];
+                document.getElementById('vel-max').value = data.velocity[1][1];
+            }
+
+            selectGeom(null);
+            centerView();
+            render();
+        }
+
+        function loadFromPythonString(input) {
+            // Simple regex-based parser for Python map_config
+            const geomRegex = /\('(\w+)',\s*\{([^}]+)\}\)/g;
+            const tempGeoms = [];
+
+            let match;
+            while ((match = geomRegex.exec(input)) !== null) {
+                const type = match[1];
+                const paramsStr = match[2];
+
+                const geom = {
+                    type: type,
+                    center: [0, 0],
+                    params: {}
+                };
+
+                // Parse center
+                const centerMatch = paramsStr.match(/'center':\s*\(([^)]+)\)/);
+                if (centerMatch) {
+                    const coords = centerMatch[1].split(',').map(s => parseFloat(s.trim()));
+                    geom.center = [coords[0] || 0, coords[1] || 0];
+                }
+
+                // Parse radius
+                const radiusMatch = paramsStr.match(/'radius':\s*([\d.]+)/);
+                if (radiusMatch) {
+                    geom.params.radius = parseFloat(radiusMatch[1]);
+                }
+
+                // Parse size
+                const sizeMatch = paramsStr.match(/'size':\s*\(([^)]+)\)/);
+                if (sizeMatch) {
+                    const sizes = sizeMatch[1].split(',').map(s => parseFloat(s.trim()));
+                    geom.params.size = [sizes[0] || 1, sizes[1] || 1];
+                    geom.params.rotation = 0;
+                    geom.params.p = 20;
+                }
+
+                // Parse rotation
+                const rotMatch = paramsStr.match(/'rotation':\s*([\d.]+)/);
+                if (rotMatch) {
+                    geom.params.rotation = parseFloat(rotMatch[1]);
+                }
+
+                // Parse p
+                const pMatch = paramsStr.match(/'p':\s*(\d+)/);
+                if (pMatch) {
+                    geom.params.p = parseInt(pMatch[1]);
+                }
+
+                tempGeoms.push(geom);
+            }
+
+            if (tempGeoms.length === 0) {
+                throw new Error('No valid geometries found');
+            }
+
+            geoms = tempGeoms;
+
+            // Parse velocity constraint
+            const velMatch = input.match(/'velocity':\s*\((\d+),\s*\(([-\d.]+),\s*([-\d.]+)\)\)/);
+            if (velMatch) {
+                document.getElementById('vel-enabled').checked = true;
+                document.getElementById('vel-axis').value = velMatch[1];
+                document.getElementById('vel-min').value = velMatch[2];
+                document.getElementById('vel-max').value = velMatch[3];
+            }
+
+            selectGeom(null);
+            centerView();
+            render();
+        }
+
+        // ====================
+        // Generation
+        // ====================
+        function showRandomDialog() {
+            document.getElementById('randomModal').classList.add('active');
+        }
+
+        function generateRandom() {
+            const count = parseInt(document.getElementById('randomCount').value) || 5;
+            const type = document.getElementById('randomType').value;
+            const xMin = parseFloat(document.getElementById('randomXMin').value) || -8;
+            const xMax = parseFloat(document.getElementById('randomXMax').value) || 8;
+            const yMin = parseFloat(document.getElementById('randomYMin').value) || -8;
+            const yMax = parseFloat(document.getElementById('randomYMax').value) || 8;
+            const sizeMin = parseFloat(document.getElementById('randomSizeMin').value) || 0.5;
+            const sizeMax = parseFloat(document.getElementById('randomSizeMax').value) || 2.0;
+            const clearFirst = document.getElementById('randomClearFirst').checked;
+
+            if (clearFirst) {
+                // Keep boundaries, clear obstacles
+                geoms = geoms.filter(g => g.type.includes('boundary'));
+            }
+
+            for (let i = 0; i < count; i++) {
+                const cx = xMin + Math.random() * (xMax - xMin);
+                const cy = yMin + Math.random() * (yMax - yMin);
+                const useBox = type === 'norm_box' || (type === 'mixed' && Math.random() > 0.5);
+
+                if (useBox) {
+                    const w = sizeMin + Math.random() * (sizeMax - sizeMin);
+                    const h = sizeMin + Math.random() * (sizeMax - sizeMin);
+                    const rot = Math.random() * Math.PI / 2;
+                    geoms.push({
+                        type: 'norm_box',
+                        center: [cx, cy],
+                        params: {size: [w, h], rotation: rot, p: 20}
+                    });
+                } else {
+                    const r = sizeMin + Math.random() * (sizeMax - sizeMin);
+                    geoms.push({
+                        type: 'cylinder',
+                        center: [cx, cy],
+                        params: {radius: r}
+                    });
+                }
+            }
+
+            closeModal('randomModal');
+            render();
+            showToast(`Generated ${count} obstacles`);
+        }
+
+        function showGridDialog() {
+            document.getElementById('gridModal').classList.add('active');
+        }
+
+        function generateGrid() {
+            const rows = parseInt(document.getElementById('gridRows').value) || 3;
+            const cols = parseInt(document.getElementById('gridCols').value) || 3;
+            const spacing = parseFloat(document.getElementById('gridSpacing').value) || 4;
+            const centerX = parseFloat(document.getElementById('gridCenterX').value) || 0;
+            const centerY = parseFloat(document.getElementById('gridCenterY').value) || 0;
+            const type = document.getElementById('gridType').value;
+            const size = parseFloat(document.getElementById('gridSize').value) || 0.5;
+
+            const startX = centerX - (cols - 1) * spacing / 2;
+            const startY = centerY - (rows - 1) * spacing / 2;
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const cx = startX + c * spacing;
+                    const cy = startY + r * spacing;
+
+                    if (type === 'cylinder') {
+                        geoms.push({
+                            type: 'cylinder',
+                            center: [cx, cy],
+                            params: {radius: size}
+                        });
+                    } else {
+                        geoms.push({
+                            type: 'norm_box',
+                            center: [cx, cy],
+                            params: {size: [size, size], rotation: 0, p: 20}
+                        });
+                    }
+                }
+            }
+
+            closeModal('gridModal');
+            render();
+            showToast(`Generated ${rows}x${cols} grid`);
+        }
+
+        function showBoundaryDialog() {
+            document.getElementById('boundaryModal').classList.add('active');
+        }
+
+        function addBoundary() {
+            const cx = parseFloat(document.getElementById('boundCenterX').value) || 0;
+            const cy = parseFloat(document.getElementById('boundCenterY').value) || 0;
+            const w = parseFloat(document.getElementById('boundWidth').value) || 10;
+            const h = parseFloat(document.getElementById('boundHeight').value) || 10;
+
+            geoms.push({
+                type: 'norm_boundary',
+                center: [cx, cy],
+                params: {size: [w, h], rotation: 0, p: 20}
+            });
+
+            closeModal('boundaryModal');
+            render();
+            showToast('Boundary added');
+        }
+
+        // ====================
+        // UI helpers
+        // ====================
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        function showShortcuts() {
+            document.getElementById('shortcutsModal').classList.add('active');
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        // Close modals on outside click
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.addEventListener('click', e => {
+                if (e.target === modal) {
+                    modal.classList.remove('active');
+                }
+            });
+        });
+
+        // Initialize
+        init();
+    </script>
+</body>
+</html>
