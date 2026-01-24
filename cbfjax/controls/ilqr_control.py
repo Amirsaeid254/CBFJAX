@@ -168,7 +168,7 @@ class iLQRControl(BaseControl):
         else:
             u_batch, info_batch = jax.vmap(self._optimal_control_single)(x)
             return u_batch, info_batch
-
+    @jax.jit
     def get_predicted_trajectory(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """Get predicted trajectory (x_traj, u_traj)."""
         X, U, _ = self._solve_ilqr_single(x)
@@ -384,7 +384,7 @@ class ConstrainediLQRControl(iLQRControl):
     def _get_cost(self) -> Callable:
         """Get cost function. Override in subclass to modify cost."""
         return self._cost_func
-    @jax.jit
+
     def _solve_ilqr_single(self, x0: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, dict]:
         T = self.N_horizon
         U_init = jnp.zeros((T, self._action_dim))
