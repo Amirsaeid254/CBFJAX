@@ -96,7 +96,7 @@ print("Setting up iLQR controller...")
 nx = dynamics.state_dim  # 4
 nu = dynamics.action_dim  # 2
 
-# Cost matrices for tracking
+# Cost matrices for tracking (as Callable for JIT compatibility)
 Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))  # State cost
 R = jnp.diag(jnp.array([5.0, 5.0]))               # Control cost
 Q_e = 5.0 * Q                                    # Terminal cost
@@ -112,12 +112,12 @@ x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 # Initial state
 x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
-# Create iLQR controller
+# Create iLQR controller (cost matrices wrapped as Callable)
 controller = (
     QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
     .assign_dynamics(dynamics)
     .assign_control_bounds(control_low, control_high)
-    .assign_cost_matrices(Q, R, Q_e, x_ref)
+    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
     .assign_state_barrier(barrier)
 )
 

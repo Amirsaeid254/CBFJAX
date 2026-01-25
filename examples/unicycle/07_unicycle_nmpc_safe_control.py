@@ -98,7 +98,7 @@ print("Setting up NMPC controller...")
 nx = dynamics.state_dim  # 4
 nu = dynamics.action_dim  # 2
 
-# Cost matrices for tracking
+# Cost matrices for tracking (as Callable for consistency)
 Q = np.diag([10.0, 10.0, 1.0, 1.0])  # State cost
 R = np.diag([0.1, 0.1])               # Control cost
 Q_e = 100.0 * Q                        # Terminal cost
@@ -120,13 +120,13 @@ x_ref = np.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 # Initial state
 x0 = np.array([-1.0, -8.5, 0.0, pi / 2])
 
-# Create NMPC controller
+# Create NMPC controller (cost matrices wrapped as Callable)
 controller = (
     QuadraticNMPCSafeControl.create_empty(action_dim=nu, params=nmpc_params)
     .assign_dynamics(dynamics)
     .assign_control_bounds(control_low, control_high)
     .assign_state_bounds(state_bounds_idx, state_low, state_high)
-    .assign_cost_matrices(Q, R, Q_e, x_ref)
+    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
     .assign_state_barrier(barrier)
 )
 

@@ -19,7 +19,7 @@ from typing import Callable, Optional, Any, Tuple
 from ..utils.jax2casadi import convert
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
-from .base_control import BaseControl
+from .base_control import BaseControl, QuadraticCostMixin
 from ..dynamics.base_dynamic import DummyDynamics
 
 
@@ -80,9 +80,6 @@ class NMPCControl(BaseControl):
 
     def __init__(
         self,
-        action_dim: int,
-        params: Optional[dict] = None,
-        dynamics=None,
         control_low: Optional[list] = None,
         control_high: Optional[list] = None,
         state_bounds_idx: Optional[list] = None,
@@ -90,24 +87,12 @@ class NMPCControl(BaseControl):
         state_high: Optional[list] = None,
         cost_running: Optional[Callable] = None,
         cost_terminal: Optional[Callable] = None,
+        **kwargs
     ):
         """
         Initialize NMPCControl.
 
         Args:
-            action_dim: Dimension of control input
-            params: Configuration parameters dictionary containing:
-                - horizon: Total prediction horizon time [s]
-                - time_steps: Timestep [s]
-                - qp_solver: QP solver type
-                - hessian_approx: Hessian approximation method
-                - integrator_type: Integration method
-                - sim_method_num_stages: Number of stages for integrator
-                - nlp_solver_type: NLP solver type
-                - nlp_solver_max_iter: Max NLP iterations
-                - qp_solver_iter_max: Max QP iterations
-                - tol: Solver tolerance
-            dynamics: System dynamics object (AffineInControlDynamics)
             control_low: Lower bounds for control inputs
             control_high: Upper bounds for control inputs
             state_bounds_idx: Indices of bounded states
@@ -115,8 +100,10 @@ class NMPCControl(BaseControl):
             state_high: Upper bounds for bounded states
             cost_running: Running cost function f(x, u) -> scalar (JAX)
             cost_terminal: Terminal cost function f(x) -> scalar (JAX)
+            **kwargs: Passed via cooperative inheritance (action_dim, params, dynamics)
         """
-        # Default params
+        # Default params for NMPC
+        params = kwargs.get('params', None)
         default_params = {
             # Horizon settings
             'horizon': 2.0,
@@ -133,8 +120,9 @@ class NMPCControl(BaseControl):
         }
         if params is not None:
             default_params.update(params)
+        kwargs['params'] = default_params
 
-        super().__init__(action_dim, default_params, dynamics)
+        super().__init__(**kwargs)
 
         # Control bounds
         if control_low is not None and control_high is not None:
@@ -742,95 +730,45 @@ class NMPCControl(BaseControl):
         return self._solver
 
 
-class QuadraticNMPCControl(NMPCControl):
+class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
     """
     NMPC Control with quadratic (LINEAR_LS) cost.
 
     Uses Q, R matrices for cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
 
-    Attributes:
-        _Q: State cost matrix tuple
-        _R: Control cost matrix tuple
-        _Q_e: Terminal state cost matrix tuple
-        _x_ref: Reference state tuple
+    Cost matrices are stored as Callable functions for consistency with other
+    controllers in the codebase. Use assign_cost_matrices() to set the matrices.
+
+    Uses cooperative multiple inheritance:
+    - QuadraticCostMixin: Q, R, Q_e, x_ref cost matrices
+    - NMPCControl: NMPC solving with acados
     """
 
-    # Cost matrices (stored as tuples for static fields)
-    _Q: Optional[tuple] = eqx.field(static=True)
-    _R: Optional[tuple] = eqx.field(static=True)
-    _Q_e: Optional[tuple] = eqx.field(static=True)
-    _x_ref: Optional[tuple] = eqx.field(static=True)
+    # Cost matrices as Callable for consistency with iLQR and QP controllers (static fields)
+    _Q: Optional[Callable] = eqx.field(static=True)
+    _R: Optional[Callable] = eqx.field(static=True)
+    _Q_e: Optional[Callable] = eqx.field(static=True)
+    _x_ref: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(
-        self,
-        action_dim: int,
-        params: Optional[dict] = None,
-        dynamics=None,
-        control_low: Optional[list] = None,
-        control_high: Optional[list] = None,
-        state_bounds_idx: Optional[list] = None,
-        state_low: Optional[list] = None,
-        state_high: Optional[list] = None,
-        Q: Optional[np.ndarray] = None,
-        R: Optional[np.ndarray] = None,
-        Q_e: Optional[np.ndarray] = None,
-        x_ref: Optional[np.ndarray] = None,
-    ):
+    def __init__(self, **kwargs):
         """
         Initialize QuadraticNMPCControl.
 
         Args:
-            action_dim: Dimension of control input
-            params: Configuration parameters dictionary
-            dynamics: System dynamics object (AffineInControlDynamics)
-            control_low: Lower bounds for control inputs
-            control_high: Upper bounds for control inputs
-            state_bounds_idx: Indices of bounded states
-            state_low: Lower bounds for bounded states
-            state_high: Upper bounds for bounded states
-            Q: State cost matrix (nx, nx)
-            R: Control cost matrix (nu, nu)
-            Q_e: Terminal state cost matrix (nx, nx), defaults to Q
-            x_ref: Reference state (nx,), defaults to zero
+            **kwargs: All args passed via cooperative inheritance
+                - Q, R, Q_e, x_ref: Handled by QuadraticCostMixin
+                - control_low, control_high, etc.: Handled by NMPCControl
+                - action_dim, params, dynamics: Handled by BaseControl
         """
-        # Initialize parent (without cost functions)
-        super().__init__(
-            action_dim=action_dim,
-            params=params,
-            dynamics=dynamics,
-            control_low=control_low,
-            control_high=control_high,
-            state_bounds_idx=state_bounds_idx,
-            state_low=state_low,
-            state_high=state_high,
-            cost_running=None,
-            cost_terminal=None,
-        )
+        # Initialize via cooperative inheritance (no cost_running/cost_terminal)
+        super().__init__(cost_running=None, cost_terminal=None, **kwargs)
 
-        # Cost matrices (convert to tuples for static fields)
-        self._Q = tuple(map(tuple, Q)) if Q is not None else None
-        self._R = tuple(map(tuple, R)) if R is not None else None
-        self._Q_e = tuple(map(tuple, Q_e)) if Q_e is not None else None
-        self._x_ref = tuple(x_ref) if x_ref is not None else None
+    @classmethod
+    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'QuadraticNMPCControl':
+        return cls(action_dim=action_dim, params=params)
 
     def _create_updated_instance(self, **kwargs):
         """Create new instance with updated fields."""
-        # Convert numpy arrays back if needed
-        Q = kwargs.get('Q', self._Q)
-        R = kwargs.get('R', self._R)
-        Q_e = kwargs.get('Q_e', self._Q_e)
-        x_ref = kwargs.get('x_ref', self._x_ref)
-
-        # Convert tuples back to numpy for constructor
-        if Q is not None and isinstance(Q, tuple):
-            Q = np.array(Q)
-        if R is not None and isinstance(R, tuple):
-            R = np.array(R)
-        if Q_e is not None and isinstance(Q_e, tuple):
-            Q_e = np.array(Q_e)
-        if x_ref is not None and isinstance(x_ref, tuple):
-            x_ref = np.array(x_ref)
-
         defaults = {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
@@ -840,50 +778,16 @@ class QuadraticNMPCControl(NMPCControl):
             'state_bounds_idx': list(self._state_bounds_idx) if self._has_state_bounds else None,
             'state_low': list(self._state_low) if self._has_state_bounds else None,
             'state_high': list(self._state_high) if self._has_state_bounds else None,
-            'Q': Q,
-            'R': R,
-            'Q_e': Q_e,
-            'x_ref': x_ref,
+            'Q': self._Q,
+            'R': self._R,
+            'Q_e': self._Q_e,
+            'x_ref': self._x_ref,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_cost_matrices(
-        self,
-        Q: np.ndarray,
-        R: np.ndarray,
-        Q_e: Optional[np.ndarray] = None,
-        x_ref: Optional[np.ndarray] = None
-    ) -> 'QuadraticNMPCControl':
-        """
-        Assign quadratic cost matrices.
-
-        Cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
-
-        Args:
-            Q: State cost matrix (nx, nx)
-            R: Control cost matrix (nu, nu)
-            Q_e: Terminal state cost matrix (nx, nx), defaults to Q
-            x_ref: Reference state (nx,), defaults to zero
-
-        Returns:
-            New QuadraticNMPCControl instance with cost matrices assigned
-        """
-        if Q_e is None:
-            Q_e = Q
-        return self._create_updated_instance(Q=Q, R=R, Q_e=Q_e, x_ref=x_ref)
-
-    def assign_reference(self, x_ref: np.ndarray) -> 'QuadraticNMPCControl':
-        """
-        Assign reference state for tracking.
-
-        Args:
-            x_ref: Reference state (nx,)
-
-        Returns:
-            New QuadraticNMPCControl instance with reference assigned
-        """
-        return self._create_updated_instance(x_ref=x_ref)
+    # assign_cost_matrices, assign_reference from QuadraticCostMixin
+    # Note: _get_quadratic_cost_func not used by NMPC (uses _setup_cost with acados LINEAR_LS)
 
     def _setup_cost(self, ocp: AcadosOcp, model: AcadosModel):
         """Setup LINEAR_LS cost function in OCP."""
@@ -897,13 +801,14 @@ class QuadraticNMPCControl(NMPCControl):
         ocp.cost.cost_type = "LINEAR_LS"
         ocp.cost.cost_type_e = "LINEAR_LS"
 
-        Q = np.array(self._Q)
-        R = np.array(self._R)
-        Q_e = np.array(self._Q_e) if self._Q_e is not None else Q
+        # Get matrices from callables
+        Q = np.array(self._Q())
+        R = np.array(self._R())
+        Q_e = np.array(self._Q_e()) if self._Q_e is not None else Q
 
         # Reference
         if self._x_ref is not None:
-            x_ref = np.array(self._x_ref)
+            x_ref = np.array(self._x_ref())
         else:
             x_ref = np.zeros(nx)
 

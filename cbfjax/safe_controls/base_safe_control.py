@@ -8,7 +8,6 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable, Optional, Any
-from abc import abstractmethod
 
 from ..controls.base_control import BaseControl
 from ..utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh
@@ -44,6 +43,8 @@ class BaseSafeControl(BaseControl):
     Extends BaseControl with barrier function for safety guarantees.
     This is the base class for all safe control methods.
 
+    Uses cooperative multiple inheritance pattern.
+
     Attributes:
         _barrier: Barrier function object for safety constraints
     """
@@ -51,23 +52,22 @@ class BaseSafeControl(BaseControl):
     # Safety-specific field
     _barrier: Any = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, params: Optional[dict] = None,
-                 dynamics=None, barrier=None):
+    def __init__(self, barrier=None, **kwargs):
         """
         Initialize BaseSafeControl.
 
         Args:
-            action_dim: Dimension of control input
-            params: Configuration parameters dictionary
-            dynamics: System dynamics object (default: dummy)
             barrier: Barrier function object (default: dummy)
+            **kwargs: Passed to next class in MRO (includes action_dim, params, dynamics)
         """
-        # Set default parameters with buffer
+        # Add default buffer param
+        params = kwargs.get('params', None)
         default_params = {'buffer': 0.0}
         if params is not None:
             default_params.update(params)
+        kwargs['params'] = default_params
 
-        super().__init__(action_dim, default_params, dynamics)
+        super().__init__(**kwargs)
         self._barrier = barrier if barrier is not None else DummyBarrier()
 
     @classmethod
@@ -137,6 +137,8 @@ class BaseCBFSafeControl(BaseSafeControl):
     Extends BaseSafeControl with class-K alpha function for
     Control Barrier Function constraints and quadratic cost.
 
+    Uses cooperative multiple inheritance pattern.
+
     Attributes:
         _alpha: Class-K function for barrier constraint
         _Q: Function that computes cost matrix from state
@@ -148,22 +150,23 @@ class BaseCBFSafeControl(BaseSafeControl):
     _Q: Optional[Callable] = eqx.field(static=True)
     _c: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 Q: Optional[Callable] = None, c: Optional[Callable] = None):
+    def __init__(
+        self,
+        alpha: Optional[Callable] = None,
+        Q: Optional[Callable] = None,
+        c: Optional[Callable] = None,
+        **kwargs
+    ):
         """
         Initialize BaseCBFSafeControl.
 
         Args:
-            action_dim: Dimension of control input
             alpha: Class-K function for barrier constraint (default: identity)
-            params: Configuration parameters dictionary
-            dynamics: System dynamics object (default: dummy)
-            barrier: Barrier function object (default: dummy)
             Q: Function that computes cost matrix from state
             c: Function that computes cost vector from state
+            **kwargs: Passed to next class in MRO (includes action_dim, params, dynamics, barrier)
         """
-        super().__init__(action_dim, params, dynamics, barrier)
+        super().__init__(**kwargs)
         self._alpha = alpha if alpha is not None else (lambda x: x)
         self._Q = Q
         self._c = c
@@ -227,6 +230,8 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
     Extends BaseCBFSafeControl with a desired control function.
     The cost is automatically computed as deviation from the desired control.
 
+    Uses cooperative multiple inheritance pattern.
+
     Attributes:
         _desired_control: Function that computes desired control from state
     """
@@ -234,24 +239,15 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
     # Minimum intervention specific field
     _desired_control: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, desired_control: Optional[Callable] = None,
-                 dynamics=None, barrier=None, Q: Optional[Callable] = None,
-                 c: Optional[Callable] = None):
+    def __init__(self, desired_control: Optional[Callable] = None, **kwargs):
         """
         Initialize BaseMinIntervSafeControl.
 
         Args:
-            action_dim: Dimension of control input
-            alpha: Class-K function for barrier constraint
-            params: Configuration parameters dictionary
             desired_control: Desired control function
-            dynamics: System dynamics object
-            barrier: Barrier function object
-            Q: Function that computes cost matrix from state
-            c: Function that computes cost vector from state
+            **kwargs: Passed to next class in MRO (includes action_dim, alpha, params, dynamics, barrier, Q, c)
         """
-        super().__init__(action_dim, alpha, params, dynamics, barrier, Q, c)
+        super().__init__(**kwargs)
         self._desired_control = desired_control
 
     @classmethod

@@ -6,7 +6,7 @@ Provides system dynamics implementations using JAX and Equinox.
 
 from .base_dynamic import AffineInControlDynamics, CustomDynamics
 from .unicycle import UnicycleDynamics
-from .double_integrator import DIDynamics
+from .double_integrator import DoubleIntegratorDynamics
 from .single_integrator import SingleIntegratorDynamics
 from .bicycle import BicycleDynamics
 from .inverted_pendulum import InvertedPendulumDynamics
@@ -16,7 +16,7 @@ __all__ = [
     "AffineInControlDynamics",
     "CustomDynamics",
     "UnicycleDynamics",
-    "DIDynamics",
+    "DoubleIntegratorDynamics",
     "SingleIntegratorDynamics",
     "BicycleDynamics",
     "InvertedPendulumDynamics",

@@ -30,15 +30,15 @@ class BackupSafeControl(InputConstQPSafeControl):
     # BackupBarrier configuration (stored from barrier.cfg)
     barrier_cfg: Any = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 Q=None, c=None, control_low=None, control_high=None,
-                 slacked: bool = False, slack_gain: float = 100.0,
-                 barrier_cfg=None):
-        """Initialize BackupSafeControl."""
-        super().__init__(action_dim, alpha, params, dynamics, barrier,
-                        Q, c, control_low, control_high, slacked, slack_gain)
+    def __init__(self, barrier_cfg=None, **kwargs):
+        """
+        Initialize BackupSafeControl with cooperative inheritance.
 
+        Args:
+            barrier_cfg: Barrier configuration dictionary
+            **kwargs: Passed via cooperative inheritance (control_low, control_high, slacked, slack_gain, alpha, Q, c, barrier, dynamics, action_dim, params)
+        """
+        super().__init__(**kwargs)
         self.barrier_cfg = barrier_cfg
 
     def _create_updated_instance(self, **kwargs):
@@ -264,24 +264,24 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
     """
     Minimum Intervention Backup Safe Control.
 
-    Combines backup control with minimum intervention QP-based safe control.
+    Combines backup control with minimum intervention QP-based safe control
+    using cooperative multiple inheritance.
     """
 
-    _desired_control: Any = eqx.field(static=True)
+    def __init__(self, **kwargs):
+        """
+        Initialize MinIntervBackupSafeControl with cooperative inheritance.
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 desired_control=None, Q=None, c=None, control_low=None, control_high=None,
-                 slacked: bool = False, slack_gain: float = 100.0,
-                 barrier_cfg=None):
-        """Initialize MinIntervBackupSafeControl."""
-        # Initialize BackupSafeControl (first parent)
-        BackupSafeControl.__init__(self, action_dim, alpha, params, dynamics, barrier,
-                                   Q, c, control_low, control_high, slacked, slack_gain,
-                                   barrier_cfg)
-
-        # Set desired_control (from second parent BaseMinIntervSafeControl)
-        self._desired_control = desired_control
+        Args:
+            **kwargs: All args passed via cooperative inheritance
+                - barrier_cfg: Handled by BackupSafeControl
+                - desired_control: Handled by BaseMinIntervSafeControl
+                - control_low, control_high: Handled by InputConstQPSafeControl
+                - slacked, slack_gain: Handled by QPSafeControl
+                - alpha, Q, c, barrier: Handled by BaseCBFSafeControl
+                - dynamics, action_dim, params: Handled by BaseControl
+        """
+        super().__init__(**kwargs)
 
     def _create_updated_instance(self, **kwargs):
         """

@@ -4,6 +4,10 @@ iLQR (Iterative Linear Quadratic Regulator) Control using trajax.
 This module provides iLQR controllers where dynamics and cost functions are
 defined in JAX and solved using trajax's iLQR implementation.
 
+Uses cooperative multiple inheritance pattern where all classes:
+- Accept **kwargs and pass them up via super().__init__(**kwargs)
+- Extract only the parameters they need
+
 Classes:
     iLQRControl: Base iLQR controller with general cost (unconstrained)
     QuadraticiLQRControl: iLQR with quadratic cost (Q, R matrices)
@@ -18,7 +22,7 @@ from typing import Callable, Optional, Tuple
 
 from trajax.optimizers import ilqr, constrained_ilqr
 
-from .base_control import BaseControl
+from .base_control import BaseControl, QuadraticCostMixin
 
 
 class iLQRControl(BaseControl):
@@ -26,7 +30,7 @@ class iLQRControl(BaseControl):
     Iterative Linear Quadratic Regulator using trajax (unconstrained).
 
     Takes only cost and dynamics. No control or state bounds.
-    Fully JIT-compatible.
+    Fully JIT-compatible. Uses cooperative multiple inheritance.
 
     Params:
         params = {
@@ -43,13 +47,16 @@ class iLQRControl(BaseControl):
 
     _cost_func: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(
-        self,
-        action_dim: int,
-        params: Optional[dict] = None,
-        dynamics=None,
-        cost_func: Optional[Callable] = None,
-    ):
+    def __init__(self, cost_func: Optional[Callable] = None, **kwargs):
+        """
+        Initialize iLQRControl.
+
+        Args:
+            cost_func: Cost function f(x, u, t) -> scalar
+            **kwargs: Passed to next class in MRO (includes action_dim, params, dynamics)
+        """
+        # Set default iLQR params
+        params = kwargs.get('params', None)
         default_params = {
             'horizon': 2.0,
             'time_steps': 0.04,
@@ -65,8 +72,9 @@ class iLQRControl(BaseControl):
         }
         if params is not None:
             default_params.update(params)
+        kwargs['params'] = default_params
 
-        super().__init__(action_dim, default_params, dynamics)
+        super().__init__(**kwargs)
         self._cost_func = cost_func
 
     @classmethod
@@ -147,8 +155,8 @@ class iLQRControl(BaseControl):
         return X, U_opt, info
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, float]:
-        """Compute optimal control for single state. Returns (u, objective)."""
+    def _optimal_control_single(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
+        """Compute optimal control for single state. Returns (u, info_dict)."""
         X, U, info = self._solve_ilqr_single(x)
         return U[0], info
 
@@ -174,32 +182,30 @@ class iLQRControl(BaseControl):
         X, U, _ = self._solve_ilqr_single(x)
         return X, U
 
-class QuadraticiLQRControl(iLQRControl):
+class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
     """
     iLQR with quadratic cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
+
+    Uses cooperative multiple inheritance. QuadraticCostMixin provides Q, R fields.
     """
 
-    _Q: Optional[jnp.ndarray]
-    _R: Optional[jnp.ndarray]
-    _Q_e: Optional[jnp.ndarray]
-    _x_ref: Optional[jnp.ndarray]
+    # Cost matrices as Callable for JIT compatibility (static fields)
+    _Q: Optional[Callable] = eqx.field(static=True)
+    _R: Optional[Callable] = eqx.field(static=True)
+    _Q_e: Optional[Callable] = eqx.field(static=True)
+    _x_ref: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(
-        self,
-        action_dim: int,
-        params: Optional[dict] = None,
-        dynamics=None,
-        Q: Optional[jnp.ndarray] = None,
-        R: Optional[jnp.ndarray] = None,
-        Q_e: Optional[jnp.ndarray] = None,
-        x_ref: Optional[jnp.ndarray] = None,
-    ):
-        super().__init__(action_dim=action_dim, params=params, dynamics=dynamics, cost_func=None)
+    def __init__(self, **kwargs):
+        """
+        Initialize QuadraticiLQRControl.
 
-        self._Q = Q
-        self._R = R
-        self._Q_e = Q_e
-        self._x_ref = x_ref
+        Args:
+            **kwargs: All args passed via cooperative inheritance
+                - Q, R, Q_e, x_ref: Handled by QuadraticCostMixin
+                - action_dim, params, dynamics: Handled by iLQRControl -> BaseControl
+        """
+        # QuadraticCostMixin.__init__ extracts Q, R, Q_e, x_ref and passes rest to iLQRControl
+        super().__init__(cost_func=None, **kwargs)
 
     def _create_updated_instance(self, **kwargs):
         defaults = {
@@ -214,35 +220,6 @@ class QuadraticiLQRControl(iLQRControl):
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_cost_matrices(self, Q: jnp.ndarray, R: jnp.ndarray,
-                            Q_e: Optional[jnp.ndarray] = None,
-                            x_ref: Optional[jnp.ndarray] = None) -> 'QuadraticiLQRControl':
-        if Q_e is None:
-            Q_e = Q
-        return self._create_updated_instance(Q=Q, R=R, Q_e=Q_e, x_ref=x_ref)
-
-    def assign_reference(self, x_ref: jnp.ndarray) -> 'QuadraticiLQRControl':
-        return self._create_updated_instance(x_ref=x_ref)
-
-    def _get_quadratic_cost_func(self) -> Callable:
-        """Build quadratic cost function from Q, R matrices."""
-        assert self._Q is not None and self._R is not None, "Cost matrices must be assigned"
-        Q = self._Q
-        R = self._R
-        Q_e = self._Q_e if self._Q_e is not None else Q
-        T = self.N_horizon
-        x_ref = self._x_ref if self._x_ref is not None else jnp.zeros(Q.shape[0])
-
-        def cost(x, u, t):
-            x_err = x - x_ref
-            return jax.lax.cond(
-                t == T,
-                lambda: 0.5 * x_err @ Q_e @ x_err,
-                lambda: 0.5 * x_err @ Q @ x_err + 0.5 * u @ R @ u
-            )
-
-        return cost
-
     def _get_cost(self) -> Callable:
         """Override to return quadratic cost."""
         return self._get_quadratic_cost_func()
@@ -252,7 +229,7 @@ class ConstrainediLQRControl(iLQRControl):
     """
     Constrained iLQR with control bounds and state bounds (box constraints).
 
-    Inherits from iLQRControl and adds constraint handling via trajax's constrained_ilqr.
+    Uses cooperative multiple inheritance and trajax's constrained_ilqr.
 
     Additional params:
         'maxiter_al': 20,
@@ -274,17 +251,26 @@ class ConstrainediLQRControl(iLQRControl):
 
     def __init__(
         self,
-        action_dim: int,
-        params: Optional[dict] = None,
-        dynamics=None,
-        cost_func: Optional[Callable] = None,
         control_low: Optional[list] = None,
         control_high: Optional[list] = None,
         state_bounds_idx: Optional[list] = None,
         state_low: Optional[list] = None,
         state_high: Optional[list] = None,
+        **kwargs
     ):
+        """
+        Initialize ConstrainediLQRControl.
+
+        Args:
+            control_low: Lower bounds for control inputs
+            control_high: Upper bounds for control inputs
+            state_bounds_idx: Indices of bounded states
+            state_low: Lower bounds for bounded states
+            state_high: Upper bounds for bounded states
+            **kwargs: Passed to next class in MRO (includes action_dim, params, dynamics, cost_func)
+        """
         # Add constrained iLQR specific params
+        params = kwargs.get('params', None)
         constrained_params = {
             'maxiter_al': 20,
             'constraints_threshold': 1e-4,
@@ -293,8 +279,9 @@ class ConstrainediLQRControl(iLQRControl):
         }
         if params is not None:
             constrained_params.update(params)
+        kwargs['params'] = constrained_params
 
-        super().__init__(action_dim=action_dim, params=constrained_params, dynamics=dynamics, cost_func=cost_func)
+        super().__init__(**kwargs)
 
         # Control bounds
         if control_low is not None and control_high is not None:
@@ -424,47 +411,30 @@ class ConstrainediLQRControl(iLQRControl):
         }
 
 
-class QuadraticConstrainediLQRControl(ConstrainediLQRControl):
+class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl):
     """
     Constrained iLQR with quadratic cost and box constraints.
+
+    Uses cooperative multiple inheritance. QuadraticCostMixin provides Q, R fields.
     """
 
-    _Q: Optional[jnp.ndarray]
-    _R: Optional[jnp.ndarray]
-    _Q_e: Optional[jnp.ndarray]
-    _x_ref: Optional[jnp.ndarray]
+    # Cost matrices as Callable for JIT compatibility (static fields)
+    _Q: Optional[Callable] = eqx.field(static=True)
+    _R: Optional[Callable] = eqx.field(static=True)
+    _Q_e: Optional[Callable] = eqx.field(static=True)
+    _x_ref: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(
-        self,
-        action_dim: int,
-        params: Optional[dict] = None,
-        dynamics=None,
-        control_low: Optional[list] = None,
-        control_high: Optional[list] = None,
-        state_bounds_idx: Optional[list] = None,
-        state_low: Optional[list] = None,
-        state_high: Optional[list] = None,
-        Q: Optional[jnp.ndarray] = None,
-        R: Optional[jnp.ndarray] = None,
-        Q_e: Optional[jnp.ndarray] = None,
-        x_ref: Optional[jnp.ndarray] = None,
-    ):
-        super().__init__(
-            action_dim=action_dim,
-            params=params,
-            dynamics=dynamics,
-            cost_func=None,
-            control_low=control_low,
-            control_high=control_high,
-            state_bounds_idx=state_bounds_idx,
-            state_low=state_low,
-            state_high=state_high,
-        )
+    def __init__(self, **kwargs):
+        """
+        Initialize QuadraticConstrainediLQRControl.
 
-        self._Q = Q
-        self._R = R
-        self._Q_e = Q_e
-        self._x_ref = x_ref
+        Args:
+            **kwargs: All args passed via cooperative inheritance
+                - Q, R, Q_e, x_ref: Handled by QuadraticCostMixin
+                - control_low, control_high, etc.: Handled by ConstrainediLQRControl
+                - action_dim, params, dynamics: Handled by BaseControl
+        """
+        super().__init__(cost_func=None, **kwargs)
 
     def _create_updated_instance(self, **kwargs):
         defaults = {
@@ -483,35 +453,6 @@ class QuadraticConstrainediLQRControl(ConstrainediLQRControl):
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
-
-    def assign_cost_matrices(self, Q: jnp.ndarray, R: jnp.ndarray,
-                            Q_e: Optional[jnp.ndarray] = None,
-                            x_ref: Optional[jnp.ndarray] = None) -> 'QuadraticConstrainediLQRControl':
-        if Q_e is None:
-            Q_e = Q
-        return self._create_updated_instance(Q=Q, R=R, Q_e=Q_e, x_ref=x_ref)
-
-    def assign_reference(self, x_ref: jnp.ndarray) -> 'QuadraticConstrainediLQRControl':
-        return self._create_updated_instance(x_ref=x_ref)
-
-    def _get_quadratic_cost_func(self) -> Callable:
-        """Build quadratic cost function from Q, R matrices."""
-        assert self._Q is not None and self._R is not None, "Cost matrices must be assigned"
-        Q = self._Q
-        R = self._R
-        Q_e = self._Q_e if self._Q_e is not None else Q
-        T = self.N_horizon
-        x_ref = self._x_ref if self._x_ref is not None else jnp.zeros(Q.shape[0])
-
-        def cost(x, u, t):
-            x_err = x - x_ref
-            return jax.lax.cond(
-                t == T,
-                lambda: 0.5 * x_err @ Q_e @ x_err,
-                lambda: 0.5 * x_err @ Q @ x_err + 0.5 * u @ R @ u
-            )
-
-        return cost
 
     def _get_cost(self) -> Callable:
         """Override to return quadratic cost."""

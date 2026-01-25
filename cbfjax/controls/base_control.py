@@ -3,6 +3,10 @@ Base classes for control systems.
 
 This module provides base classes for implementing control algorithms
 with JAX JIT-compatible immutable patterns.
+
+Uses cooperative multiple inheritance pattern where all classes:
+- Accept **kwargs and pass them up via super().__init__(**kwargs)
+- Extract only the parameters they need
 """
 import jax
 import jax.numpy as jnp
@@ -37,8 +41,13 @@ class BaseControl(eqx.Module):
     _action_dim: int = eqx.field(static=True)
     _params: immutabledict = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, params: Optional[dict] = None,
-                 dynamics=None):
+    def __init__(
+        self,
+        action_dim: int,
+        params: Optional[dict] = None,
+        dynamics=None,
+        **kwargs  # Accept and ignore remaining kwargs (end of chain)
+    ):
         """
         Initialize BaseControl.
 
@@ -46,7 +55,10 @@ class BaseControl(eqx.Module):
             action_dim: Dimension of control input
             params: Configuration parameters dictionary
             dynamics: System dynamics object (default: dummy)
+            **kwargs: Ignored (cooperative inheritance terminator)
         """
+
+
         self._action_dim = action_dim
 
         # Set default parameters
@@ -145,6 +157,7 @@ class BaseControl(eqx.Module):
         """
         u, _ = self._optimal_control_single(x)
         return u
+
     def get_optimal_trajs(self, x0: jnp.ndarray, timestep: float = 0.001,
                           sim_time: float = 4.0, method: str = 'tsit5') -> jnp.ndarray:
         """
@@ -213,3 +226,107 @@ class BaseControl(eqx.Module):
         """Check if real dynamics assigned."""
         return not self._is_dummy_dynamics(self._dynamics)
 
+
+class QuadraticCostMixin:
+    """
+    Mixin providing quadratic cost functionality.
+
+    Uses cooperative multiple inheritance - extracts Q, R, Q_e, x_ref
+    and passes remaining kwargs up the chain.
+
+    Cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
+    """
+
+    # Type hints for fields (actual fields declared in using class)
+    _Q: Optional[Callable]
+    _R: Optional[Callable]
+    _Q_e: Optional[Callable]
+    _x_ref: Optional[Callable]
+
+    def __init__(
+        self,
+        Q: Optional[Callable] = None,
+        R: Optional[Callable] = None,
+        Q_e: Optional[Callable] = None,
+        x_ref: Optional[Callable] = None,
+        **kwargs
+    ):
+        """
+        Initialize QuadraticCostMixin.
+
+        Args:
+            Q: Callable returning state cost matrix (nx, nx)
+            R: Callable returning control cost matrix (nu, nu)
+            Q_e: Callable returning terminal cost matrix (nx, nx)
+            x_ref: Callable returning reference state (nx,)
+            **kwargs: Passed to next class in MRO
+        """
+        super().__init__(**kwargs)
+        self._Q = Q
+        self._R = R
+        self._Q_e = Q_e
+        self._x_ref = x_ref
+
+    def assign_cost_matrices(
+        self,
+        Q: Callable,
+        R: Callable,
+        Q_e: Optional[Callable] = None,
+        x_ref: Optional[Callable] = None
+    ):
+        """
+        Assign quadratic cost matrices as Callable functions.
+
+        Cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
+
+        Args:
+            Q: Callable returning state cost matrix (nx, nx)
+            R: Callable returning control cost matrix (nu, nu)
+            Q_e: Callable returning terminal cost matrix (nx, nx), defaults to Q
+            x_ref: Callable returning reference state (nx,)
+
+        Returns:
+            New instance with cost matrices assigned
+        """
+        if Q_e is None:
+            Q_e = Q
+        return self._create_updated_instance(Q=Q, R=R, Q_e=Q_e, x_ref=x_ref)
+
+    def assign_reference(self, x_ref: Callable):
+        """
+        Assign reference state as Callable.
+
+        Args:
+            x_ref: Callable returning reference state (nx,)
+
+        Returns:
+            New instance with reference assigned
+        """
+        return self._create_updated_instance(x_ref=x_ref)
+
+    def _get_quadratic_cost_func(self) -> Callable:
+        """
+        Build quadratic cost function from Q, R matrices.
+
+        Used by iLQR-based controllers. NMPC uses different cost setup.
+
+        Returns:
+            Cost function f(x, u, t) -> scalar
+        """
+        assert self._Q is not None and self._R is not None, "Cost matrices must be assigned"
+
+        Q = self._Q()
+        R = self._R()
+        Q_e = self._Q_e() if self._Q_e is not None else Q
+        T = self.N_horizon
+        x_ref = self._x_ref() if self._x_ref is not None else jnp.zeros(Q.shape[0])
+
+        def cost(x, u, t):
+            x_err = x - x_ref
+            return jax.lax.cond(
+                t == T,
+                lambda: 0.5 * x_err @ Q_e @ x_err,
+                lambda: 0.5 * x_err @ Q @ x_err + 0.5 * u @ R @ u
+            )
+
+        return cost

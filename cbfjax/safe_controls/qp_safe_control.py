@@ -34,31 +34,34 @@ class QPSafeControl(BaseCBFSafeControl):
     _slacked: bool = eqx.field(static=True)
     _slack_gain: float = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 Q=None, c=None, slacked: bool = False, slack_gain: float = 100.0):
+    def __init__(
+        self,
+        slacked: bool = False,
+        slack_gain: float = 100.0,
+        **kwargs
+    ):
         """
-        Initialize QPSafeControl.
+        Initialize QPSafeControl with cooperative inheritance.
 
         Args:
-            action_dim: Control input dimension
-            alpha: Class-K function for barrier constraint
-            params: Legacy parameter dictionary
-            dynamics: System dynamics object
-            barrier: Barrier function object
-            Q: Cost matrix function
-            c: Cost vector function
             slacked: Whether to use slack variables
             slack_gain: Gain for slack variables
+            **kwargs: Passed via cooperative inheritance (alpha, Q, c, barrier, dynamics, action_dim, params)
         """
         # Handle legacy params dict
+        params = kwargs.get('params', None)
         if params is not None:
             slacked = params.get('slacked', slacked)
             slack_gain = params.get('slack_gain', slack_gain)
 
-        # Initialize base class
-        super().__init__(action_dim, alpha, immutabledict({'slacked': slacked, 'slack_gain': slack_gain}),
-                        dynamics=dynamics, barrier=barrier, Q=Q, c=c)
+        # Ensure params contains QP-specific values
+        qp_params = {'slacked': slacked, 'slack_gain': slack_gain}
+        if params is not None:
+            qp_params.update(params)
+        kwargs['params'] = qp_params
+
+        # Initialize via cooperative inheritance
+        super().__init__(**kwargs)
 
         # Set static parameters
         self._slacked = slacked
@@ -331,18 +334,22 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
 
     Automatically sets up quadratic cost to minimize deviation from
     desired control: min ||u - u_d||^2
+
+    Uses cooperative multiple inheritance.
     """
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 desired_control=None, Q=None, c=None, slacked: bool = False, slack_gain: float = 100.0):
-        """Initialize MinIntervQPSafeControl."""
-        # Initialize BaseMinIntervSafeControl first
-        BaseMinIntervSafeControl.__init__(self, action_dim, alpha, params, desired_control,
-                                         dynamics, barrier, Q, c)
-        # Set QP-specific fields
-        self._slacked = slacked if params is None else params.get('slacked', slacked)
-        self._slack_gain = slack_gain if params is None else params.get('slack_gain', slack_gain)
+    def __init__(self, **kwargs):
+        """
+        Initialize MinIntervQPSafeControl with cooperative inheritance.
+
+        Args:
+            **kwargs: All args passed via cooperative inheritance
+                - desired_control: Handled by BaseMinIntervSafeControl
+                - slacked, slack_gain: Handled by QPSafeControl
+                - alpha, Q, c, barrier: Handled by BaseCBFSafeControl
+                - dynamics, action_dim, params: Handled by BaseControl
+        """
+        super().__init__(**kwargs)
 
     def _create_updated_instance(self, **kwargs):
         """
@@ -426,12 +433,25 @@ class InputConstQPSafeControl(QPSafeControl):
     _control_high: tuple = eqx.field(static=True)
     _has_control_bounds: bool = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 Q=None, c=None, control_low=None, control_high=None,
-                 slacked: bool = False, slack_gain: float = 100.0):
-        """Initialize InputConstQPSafeControl."""
-        super().__init__(action_dim, alpha, params, dynamics, barrier, Q, c, slacked, slack_gain)
+    def __init__(
+        self,
+        control_low=None,
+        control_high=None,
+        **kwargs
+    ):
+        """
+        Initialize InputConstQPSafeControl with cooperative inheritance.
+
+        Args:
+            control_low: Lower bounds for control inputs
+            control_high: Upper bounds for control inputs
+            **kwargs: Passed via cooperative inheritance (slacked, slack_gain, alpha, Q, c, barrier, dynamics, action_dim, params)
+        """
+        # Get action_dim for default bounds
+        action_dim = kwargs.get('action_dim', 1)
+
+        # Initialize via cooperative inheritance
+        super().__init__(**kwargs)
 
         # Set control bounds as tuples
         if control_low is not None and control_high is not None:
@@ -603,33 +623,22 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
     """
     Minimum Intervention Input-Constrained QP-based Safe Control.
 
-    Combines minimum intervention with input constraints.
+    Combines minimum intervention with input constraints using cooperative inheritance.
     """
 
-    # Input bounds
-    _control_low: tuple = eqx.field(static=True)
-    _control_high: tuple = eqx.field(static=True)
-    _has_control_bounds: bool = eqx.field(static=True)
+    def __init__(self, **kwargs):
+        """
+        Initialize MinIntervInputConstQPSafeControl with cooperative inheritance.
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 desired_control=None, Q=None, c=None, control_low=None, control_high=None,
-                 slacked: bool = False, slack_gain: float = 100.0):
-        """Initialize MinIntervInputConstQPSafeControl."""
-
-        MinIntervQPSafeControl.__init__(self, action_dim, alpha, params, dynamics,
-                                       barrier, desired_control, Q, c, slacked, slack_gain)
-
-        # Set control bounds as tuples
-        if control_low is not None and control_high is not None:
-            # Convert to tuples for static fields
-            self._control_low = tuple(control_low) if not isinstance(control_low, tuple) else control_low
-            self._control_high = tuple(control_high) if not isinstance(control_high, tuple) else control_high
-            self._has_control_bounds = True
-        else:
-            self._control_low = tuple([0.0] * action_dim)
-            self._control_high = tuple([0.0] * action_dim)
-            self._has_control_bounds = False
+        Args:
+            **kwargs: All args passed via cooperative inheritance
+                - control_low, control_high: Handled by InputConstQPSafeControl
+                - desired_control: Handled by MinIntervQPSafeControl
+                - slacked, slack_gain: Handled by QPSafeControl
+                - alpha, Q, c, barrier: Handled by BaseCBFSafeControl
+                - dynamics, action_dim, params: Handled by BaseControl
+        """
+        super().__init__(**kwargs)
 
     def _create_updated_instance(self, **kwargs):
         """

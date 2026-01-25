@@ -161,7 +161,7 @@ Q_e = 100.0 * Q                                    # Terminal cost
 ilqr_controller = (
     QuadraticiLQRControl.create_empty(action_dim=nu, params=ilqr_params)
     .assign_dynamics(dynamics)
-    .assign_cost_matrices(Q, R, Q_e, x_ref)
+    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
 )
 
 print(f"  - Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")

@@ -13,7 +13,7 @@ from immutabledict import immutabledict
 
 from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
 from ..barriers.composite_barrier import SoftCompositionBarrier
-from ..dynamics.base_dynamic import AffineInControlDynamics
+from ..dynamics.base_dynamic import AffineInControlDynamics, CustomDynamics
 from cbfjax.utils.utils import make_higher_order_lie_deriv_series, lie_deriv, update_dict_no_overwrite
 
 
@@ -21,7 +21,7 @@ class CFSafeControl(BaseCBFSafeControl):
     """
     Closed-Form Safe Control with full JAX JIT compatibility.
 
-    Uses complete immutability pattern with static fields and explicit constructors.
+    Uses complete immutability pattern with static fields and cooperative inheritance.
     All data structures are hashable and JAX JIT-compatible.
 
     Attributes:
@@ -37,37 +37,41 @@ class CFSafeControl(BaseCBFSafeControl):
     _softplus_gain: float = eqx.field(static=True)
     _buffer: float = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 Q=None, c=None, desired_control=None,
-                 slack_gain: float = 1e24, use_softplus: bool = False,
-                 softplus_gain: float = 2.0, buffer: float = 0.0):
+    def __init__(
+        self,
+        slack_gain: float = 1e24,
+        use_softplus: bool = False,
+        softplus_gain: float = 2.0,
+        buffer: float = 0.0,
+        **kwargs
+    ):
         """
-        Initialize CFSafeControl with explicit parameters.
+        Initialize CFSafeControl with cooperative inheritance.
 
         Args:
-            action_dim: Control input dimension
-            alpha: Class-K function for barrier constraint
-            params: Legacy parameter dictionary (deprecated)
-            dynamics: System dynamics object
-            barrier: Barrier function object
-            Q: Cost matrix function
-            c: Cost vector function
-            desired_control: Desired control function
             slack_gain: Slack variable gain
             use_softplus: Whether to use softplus activation
             softplus_gain: Softplus gain parameter
             buffer: Safety buffer
+            **kwargs: Passed via cooperative inheritance (alpha, Q, c, barrier, dynamics, action_dim, params)
         """
-        # Handle legacy params dict
+        # Handle legacy params dict extraction
+        params = kwargs.get('params', None)
         if params is not None:
             slack_gain = params.get('slack_gain', slack_gain)
             use_softplus = params.get('use_softplus', use_softplus)
             softplus_gain = params.get('softplus_gain', softplus_gain)
             buffer = params.get('buffer', buffer)
 
-        # Initialize base class with explicit constructor
-        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer}), dynamics, barrier, Q, c)
+        # Ensure buffer is in params for parent
+        if params is None:
+            kwargs['params'] = {'buffer': buffer}
+        else:
+            params['buffer'] = buffer
+            kwargs['params'] = params
+
+        # Initialize via cooperative inheritance
+        super().__init__(**kwargs)
 
         # Set static parameters
         self._slack_gain = slack_gain
@@ -208,7 +212,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
     """
     Minimum-Intervention Closed-Form Safe Control with full JAX JIT compatibility.
 
-    Implements minimum intervention control using the complete immutability pattern.
+    Implements minimum intervention control using cooperative inheritance.
     All methods return new instances following functional programming principles.
 
     Attributes:
@@ -224,35 +228,41 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
     _softplus_gain: float = eqx.field(static=True)
     _buffer: float = eqx.field(static=True)
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 desired_control=None,
-                 slack_gain: float = 1e24, use_softplus: bool = False,
-                 softplus_gain: float = 2.0, buffer: float = 0.0):
+    def __init__(
+        self,
+        slack_gain: float = 1e24,
+        use_softplus: bool = False,
+        softplus_gain: float = 2.0,
+        buffer: float = 0.0,
+        **kwargs
+    ):
         """
-        Initialize MinIntervCFSafeControl with explicit parameters.
+        Initialize MinIntervCFSafeControl with cooperative inheritance.
 
         Args:
-            action_dim: Control input dimension
-            alpha: Class-K function for barrier constraint
-            params: Legacy parameter dictionary (deprecated)
-            dynamics: System dynamics object
-            barrier: Barrier function object
-            desired_control: Desired control function
             slack_gain: Slack variable gain
             use_softplus: Whether to use softplus activation
             softplus_gain: Softplus gain parameter
             buffer: Safety buffer
+            **kwargs: Passed via cooperative inheritance (alpha, desired_control, barrier, dynamics, action_dim, params)
         """
-        # Handle legacy params dict
+        # Handle legacy params dict extraction
+        params = kwargs.get('params', None)
         if params is not None:
             slack_gain = params.get('slack_gain', slack_gain)
             use_softplus = params.get('use_softplus', use_softplus)
             softplus_gain = params.get('softplus_gain', softplus_gain)
             buffer = params.get('buffer', buffer)
 
-        # Initialize base class with explicit constructor
-        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer}), desired_control, dynamics, barrier)
+        # Ensure buffer is in params for parent
+        if params is None:
+            kwargs['params'] = {'buffer': buffer}
+        else:
+            params['buffer'] = buffer
+            kwargs['params'] = params
+
+        # Initialize via cooperative inheritance
+        super().__init__(**kwargs)
 
         # Set static parameters
         self._slack_gain = slack_gain
@@ -415,53 +425,65 @@ class InputConstCFSafeControl(CFSafeControl):
             return x
         return identity
 
-    def __init__(self, action_dim: int, alpha: Optional[Callable] = None,
-                 params: Optional[dict] = None, dynamics=None, barrier=None,
-                 Q=None, c=None, state_dyn=None, ac_dyn=None, ac_out_func=None,
-                 state_barrier=None, ac_barrier=None, ac_rel_deg=None,
-                 aux_desired_action=None, softmin_rho=None, softmax_rho=None,
-                 sigma=None, buffer=None, slack_gain=None, use_softplus=None,
-                 softplus_gain=None, desired_control=None):
-        # Add default parameters for input constrained control
+    def __init__(
+        self,
+        state_dyn=None,
+        ac_dyn=None,
+        ac_out_func=None,
+        state_barrier=None,
+        ac_barrier=None,
+        ac_rel_deg=None,
+        aux_desired_action=None,
+        softmin_rho: float = 1.0,
+        softmax_rho: float = 1.0,
+        sigma: tuple = (1.0,),
+        desired_control=None,
+        **kwargs
+    ):
+        """
+        Initialize InputConstCFSafeControl with cooperative inheritance.
+
+        Args:
+            state_dyn: State dynamics object
+            ac_dyn: Action dynamics object
+            ac_out_func: Action output function
+            state_barrier: State barrier(s)
+            ac_barrier: Action barrier(s)
+            ac_rel_deg: Action relative degree
+            aux_desired_action: Auxiliary desired action function
+            softmin_rho: Softmin rho parameter
+            softmax_rho: Softmax rho parameter
+            sigma: Sigma tuple for aux action computation
+            desired_control: Desired control function
+            **kwargs: Passed via cooperative inheritance (alpha, Q, c, barrier, dynamics, action_dim, params)
+        """
+        # Extract and merge params
+        params = kwargs.get('params', None)
         default_params = {
-            'slack_gain': 1e24,
-            'use_softplus': False,
-            'softplus_gain': 2.0,
-            'buffer': 0.0,
-            'softmin_rho': 1.0,
-            'softmax_rho': 1.0,
-            'sigma': (1.0,)  # Default sigma as tuple for JIT
+            'softmin_rho': softmin_rho,
+            'softmax_rho': softmax_rho,
+            'sigma': sigma,
         }
-
-        if params is None:
-            params = default_params
-        else:
-            params = update_dict_no_overwrite(params, default_params)
-
-        # Extract scalar parameters for static fields
-        buffer_val = buffer if buffer is not None else params['buffer']
-        slack_gain_val = slack_gain if slack_gain is not None else params['slack_gain']
-        use_softplus_val = use_softplus if use_softplus is not None else params['use_softplus']
-        softplus_gain_val = softplus_gain if softplus_gain is not None else params['softplus_gain']
-        softmin_rho_val = softmin_rho if softmin_rho is not None else params['softmin_rho']
-        softmax_rho_val = softmax_rho if softmax_rho is not None else params['softmax_rho']
-        sigma_val = sigma if sigma is not None else params['sigma']
+        if params is not None:
+            default_params.update(params)
+            softmin_rho = default_params.get('softmin_rho', softmin_rho)
+            softmax_rho = default_params.get('softmax_rho', softmax_rho)
+            sigma = default_params.get('sigma', sigma)
+        kwargs['params'] = default_params
 
         # Convert sigma to tuple if needed
-        if isinstance(sigma_val, (list, jnp.ndarray)):
-            sigma_val = tuple(float(x) for x in sigma_val)
-        elif not isinstance(sigma_val, tuple):
-            sigma_val = (float(sigma_val),)
+        if isinstance(sigma, (list, jnp.ndarray)):
+            sigma = tuple(float(x) for x in sigma)
+        elif not isinstance(sigma, tuple):
+            sigma = (float(sigma),)
 
-        # Initialize parent with explicit constructor pattern
-        super().__init__(action_dim, alpha, immutabledict({'buffer': buffer_val}),
-                        dynamics, barrier, Q, c, buffer_val, slack_gain_val,
-                        use_softplus_val, softplus_gain_val)
+        # Initialize via cooperative inheritance
+        super().__init__(**kwargs)
 
         # Set additional static fields
-        self._softmin_rho = float(softmin_rho_val)
-        self._softmax_rho = float(softmax_rho_val)
-        self._sigma = sigma_val
+        self._softmin_rho = float(softmin_rho)
+        self._softmax_rho = float(softmax_rho)
+        self._sigma = sigma
 
         # Initialize input constraint specific fields with defaults
         self._state_dyn = state_dyn
@@ -675,36 +697,45 @@ class InputConstCFSafeControl(CFSafeControl):
         aug_state_dim = self._state_dyn.state_dim + self._ac_dyn.state_dim
         aug_action_dim = self._state_dyn.action_dim
 
-        # Create augmented dynamics
-        dynamics = AffineInControlDynamics(params=None, state_dim=aug_state_dim, action_dim=aug_action_dim)
+        # Capture instance variables for closure
+        state_dyn = self._state_dyn
+        ac_dyn = self._ac_dyn
+        ac_out_func = self._ac_out_func
 
         def aug_f(x):
             """Augmented drift dynamics for single state."""
-            state_part = x[:self._state_dyn.state_dim]
-            action_part = x[self._state_dyn.state_dim:]
+            state_part = x[:state_dyn.state_dim]
+            action_part = x[state_dyn.state_dim:]
 
             # State dynamics with action output
-            action_output = self._ac_out_func(action_part)
-            state_rhs = self._state_dyn.rhs(state_part, action_output)
+            action_output = ac_out_func(action_part)
+            state_rhs = state_dyn.rhs(state_part, action_output)
 
             # Action dynamics
-            action_rhs = self._ac_dyn.f(action_part)
+            action_rhs = ac_dyn.f(action_part)
 
             return jnp.concatenate([state_rhs, action_rhs])
 
         def aug_g(x):
             """Augmented control dynamics for single state."""
-            action_part = x[self._state_dyn.state_dim:]
+            action_part = x[state_dyn.state_dim:]
 
             # Zero control influence on state part
-            state_g = jnp.zeros((self._state_dyn.state_dim, self._state_dyn.action_dim))
+            state_g = jnp.zeros((state_dyn.state_dim, state_dyn.action_dim))
 
             # Action dynamics control matrix
-            action_g = self._ac_dyn.g(action_part)
+            action_g = ac_dyn.g(action_part)
 
             return jnp.concatenate([state_g, action_g], axis=0)
 
-        dynamics = dynamics.set_f(aug_f).set_g(aug_g)
+        # Create augmented dynamics using CustomDynamics
+        dynamics = CustomDynamics(
+            state_dim=aug_state_dim,
+            action_dim=aug_action_dim,
+            f_func=aug_f,
+            g_func=aug_g,
+            params=None
+        )
 
         return self._create_updated_instance(dynamics=dynamics)
 

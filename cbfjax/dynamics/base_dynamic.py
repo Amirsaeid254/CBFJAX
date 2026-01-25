@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Optional, Callable, Dict, Any
-from abc import abstractmethod
 # Import configuration
 from cbfjax.config import DEFAULT_DTYPE
 

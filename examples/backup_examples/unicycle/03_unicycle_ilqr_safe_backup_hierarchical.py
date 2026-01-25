@@ -183,7 +183,7 @@ ilqr_controller = (
     QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
     .assign_dynamics(dynamics)
     .assign_control_bounds(list(control_bounds[0]), list(control_bounds[1]))
-    .assign_cost_matrices(Q, R, Q_e, x_ref)
+    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
     .assign_state_barrier(ilqr_barrier)  # Barrier as AL constraint
 )
 
