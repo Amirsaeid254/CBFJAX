@@ -652,18 +652,18 @@ class NMPCControl(BaseControl):
             }
             return u_batch, state, info_batch
 
-    def _optimal_control_for_ode(self, x: jnp.ndarray) -> jnp.ndarray:
+    def _make_optimal_control_for_ode(self) -> Callable:
         """
-        Internal method for ODE integration.
-
-        Args:
-            x: State vector (state_dim,) - single state
+        Create a stateless control function for ODE integration.
 
         Returns:
-            Control vector (action_dim,)
+            Function x -> u for ODE integration
         """
-        u, _ = self._optimal_control_single(x, self.get_init_state())
-        return u
+        init_state = self.get_init_state()
+        def control_for_ode(x):
+            u, _ = self._optimal_control_single(x, init_state)
+            return u
+        return control_for_ode
 
     # ==========================================
     # Trajectory Integration (ZOH)
@@ -733,6 +733,7 @@ class NMPCControl(BaseControl):
         # Process each initial state independently
         trajectories = []
         actions_list = []
+        init_state = self.get_init_state()
 
         for i in range(batch_size):
             traj = [s0[i]]
@@ -742,7 +743,7 @@ class NMPCControl(BaseControl):
             # Python loop over timesteps (cannot use lax.scan due to acados)
             for _ in range(num_steps - 1):
                 # Get optimal control from NMPC
-                u_opt, _ = self._optimal_control_single(current_state, self.get_init_state())
+                u_opt, _ = self._optimal_control_single(current_state, init_state)
 
                 # Store action
                 actions.append(u_opt)

@@ -203,18 +203,20 @@ class BaseControl(eqx.Module):
         x_batched = ensure_batch_dim(x)
         return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x_batched, state)
 
-    def _optimal_control_for_ode(self, x: jnp.ndarray) -> jnp.ndarray:
+    def _make_optimal_control_for_ode(self) -> Callable:
         """
-        Internal method for ODE integration (stateless wrapper).
+        Create a stateless control function for ODE integration.
 
-        Args:
-            x: State vector (state_dim,) - single state, not batched
+        Caches init_state once to avoid per-step overhead.
 
         Returns:
-            Control vector (action_dim,)
+            Function x -> u for ODE integration
         """
-        u, _ = self._optimal_control_single(x, self.get_init_state())
-        return u
+        init_state = self.get_init_state()
+        def control_for_ode(x):
+            u, _ = self._optimal_control_single(x, init_state)
+            return u
+        return control_for_ode
 
     def get_optimal_trajs(self, x0: jnp.ndarray, timestep: float = 0.001,
                           sim_time: float = 4.0, method: str = 'tsit5') -> jnp.ndarray:
@@ -230,10 +232,11 @@ class BaseControl(eqx.Module):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
+        action_func = self._make_optimal_control_for_ode()
         return get_trajs_from_state_action_func(
             x0=x0,
             dynamics=self._dynamics,
-            action_func=self._optimal_control_for_ode,
+            action_func=action_func,
             timestep=timestep,
             sim_time=sim_time,
             method=method
@@ -257,19 +260,35 @@ class BaseControl(eqx.Module):
         """
         init_ctrl_state = self.get_init_state()
 
-        def stateful_action_func(x, ctrl_state):
-            return self._optimal_control_single(x, ctrl_state)
+        if init_ctrl_state is not None:
+            # Stateful controller: thread state through scan
+            def stateful_action_func(x, ctrl_state):
+                return self._optimal_control_single(x, ctrl_state)
 
-        return get_trajs_from_state_action_func_zoh(
-            x0=x0,
-            dynamics=self._dynamics,
-            action_func=stateful_action_func,
-            timestep=timestep,
-            sim_time=sim_time,
-            intermediate_steps=intermediate_steps,
-            method=method,
-            init_ctrl_state=init_ctrl_state,
-        )
+            return get_trajs_from_state_action_func_zoh(
+                x0=x0,
+                dynamics=self._dynamics,
+                action_func=stateful_action_func,
+                timestep=timestep,
+                sim_time=sim_time,
+                intermediate_steps=intermediate_steps,
+                method=method,
+                init_ctrl_state=init_ctrl_state,
+            )
+        else:
+            # Stateless controller: use simple x -> u wrapper
+            action_func = self._make_optimal_control_for_ode()
+
+            return get_trajs_from_state_action_func_zoh(
+                x0=x0,
+                dynamics=self._dynamics,
+                action_func=action_func,
+                timestep=timestep,
+                sim_time=sim_time,
+                intermediate_steps=intermediate_steps,
+                method=method,
+                init_ctrl_state=None,
+            )
 
     def get_optimal_trajs_zoh_no_vmap(self, x0: jnp.ndarray, timestep: float = 0.001,
                                        sim_time: float = 4.0, intermediate_steps: int = 2,
@@ -289,19 +308,35 @@ class BaseControl(eqx.Module):
         """
         init_ctrl_state = self.get_init_state()
 
-        def stateful_action_func(x, ctrl_state):
-            return self._optimal_control_single(x, ctrl_state)
+        if init_ctrl_state is not None:
+            # Stateful controller: thread state through loop
+            def stateful_action_func(x, ctrl_state):
+                return self._optimal_control_single(x, ctrl_state)
 
-        return get_trajs_from_state_action_func_zoh_no_vmap(
-            x0=x0,
-            dynamics=self._dynamics,
-            action_func=stateful_action_func,
-            timestep=timestep,
-            sim_time=sim_time,
-            intermediate_steps=intermediate_steps,
-            method=method,
-            init_ctrl_state=init_ctrl_state,
-        )
+            return get_trajs_from_state_action_func_zoh_no_vmap(
+                x0=x0,
+                dynamics=self._dynamics,
+                action_func=stateful_action_func,
+                timestep=timestep,
+                sim_time=sim_time,
+                intermediate_steps=intermediate_steps,
+                method=method,
+                init_ctrl_state=init_ctrl_state,
+            )
+        else:
+            # Stateless controller: use simple x -> u wrapper
+            action_func = self._make_optimal_control_for_ode()
+
+            return get_trajs_from_state_action_func_zoh_no_vmap(
+                x0=x0,
+                dynamics=self._dynamics,
+                action_func=action_func,
+                timestep=timestep,
+                sim_time=sim_time,
+                intermediate_steps=intermediate_steps,
+                method=method,
+                init_ctrl_state=None,
+            )
 
     def _is_dummy_dynamics(self, dynamics) -> bool:
         """Check if dynamics is a dummy object."""
