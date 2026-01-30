@@ -76,30 +76,47 @@ class BackupSafeControl(InputConstQPSafeControl):
         """Assign dynamics."""
         return self._create_updated_instance(dynamics=dynamics)
 
-    def optimal_control(self, x: jnp.ndarray, ret_info: bool = False):
+    def optimal_control(self, x: jnp.ndarray, state=None):
         """
         Compute backup safe optimal control with automatic batch support.
 
         Args:
             x: State(s) - shape (state_dim,) or (batch, state_dim)
-            ret_info: If True, return additional info dictionary
+            state: Controller state (optional, uses get_init_state() if None)
 
         Returns:
-            If ret_info=False: Control(s) - shape (batch, action_dim)
-            If ret_info=True: Tuple (controls, info_dict)
+            Tuple (u, new_state)
         """
+        if state is None:
+            state = self.get_init_state()
         x = jnp.atleast_2d(x)
 
         # Vmap over batch dimension
-        u, info = jax.vmap(self._optimal_control_single)(x)
+        u, new_state = jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
 
-        if not ret_info:
-            return u
-        else:
-            return u, info
+        return u, new_state
+
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None):
+        """
+        Compute backup safe optimal control with diagnostic info.
+
+        Args:
+            x: State(s) - shape (state_dim,) or (batch, state_dim)
+            state: Controller state (optional, uses get_init_state() if None)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        if state is None:
+            state = self.get_init_state()
+        x = jnp.atleast_2d(x)
+
+        u, new_state, info = jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
+
+        return u, new_state, info
 
     @profile_jax("_safe_optimal_control_single")
-    def _optimal_control_single(self, x: jnp.ndarray):
+    def _optimal_control_single(self, x: jnp.ndarray, state=None):
         """
         Compute backup safe optimal control for SINGLE state.
 
@@ -108,9 +125,10 @@ class BackupSafeControl(InputConstQPSafeControl):
 
         Args:
             x: State vector (state_dim,)
+            state: Controller state (unused for backup, passed through)
 
         Returns:
-            Tuple (u, info) where info is a dict with constraint_at_u, u_star, ub_select, feas_fact, beta
+            Tuple (u, new_state)
         """
         # Get HOCBF and Lie derivatives for single state
         hocbf, Lf_hocbf, Lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
@@ -181,7 +199,71 @@ class BackupSafeControl(InputConstQPSafeControl):
         # Blend backup and safe controls
         u = (1 - beta) * ub_select + beta * u_star
 
-        # Compute constraint at u for info
+        return u, state
+
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None):
+        """
+        Compute backup safe optimal control with diagnostic info for SINGLE state.
+
+        Args:
+            x: State vector (state_dim,)
+            state: Controller state (unused for backup, passed through)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        # Get HOCBF and Lie derivatives for single state
+        hocbf, Lf_hocbf, Lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+
+        # Compute feasibility factor using LP
+        feas_fact = self._get_feasibility_factor(x, Lf_hocbf, Lg_hocbf, hocbf)
+
+        h_star_vals = self._barrier.get_h_stars(x)
+        action_num = h_star_vals.shape[0]
+
+        # Compute backup control selection
+        if action_num > 1:
+            ub_vals = jnp.stack([policy(x) for policy in self._barrier.backup_policies])
+            ub_blend = self._get_backup_blend(h_star_vals, ub_vals)
+            max_ind = jnp.argmax(h_star_vals)
+            max_val = jnp.max(h_star_vals)
+            ub_selected = ub_vals[max_ind]
+            ub_select = jnp.where(max_val > self.barrier_cfg['epsilon'], ub_blend, ub_selected)
+        else:
+            ub_select = self._barrier.backup_policies[0](x)
+
+        # Compute gamma blending factor
+        gamma = jnp.minimum(
+            (hocbf - self.barrier_cfg['epsilon']) / self.barrier_cfg['h_scale'],
+            feas_fact / self.barrier_cfg['feas_scale']
+        )
+
+        # Compute QP-based safe control
+        Q_matrix, c_vector = self._make_objective_single(x)
+
+        G_cbf = -jnp.atleast_2d(Lg_hocbf).reshape(1, -1)
+        h_cbf_val = Lf_hocbf + self._alpha(hocbf - self.barrier_cfg['epsilon'])
+        h_cbf = jnp.atleast_1d(h_cbf_val.squeeze())
+
+        G_low = -jnp.eye(self._action_dim)
+        h_low = -jnp.array(self._control_low)
+        G_high = jnp.eye(self._action_dim)
+        h_high = jnp.array(self._control_high)
+
+        G = jnp.vstack([G_cbf, G_low, G_high])
+        h = jnp.concatenate([h_cbf, h_low, h_high])
+
+        A, b = self._make_eq_const_single(x, Q_matrix)
+        u_qp = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
+        u_star = jnp.where(gamma >= 0, u_qp, ub_select)
+
+        beta = jnp.where(gamma > 0,
+                        jnp.where(gamma >= 1, 1.0, gamma),
+                        0.0)
+
+        u = (1 - beta) * ub_select + beta * u_star
+
         constraint_at_u = jnp.dot(G, u) - h
 
         info = {
@@ -191,7 +273,7 @@ class BackupSafeControl(InputConstQPSafeControl):
             'feas_fact': feas_fact,
             'beta': beta,
         }
-        return u, info
+        return u, state, info
 
     def _get_backup_blend(self, h_star_vals: jnp.ndarray, ub_vals: jnp.ndarray) -> jnp.ndarray:
         """
@@ -300,6 +382,7 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
             'dynamics': self._dynamics,
             'barrier': self._barrier,
             'desired_control': self._desired_control,
+            'desired_control_init_state': self._desired_control_init_state,
             'Q': self._Q,
             'c': self._c,
             'control_low': self._control_low if self._has_control_bounds else None,
@@ -311,9 +394,31 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_desired_control(self, desired_control: Callable) -> 'MinIntervBackupSafeControl':
-        """Assign desired control function."""
-        return self._create_updated_instance(desired_control=desired_control)
+    def assign_desired_control(self, desired_control) -> 'MinIntervBackupSafeControl':
+        """
+        Assign desired control function.
+
+        Accepts either:
+        - A controller object with _optimal_control_single and get_init_state methods
+        - A plain function f(x) -> u (wrapped to stateful form)
+        """
+        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
+            ctrl_obj = desired_control
+            def stateful_desired(x, state):
+                return ctrl_obj._optimal_control_single(x, state)
+            init_state_fn = ctrl_obj.get_init_state
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=init_state_fn,
+            )
+        else:
+            func = desired_control
+            def stateful_desired(x, state):
+                return func(x), state
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=lambda: None,
+            )
 
     @property
     def desired_control(self):
@@ -329,8 +434,8 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
         Returns:
             Tuple (Q, c) for QP objective
         """
-        # Get desired control
-        u_des = self._desired_control(x)
+        # Get desired control (stateless call for QP objective)
+        u_des, _ = self._desired_control(x, self.get_init_state())
 
         # Minimum intervention objective: min ||u - u_des||^2
         Q = jnp.eye(self._action_dim)

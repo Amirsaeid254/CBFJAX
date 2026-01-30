@@ -8,6 +8,11 @@ Uses cooperative multiple inheritance pattern where all classes:
 - Accept **kwargs and pass them up via super().__init__(**kwargs)
 - Extract only the parameters they need
 
+All controllers follow the stateful interface:
+- _optimal_control_single(x, state) -> (u, new_state)
+- get_init_state() -> ILQRState or ConstrainedILQRState
+- State contains warm-start U trajectory
+
 Classes:
     iLQRControl: Base iLQR controller with general cost (unconstrained)
     QuadraticiLQRControl: iLQR with quadratic cost (Q, R matrices)
@@ -23,6 +28,7 @@ from typing import Callable, Optional, Tuple
 from trajax.optimizers import ilqr, constrained_ilqr
 
 from .base_control import BaseControl, QuadraticCostMixin
+from .control_types import ILQRState, ConstrainedILQRState, ILQRInfo, ConstrainedILQRInfo
 
 
 class iLQRControl(BaseControl):
@@ -110,6 +116,10 @@ class iLQRControl(BaseControl):
     def N_horizon(self) -> int:
         return int(self.horizon / self.time_steps)
 
+    def get_init_state(self):
+        """Get initial controller state with zero U trajectory."""
+        return ILQRState(U=jnp.zeros((self.N_horizon, self._action_dim)))
+
     def _get_discrete_dynamics(self):
         """Get discrete dynamics wrapped for trajax (x, u, t) -> x_next."""
         discrete_rhs = self._dynamics.discrete_rhs
@@ -121,11 +131,8 @@ class iLQRControl(BaseControl):
         """Get cost function. Override in subclass to modify cost."""
         return self._cost_func
 
-    def _solve_ilqr_single(self, x0: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, dict]:
-        """Solve iLQR for single initial state."""
-        T = self.N_horizon
-        U_init = jnp.zeros((T, self._action_dim))
-
+    def _solve_ilqr_single(self, x0: jnp.ndarray, U_init: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, dict]:
+        """Solve iLQR for single initial state with given initial U trajectory."""
         dynamics = self._get_discrete_dynamics()
         cost = self._get_cost()
 
@@ -155,31 +162,60 @@ class iLQRControl(BaseControl):
         return X, U_opt, info
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
-        """Compute optimal control for single state. Returns (u, info_dict)."""
-        X, U, info = self._solve_ilqr_single(x)
-        return U[0], info
+    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState]:
+        """Compute optimal control for single state. Returns (u, new_state)."""
+        if state is None:
+            state = self.get_init_state()
+        X, U, info = self._solve_ilqr_single(x, state.U)
+        return U[0], ILQRState(U=U)
 
-    def optimal_control(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
+    @jax.jit
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState, ILQRInfo]:
+        """Compute optimal control with diagnostic info. Returns (u, new_state, info)."""
+        if state is None:
+            state = self.get_init_state()
+        X, U, info = self._solve_ilqr_single(x, state.U)
+        ilqr_info = ILQRInfo(
+            objective=info['objective'],
+            gradient=info['gradient'],
+            x_traj=info['x_traj'],
+            u_traj=info['u_traj'],
+        )
+        return U[0], ILQRState(U=U), ilqr_info
+
+    def optimal_control(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState]:
         """
         Compute optimal control with vmap for batching.
 
         Args:
             x: State(s) (state_dim,) or (batch, state_dim)
+            state: Controller state (optional, uses get_init_state() if None)
 
         Returns:
-            Tuple (u, info)
+            Tuple (u, new_state)
         """
+        if state is None:
+            state = self.get_init_state()
         if x.ndim == 1:
-            u, info = self._optimal_control_single(x)
-            return u, info
+            return self._optimal_control_single(x, state)
         else:
-            u_batch, info_batch = jax.vmap(self._optimal_control_single)(x)
-            return u_batch, info_batch
+            return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
+
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """Compute optimal control with diagnostic info."""
+        if state is None:
+            state = self.get_init_state()
+        if x.ndim == 1:
+            return self._optimal_control_single_with_info(x, state)
+        else:
+            return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
+
     @jax.jit
-    def get_predicted_trajectory(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    def get_predicted_trajectory(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """Get predicted trajectory (x_traj, u_traj)."""
-        X, U, _ = self._solve_ilqr_single(x)
+        if state is None:
+            state = self.get_init_state()
+        X, U, _ = self._solve_ilqr_single(x, state.U)
         return X, U
 
 class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
@@ -332,6 +368,10 @@ class ConstrainediLQRControl(iLQRControl):
         assert len(idx) == len(low) == len(high)
         return self._create_updated_instance(state_bounds_idx=idx, state_low=low, state_high=high)
 
+    def get_init_state(self):
+        """Get initial controller state with zero U trajectory."""
+        return ConstrainedILQRState(U=jnp.zeros((self.N_horizon, self._action_dim)))
+
     def _get_inequality_constraint(self) -> Optional[Callable]:
         """Build inequality constraint from control and state bounds."""
         constraints = []
@@ -372,10 +412,8 @@ class ConstrainediLQRControl(iLQRControl):
         """Get cost function. Override in subclass to modify cost."""
         return self._cost_func
 
-    def _solve_ilqr_single(self, x0: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, dict]:
-        T = self.N_horizon
-        U_init = jnp.zeros((T, self._action_dim))
-
+    def _solve_ilqr_single(self, x0: jnp.ndarray, U_init: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, dict]:
+        """Solve constrained iLQR for single initial state with given initial U trajectory."""
         dynamics = self._get_discrete_dynamics()
         cost = self._get_cost()
         inequality_constraint = self._get_inequality_constraint()
@@ -409,6 +447,47 @@ class ConstrainediLQRControl(iLQRControl):
             'x_traj': X,
             'u_traj': U_opt,
         }
+
+    @jax.jit
+    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ConstrainedILQRState]:
+        """Compute optimal control for single state. Returns (u, new_state)."""
+        if state is None:
+            state = self.get_init_state()
+        X, U, info = self._solve_ilqr_single(x, state.U)
+        return U[0], ConstrainedILQRState(U=U)
+
+    @jax.jit
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ConstrainedILQRState, ConstrainedILQRInfo]:
+        """Compute optimal control with diagnostic info. Returns (u, new_state, info)."""
+        if state is None:
+            state = self.get_init_state()
+        X, U, info = self._solve_ilqr_single(x, state.U)
+        cilqr_info = ConstrainedILQRInfo(
+            objective=info['objective'],
+            gradient=info['gradient'],
+            max_constraint_violation=info['max_constraint_violation'],
+            x_traj=info['x_traj'],
+            u_traj=info['u_traj'],
+        )
+        return U[0], ConstrainedILQRState(U=U), cilqr_info
+
+    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
+        """Compute optimal control with vmap for batching."""
+        if state is None:
+            state = self.get_init_state()
+        if x.ndim == 1:
+            return self._optimal_control_single(x, state)
+        else:
+            return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
+
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """Compute optimal control with diagnostic info."""
+        if state is None:
+            state = self.get_init_state()
+        if x.ndim == 1:
+            return self._optimal_control_single_with_info(x, state)
+        else:
+            return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
 
 
 class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl):

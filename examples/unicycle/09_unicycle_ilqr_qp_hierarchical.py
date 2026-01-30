@@ -169,12 +169,12 @@ x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
 # Test iLQR alone
 print("  Testing iLQR controller...")
-u_ilqr_test, info_ilqr = ilqr_controller.optimal_control(x0)
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0)
 print(f"    iLQR control: u = {np.array(u_ilqr_test)}")
 
 # Test QP safety filter (uses _optimal_control_single for single state)
 print("  Testing QP safety filter...")
-u_safe_test, info_qp = safety_filter._optimal_control_single(x0)
+u_safe_test, _ = safety_filter._optimal_control_single(x0)
 print(f"    Safe control: u = {np.array(u_safe_test)}")
 print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
 
@@ -215,7 +215,7 @@ time_array = np.linspace(0, sim_time, n_steps + 1)
 print("\nComputing control actions and analysis data...")
 
 # Compute safe actions (what was actually applied)
-u_safe_hist, info_safe_hist = safety_filter.optimal_control(x_hist[:-1])
+u_safe_hist, _ = safety_filter.optimal_control(x_hist[:-1])
 
 # Compute iLQR actions (what iLQR would have applied)
 u_ilqr_hist, _ = ilqr_controller.optimal_control(x_hist[:-1])

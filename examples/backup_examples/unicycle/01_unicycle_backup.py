@@ -225,7 +225,7 @@ traj = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = traj.shape[0] - 1
 time_array = np.linspace(0.0, sim_time, n_steps + 1)
 
-u_vals, info = safety_filter.optimal_control(traj, ret_info=True)
+u_vals, _, info = safety_filter.optimal_control_with_info(traj)
 
 # Compute desired controls for each state
 des_ctrls = jax.vmap(desired_control_func)(traj)

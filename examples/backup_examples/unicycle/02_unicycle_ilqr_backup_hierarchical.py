@@ -199,12 +199,12 @@ print("\nTesting controllers...")
 
 # Test iLQR alone
 print("  Testing iLQR controller...")
-u_ilqr_test, info_ilqr = ilqr_controller.optimal_control(x0)
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0)
 print(f"    iLQR control: u = {np.array(u_ilqr_test)}")
 
 # Test backup safety filter
 print("  Testing backup safety filter...")
-u_safe_test, info_backup = safety_filter._optimal_control_single(x0)
+u_safe_test, _ = safety_filter._optimal_control_single(x0)
 print(f"    Backup-safe control: u = {np.array(u_safe_test)}")
 print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
 
@@ -237,7 +237,7 @@ n_steps = traj.shape[0] - 1
 time_array = np.linspace(0.0, sim_time, n_steps + 1)
 
 # Get safe controls and info
-u_safe, info = safety_filter.optimal_control(traj, ret_info=True)
+u_safe, _, info = safety_filter.optimal_control_with_info(traj)
 
 # Get iLQR controls (what iLQR would have applied)
 u_ilqr, _ = ilqr_controller.optimal_control(traj)

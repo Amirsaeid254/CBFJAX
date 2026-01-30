@@ -7,6 +7,11 @@ with JAX JIT-compatible immutable patterns.
 Uses cooperative multiple inheritance pattern where all classes:
 - Accept **kwargs and pass them up via super().__init__(**kwargs)
 - Extract only the parameters they need
+
+All controllers follow the stateful interface pattern (like Optax):
+- _optimal_control_single(x, state) -> (u, new_state)
+- get_init_state() -> initial state pytree
+- State is threaded through jax.lax.scan during ZOH integration
 """
 import jax
 import jax.numpy as jnp
@@ -15,7 +20,11 @@ from typing import Callable, Optional, Any
 from abc import abstractmethod
 from immutabledict import immutabledict
 
-from ..utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh
+from ..utils.integration import (
+    get_trajs_from_state_action_func,
+    get_trajs_from_state_action_func_zoh,
+    get_trajs_from_state_action_func_zoh_no_vmap,
+)
 from ..utils.utils import ensure_batch_dim
 from ..dynamics.base_dynamic import DummyDynamics
 
@@ -27,6 +36,10 @@ class BaseControl(eqx.Module):
 
     This class provides the fundamental structure for control algorithms
     that optimize a given cost function.
+
+    All subclasses implement the stateful interface:
+    - _optimal_control_single(x, state) -> (u, new_state)
+    - get_init_state() -> initial controller state
 
     Attributes:
         _dynamics: System dynamics object
@@ -114,9 +127,17 @@ class BaseControl(eqx.Module):
         """
         return self._create_updated_instance(dynamics=dynamics)
 
+    def get_init_state(self):
+        """
+        Get initial controller state.
+
+        Returns:
+            Initial state pytree (None for stateless controllers)
+        """
+        return None
 
     @abstractmethod
-    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute optimal control for a single state.
 
@@ -124,30 +145,67 @@ class BaseControl(eqx.Module):
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (from get_init_state or previous call)
 
         Returns:
-            Tuple (u, info) where:
+            Tuple (u, new_state) where:
             - u: Control vector (action_dim,)
-            - info: Dictionary containing additional information
+            - new_state: Updated controller state
         """
         raise NotImplementedError
 
-    def optimal_control(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute optimal control with diagnostic info for a single state.
+
+        Default implementation calls _optimal_control_single and returns empty info.
+        Subclasses can override to provide diagnostic information.
+
+        Args:
+            x: Single state vector (state_dim,)
+            state: Controller state
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        u, new_state = self._optimal_control_single(x, state)
+        return u, new_state, {}
+
+    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute optimal control with automatic batch support.
 
         Args:
             x: State(s) (state_dim,) or (batch, state_dim)
+            state: Controller state (optional, uses get_init_state() if None)
 
         Returns:
-            Tuple (u, info) with control(s) shape (batch, action_dim)
+            Tuple (u, new_state) with control(s)
         """
+        if state is None:
+            state = self.get_init_state()
         x_batched = ensure_batch_dim(x)
-        return jax.vmap(self._optimal_control_single)(x_batched)
+        return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x_batched, state)
+
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute optimal control with diagnostic info.
+
+        Args:
+            x: State(s) (state_dim,) or (batch, state_dim)
+            state: Controller state (optional, uses get_init_state() if None)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        if state is None:
+            state = self.get_init_state()
+        x_batched = ensure_batch_dim(x)
+        return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x_batched, state)
 
     def _optimal_control_for_ode(self, x: jnp.ndarray) -> jnp.ndarray:
         """
-        Internal method for ODE integration.
+        Internal method for ODE integration (stateless wrapper).
 
         Args:
             x: State vector (state_dim,) - single state, not batched
@@ -155,7 +213,7 @@ class BaseControl(eqx.Module):
         Returns:
             Control vector (action_dim,)
         """
-        u, _ = self._optimal_control_single(x)
+        u, _ = self._optimal_control_single(x, self.get_init_state())
         return u
 
     def get_optimal_trajs(self, x0: jnp.ndarray, timestep: float = 0.001,
@@ -185,7 +243,7 @@ class BaseControl(eqx.Module):
                               sim_time: float = 4.0, intermediate_steps: int = 2,
                               method: str = 'tsit5') -> jnp.ndarray:
         """
-        Generate optimal trajectories using zero-order hold.
+        Generate optimal trajectories using zero-order hold with state threading.
 
         Args:
             x0: Initial states (batch, state_dim) or (state_dim,)
@@ -197,14 +255,52 @@ class BaseControl(eqx.Module):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
+        init_ctrl_state = self.get_init_state()
+
+        def stateful_action_func(x, ctrl_state):
+            return self._optimal_control_single(x, ctrl_state)
+
         return get_trajs_from_state_action_func_zoh(
             x0=x0,
             dynamics=self._dynamics,
-            action_func=self._optimal_control_for_ode,
+            action_func=stateful_action_func,
             timestep=timestep,
             sim_time=sim_time,
             intermediate_steps=intermediate_steps,
-            method=method
+            method=method,
+            init_ctrl_state=init_ctrl_state,
+        )
+
+    def get_optimal_trajs_zoh_no_vmap(self, x0: jnp.ndarray, timestep: float = 0.001,
+                                       sim_time: float = 4.0, intermediate_steps: int = 2,
+                                       method: str = 'tsit5') -> jnp.ndarray:
+        """
+        Generate optimal trajectories using ZOH with Python loop (non-vmappable).
+
+        Args:
+            x0: Initial states (batch, state_dim) or (state_dim,)
+            timestep: Control update timestep
+            sim_time: Total simulation time
+            intermediate_steps: Integration steps per control update
+            method: Integration method
+
+        Returns:
+            Trajectories (time_steps, batch, state_dim)
+        """
+        init_ctrl_state = self.get_init_state()
+
+        def stateful_action_func(x, ctrl_state):
+            return self._optimal_control_single(x, ctrl_state)
+
+        return get_trajs_from_state_action_func_zoh_no_vmap(
+            x0=x0,
+            dynamics=self._dynamics,
+            action_func=stateful_action_func,
+            timestep=timestep,
+            sim_time=sim_time,
+            intermediate_steps=intermediate_steps,
+            method=method,
+            init_ctrl_state=init_ctrl_state,
         )
 
     def _is_dummy_dynamics(self, dynamics) -> bool:

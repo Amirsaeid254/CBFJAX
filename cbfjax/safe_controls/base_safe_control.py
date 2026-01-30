@@ -3,6 +3,10 @@ Base classes for safe control using Control Barrier Functions.
 
 This module provides base classes for implementing safe control algorithms
 that guarantee system safety through barrier function constraints.
+
+All safe controllers follow the stateful interface:
+- _optimal_control_single(x, state) -> (u, new_state)
+- get_init_state() -> initial controller state
 """
 import jax
 import jax.numpy as jnp
@@ -72,28 +76,9 @@ class BaseSafeControl(BaseControl):
 
     @classmethod
     def create_empty(cls, action_dim: int, params: Optional[dict] = None):
-        """
-        Create an empty safe controller instance.
-
-        Args:
-            action_dim: Dimension of control input
-            params: Optional configuration parameters
-
-        Returns:
-            Empty controller instance ready for component assignment
-        """
         return cls(action_dim=action_dim, params=params)
 
     def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New instance of the same class with updated fields
-        """
         defaults = {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
@@ -104,15 +89,6 @@ class BaseSafeControl(BaseControl):
         return self.__class__(**defaults)
 
     def assign_state_barrier(self, barrier):
-        """
-        Assign state barrier to controller.
-
-        Args:
-            barrier: Barrier function object for safety constraints
-
-        Returns:
-            New controller instance with assigned barrier
-        """
         return self._create_updated_instance(barrier=barrier)
 
     def _is_dummy_barrier(self, barrier) -> bool:
@@ -137,12 +113,16 @@ class BaseCBFSafeControl(BaseSafeControl):
     Extends BaseSafeControl with class-K alpha function for
     Control Barrier Function constraints and quadratic cost.
 
+    The _Q and _c callables follow the stateful pattern:
+    - _Q: (x, state) -> (Q_matrix, new_state)
+    - _c: (x, state) -> (c_vector, new_state)
+
     Uses cooperative multiple inheritance pattern.
 
     Attributes:
         _alpha: Class-K function for barrier constraint
-        _Q: Function that computes cost matrix from state
-        _c: Function that computes cost vector from state
+        _Q: Stateful function (x, state) -> (Q_matrix, new_state)
+        _c: Stateful function (x, state) -> (c_vector, new_state)
     """
 
     # CBF-specific fields
@@ -162,9 +142,11 @@ class BaseCBFSafeControl(BaseSafeControl):
 
         Args:
             alpha: Class-K function for barrier constraint (default: identity)
-            Q: Function that computes cost matrix from state
-            c: Function that computes cost vector from state
-            **kwargs: Passed to next class in MRO (includes action_dim, params, dynamics, barrier)
+            Q: Stateful function (x, state) -> (Q_matrix, new_state),
+               or simple function x -> Q_matrix (auto-wrapped)
+            c: Stateful function (x, state) -> (c_vector, new_state),
+               or simple function x -> c_vector (auto-wrapped)
+            **kwargs: Passed to next class in MRO
         """
         super().__init__(**kwargs)
         self._alpha = alpha if alpha is not None else (lambda x: x)
@@ -174,29 +156,9 @@ class BaseCBFSafeControl(BaseSafeControl):
     @classmethod
     def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
                      params: Optional[dict] = None):
-        """
-        Create an empty CBF safe controller instance.
-
-        Args:
-            action_dim: Dimension of control input
-            alpha: Class-K function for barrier constraint
-            params: Optional configuration parameters
-
-        Returns:
-            Empty controller instance ready for component assignment
-        """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
     def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New instance of the same class with updated fields
-        """
         defaults = {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
@@ -214,8 +176,8 @@ class BaseCBFSafeControl(BaseSafeControl):
         Assign quadratic cost function.
 
         Args:
-            Q: Function that computes cost matrix from state
-            c: Function that computes cost vector from state
+            Q: Function x -> Q_matrix or (x, state) -> (Q_matrix, new_state)
+            c: Function x -> c_vector or (x, state) -> (c_vector, new_state)
 
         Returns:
             New controller instance with assigned cost
@@ -228,54 +190,41 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
     Base class for minimum intervention safe control.
 
     Extends BaseCBFSafeControl with a desired control function.
-    The cost is automatically computed as deviation from the desired control.
+    The desired control follows the stateful pattern:
+    - _desired_control: (x, state) -> (u, new_state)
 
     Uses cooperative multiple inheritance pattern.
 
     Attributes:
-        _desired_control: Function that computes desired control from state
+        _desired_control: Stateful desired control function
+        _desired_control_init_state: Callable returning init state for desired control
     """
 
-    # Minimum intervention specific field
+    # Minimum intervention specific fields
     _desired_control: Optional[Callable] = eqx.field(static=True)
+    _desired_control_init_state: Optional[Callable] = eqx.field(static=True)
 
-    def __init__(self, desired_control: Optional[Callable] = None, **kwargs):
+    def __init__(self, desired_control: Optional[Callable] = None,
+                 desired_control_init_state: Optional[Callable] = None, **kwargs):
         """
         Initialize BaseMinIntervSafeControl.
 
         Args:
-            desired_control: Desired control function
-            **kwargs: Passed to next class in MRO (includes action_dim, alpha, params, dynamics, barrier, Q, c)
+            desired_control: Stateful desired control (x, state) -> (u, new_state),
+                           or simple function x -> u (auto-wrapped by assign_desired_control)
+            desired_control_init_state: Callable returning init state for desired control
+            **kwargs: Passed to next class in MRO
         """
         super().__init__(**kwargs)
         self._desired_control = desired_control
+        self._desired_control_init_state = desired_control_init_state
 
     @classmethod
     def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
                      params: Optional[dict] = None):
-        """
-        Create an empty minimum intervention safe controller instance.
-
-        Args:
-            action_dim: Dimension of control input
-            alpha: Class-K function for barrier constraint
-            params: Optional configuration parameters
-
-        Returns:
-            Empty controller instance ready for component assignment
-        """
         return cls(action_dim=action_dim, alpha=alpha, params=params)
 
     def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New instance of the same class with updated fields
-        """
         defaults = {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
@@ -284,19 +233,51 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
             'barrier': self._barrier,
             'Q': self._Q,
             'c': self._c,
-            'desired_control': self._desired_control
+            'desired_control': self._desired_control,
+            'desired_control_init_state': self._desired_control_init_state,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_desired_control(self, desired_control: Callable):
+    def get_init_state(self):
+        """Get initial controller state (from desired controller if present)."""
+        if self._desired_control_init_state is not None:
+            return self._desired_control_init_state()
+        return None
+
+    def assign_desired_control(self, desired_control):
         """
         Assign desired control function.
 
+        Accepts either:
+        - A controller object with _optimal_control_single and get_init_state methods
+        - A plain function f(x) -> u (wrapped to stateful form)
+        - A stateful function f(x, state) -> (u, new_state)
+
         Args:
-            desired_control: Function that computes desired control
+            desired_control: Controller object or callable
 
         Returns:
             New controller instance with assigned desired control
         """
-        return self._create_updated_instance(desired_control=desired_control)
+        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
+            # Controller object -> wrap to stateful function
+            ctrl_obj = desired_control
+            def stateful_desired(x, state):
+                return ctrl_obj._optimal_control_single(x, state)
+            init_state_fn = ctrl_obj.get_init_state
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=init_state_fn,
+            )
+        else:
+            # Plain function or already stateful
+            # Try to detect if it's a simple x -> u function by checking arg count
+            # For safety, wrap as stateful with None state passthrough
+            func = desired_control
+            def stateful_desired(x, state):
+                return func(x), state
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=lambda: None,
+            )

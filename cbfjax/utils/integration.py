@@ -40,7 +40,7 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
     Args:
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
-        action_func: Function that computes control given state
+        action_func: Function that computes control given state (stateless: x -> u)
         timestep: Integration timestep (must be static)
         sim_time: Total simulation time (must be static)
         method: Integration method
@@ -89,18 +89,22 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
 
 def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Callable,
                                          timestep: float, sim_time: float, intermediate_steps: int = 2,
-                                         method: str = 'tsit5') -> jnp.ndarray:
+                                         method: str = 'tsit5', init_ctrl_state=None) -> jnp.ndarray:
     """
     Generate trajectories with zero-order hold control using diffrax.
+
+    Supports stateful action functions that return (u, new_state).
 
     Args:
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
-        action_func: Function that computes control given SINGLE state
+        action_func: Stateful function (x, ctrl_state) -> (u, new_ctrl_state),
+                     or stateless function x -> u (if init_ctrl_state is None)
         timestep: Control update timestep
         sim_time: Total simulation time
         intermediate_steps: Integration substeps per control update
         method: Integration method
+        init_ctrl_state: Initial controller state (None for stateless)
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
@@ -111,32 +115,65 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
     solver = get_solver(method)
     adjoint = diffrax.RecursiveCheckpointAdjoint()
 
-    def step_forward(carry, i):
-        current_state = carry
-        current_controls = jax.vmap(action_func)(current_state)
+    if init_ctrl_state is not None:
+        # Stateful action function: (x, ctrl_state) -> (u, new_ctrl_state)
+        def step_forward(carry, i):
+            current_state, ctrl_state = carry
+            current_controls, new_ctrl_state = jax.vmap(
+                action_func, in_axes=(0, None)
+            )(current_state, ctrl_state)
 
-        def ode_func(t, y, args):
-            controls = args
-            return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, controls)
+            def ode_func(t, y, args):
+                controls = args
+                return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, controls)
 
-        term = diffrax.ODETerm(ode_func)
-        solution = diffrax.diffeqsolve(
-            terms=term,
-            solver=solver,
-            t0=0.0,
-            t1=timestep,
-            dt0=timestep / intermediate_steps,
-            y0=current_state,
-            args=current_controls,
-            adjoint=adjoint,
-            saveat=diffrax.SaveAt(t1=True),
-            max_steps=intermediate_steps * 5,
-        )
+            term = diffrax.ODETerm(ode_func)
+            solution = diffrax.diffeqsolve(
+                terms=term,
+                solver=solver,
+                t0=0.0,
+                t1=timestep,
+                dt0=timestep / intermediate_steps,
+                y0=current_state,
+                args=current_controls,
+                adjoint=adjoint,
+                saveat=diffrax.SaveAt(t1=True),
+                max_steps=intermediate_steps * 5,
+            )
 
-        next_state = solution.ys[0]
-        return next_state, next_state
+            next_state = solution.ys[0]
+            return (next_state, new_ctrl_state), next_state
 
-    _, states_sequence = jax.lax.scan(step_forward, x0, jnp.arange(num_steps - 1))
+        _, states_sequence = jax.lax.scan(step_forward, (x0, init_ctrl_state), jnp.arange(num_steps - 1))
+    else:
+        # Stateless action function: x -> u (backward compatible)
+        def step_forward(carry, i):
+            current_state = carry
+            current_controls = jax.vmap(action_func)(current_state)
+
+            def ode_func(t, y, args):
+                controls = args
+                return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, controls)
+
+            term = diffrax.ODETerm(ode_func)
+            solution = diffrax.diffeqsolve(
+                terms=term,
+                solver=solver,
+                t0=0.0,
+                t1=timestep,
+                dt0=timestep / intermediate_steps,
+                y0=current_state,
+                args=current_controls,
+                adjoint=adjoint,
+                saveat=diffrax.SaveAt(t1=True),
+                max_steps=intermediate_steps * 5,
+            )
+
+            next_state = solution.ys[0]
+            return next_state, next_state
+
+        _, states_sequence = jax.lax.scan(step_forward, x0, jnp.arange(num_steps - 1))
+
     trajs = jnp.concatenate([jnp.expand_dims(x0, 0), states_sequence], axis=0)
 
     return trajs
@@ -402,9 +439,11 @@ def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_f
 
 def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, action_func: Callable,
                                                    timestep: float, sim_time: float, intermediate_steps: int = 2,
-                                                   method: str = 'tsit5') -> jnp.ndarray:
+                                                   method: str = 'tsit5', init_ctrl_state=None) -> jnp.ndarray:
     """
     Generate trajectories with zero-order hold control using diffrax with Python loop for batching.
+
+    Supports stateful action functions that return (u, new_state).
 
     Use this when action_func is not JAX-compatible (e.g., uses external libraries like CVXOPT).
     The ODE integration between control updates is JIT-compiled.
@@ -412,11 +451,13 @@ def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, acti
     Args:
         x0: Initial states (batch, state_dim) or (state_dim,)
         dynamics: Dynamics object with rhs method
-        action_func: Function that computes control given SINGLE state (not vmappable)
+        action_func: Stateful function (x, ctrl_state) -> (u, new_ctrl_state),
+                     or stateless function x -> u (if init_ctrl_state is None)
         timestep: Control update timestep
         sim_time: Total simulation time
         intermediate_steps: Integration substeps per control update
         method: Integration method
+        init_ctrl_state: Initial controller state (None for stateless)
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
@@ -449,20 +490,35 @@ def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, acti
         )
         return solution.ys[0]
 
-    # Process each initial state independently
-    trajectories = []
-    for i in range(batch_size):
-        traj = [x0[i]]
-        current_state = x0[i]
+    if init_ctrl_state is not None:
+        # Stateful action function: (x, ctrl_state) -> (u, new_ctrl_state)
+        trajectories = []
+        for i in range(batch_size):
+            traj = [x0[i]]
+            current_state = x0[i]
+            ctrl_state = init_ctrl_state
 
-        # Python loop over timesteps (cannot use lax.scan due to CVXOPT in action_func)
-        for _ in range(num_steps - 1):
-            current_control = action_func(current_state)
-            next_state = integrate_with_fixed_control(current_state, current_control)
-            traj.append(next_state)
-            current_state = next_state
+            for _ in range(num_steps - 1):
+                current_control, ctrl_state = action_func(current_state, ctrl_state)
+                next_state = integrate_with_fixed_control(current_state, current_control)
+                traj.append(next_state)
+                current_state = next_state
 
-        trajectories.append(jnp.stack(traj, axis=0))
+            trajectories.append(jnp.stack(traj, axis=0))
+    else:
+        # Stateless action function: x -> u (backward compatible)
+        trajectories = []
+        for i in range(batch_size):
+            traj = [x0[i]]
+            current_state = x0[i]
+
+            for _ in range(num_steps - 1):
+                current_control = action_func(current_state)
+                next_state = integrate_with_fixed_control(current_state, current_control)
+                traj.append(next_state)
+                current_state = next_state
+
+            trajectories.append(jnp.stack(traj, axis=0))
 
     # Stack trajectories: (time_steps, batch, state_dim)
     return jnp.stack(trajectories, axis=1)

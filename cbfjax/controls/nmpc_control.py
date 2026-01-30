@@ -478,17 +478,16 @@ class NMPCControl(BaseControl):
     # Control Methods
     # ==========================================
 
-    def _optimal_control_single(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
+    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, Any]:
         """
         Compute optimal control for a single state.
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (unused for NMPC, passed through)
 
         Returns:
-            Tuple (u, info) where:
-            - u: Control vector (action_dim,) as jnp.ndarray
-            - info: Dictionary with solver status, cost, and predicted trajectory
+            Tuple (u, new_state)
         """
         assert self._is_built, "Must call make() before computing control"
 
@@ -503,24 +502,44 @@ class NMPCControl(BaseControl):
         status = self._solver.solve()
         u_opt = self._solver.get(0, "u")
 
-        # Get cost
-        cost = self._solver.get_cost()
+        # Convert back to JAX
+        u_jax = jnp.array(u_opt)
 
-        # Get predicted trajectory from this solve
+        return u_jax, state
+
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, Any, dict]:
+        """
+        Compute optimal control with diagnostic info for a single state.
+
+        Args:
+            x: Single state vector (state_dim,)
+            state: Controller state (unused for NMPC, passed through)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        assert self._is_built, "Must call make() before computing control"
+
+        x_np = np.array(x)
+        self._solver.set(0, "lbx", x_np)
+        self._solver.set(0, "ubx", x_np)
+
+        status = self._solver.solve()
+        u_opt = self._solver.get(0, "u")
+        cost = self._solver.get_cost()
         x_traj, u_traj = self._extract_trajectory()
 
-        # Convert back to JAX
         u_jax = jnp.array(u_opt)
 
         info = {
             'status': status,
             'cost': cost,
             'solver_status': status,
-            'x_traj': x_traj,  # (N+1, nx)
-            'u_traj': u_traj,  # (N, nu)
+            'x_traj': x_traj,
+            'u_traj': u_traj,
         }
 
-        return u_jax, info
+        return u_jax, state, info
 
     def _extract_trajectory(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -575,7 +594,7 @@ class NMPCControl(BaseControl):
         # Extract and return trajectory
         return self._extract_trajectory()
 
-    def optimal_control(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, dict]:
+    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute optimal control with batch support.
 
@@ -584,18 +603,45 @@ class NMPCControl(BaseControl):
 
         Args:
             x: State(s) (state_dim,) or (batch, state_dim)
+            state: Controller state (optional, uses get_init_state() if None)
 
         Returns:
-            Tuple (u, info) with control(s)
+            Tuple (u, new_state)
         """
+        if state is None:
+            state = self.get_init_state()
         if x.ndim == 1:
-            return self._optimal_control_single(x)
+            return self._optimal_control_single(x, state)
         else:
             # Batch processing (sequential, not parallelized)
             u_list = []
+            for i in range(x.shape[0]):
+                u_i, state = self._optimal_control_single(x[i], state)
+                u_list.append(u_i)
+
+            u_batch = jnp.stack(u_list)
+            return u_batch, state
+
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute optimal control with diagnostic info.
+
+        Args:
+            x: State(s) (state_dim,) or (batch, state_dim)
+            state: Controller state (optional, uses get_init_state() if None)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        if state is None:
+            state = self.get_init_state()
+        if x.ndim == 1:
+            return self._optimal_control_single_with_info(x, state)
+        else:
+            u_list = []
             info_list = []
             for i in range(x.shape[0]):
-                u_i, info_i = self._optimal_control_single(x[i])
+                u_i, state, info_i = self._optimal_control_single_with_info(x[i], state)
                 u_list.append(u_i)
                 info_list.append(info_i)
 
@@ -604,7 +650,7 @@ class NMPCControl(BaseControl):
                 'status': jnp.array([info['status'] for info in info_list]),
                 'cost': jnp.array([info['cost'] for info in info_list]),
             }
-            return u_batch, info_batch
+            return u_batch, state, info_batch
 
     def _optimal_control_for_ode(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -616,7 +662,7 @@ class NMPCControl(BaseControl):
         Returns:
             Control vector (action_dim,)
         """
-        u, _ = self._optimal_control_single(x)
+        u, _ = self._optimal_control_single(x, self.get_init_state())
         return u
 
     # ==========================================
@@ -696,7 +742,7 @@ class NMPCControl(BaseControl):
             # Python loop over timesteps (cannot use lax.scan due to acados)
             for _ in range(num_steps - 1):
                 # Get optimal control from NMPC
-                u_opt, _ = self._optimal_control_single(current_state)
+                u_opt, _ = self._optimal_control_single(current_state, self.get_init_state())
 
                 # Store action
                 actions.append(u_opt)

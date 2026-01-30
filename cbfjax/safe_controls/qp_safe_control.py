@@ -145,18 +145,19 @@ class QPSafeControl(BaseCBFSafeControl):
         return self._create_updated_instance(Q=Q, c=c)
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute safe optimal control for a single state using QP.
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
 
         Returns:
-            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
+            Tuple (u, new_state)
         """
         if self._slacked:
-            return self._optimal_control_single_slacked(x)
+            return self._optimal_control_single_slacked(x, state)
 
         # Make objective for single state
         Q_matrix, c_vector = self._make_objective_single(x)
@@ -171,23 +172,42 @@ class QPSafeControl(BaseCBFSafeControl):
         # qpax expects: min 0.5 x^T Q x + c^T x s.t. Gx <= h, Ax = b
         u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
-        # Compute constraint at u for info
+        return u, state
+
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute safe optimal control with diagnostic info.
+
+        Args:
+            x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        if self._slacked:
+            return self._optimal_control_single_slacked_with_info(x, state)
+
+        Q_matrix, c_vector = self._make_objective_single(x)
+        G, h = self._make_ineq_const_single(x)
+        A, b = self._make_eq_const_single(x, Q_matrix)
+        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
-
         info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
-        return u, info
+        return u, state, info
 
-
-    def _optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single_slacked(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute safe optimal control with slack variables for single state.
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
 
         Returns:
-            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
+            Tuple (u, new_state)
         """
         # Make inequality constraints for slacked version
         G, h = self._make_ineq_const_slacked_single(x)
@@ -202,15 +222,34 @@ class QPSafeControl(BaseCBFSafeControl):
         # Solve QP for augmented decision variable [u, slack]
         res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
-        # Extract control and slack
+        # Extract control
+        u = res[:self._action_dim]
+
+        return u, state
+
+    def _optimal_control_single_slacked_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute safe optimal control with slack variables and diagnostic info.
+
+        Args:
+            x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        G, h = self._make_ineq_const_slacked_single(x)
+        num_constraints = h.shape[0]
+        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_constraints)
+        A, b = self._make_eq_const_single(x, Q_matrix)
+        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
         u = res[:self._action_dim]
         slack_vars = res[self._action_dim:]
-
-        # Compute constraint at solution
         constraint_at_u = jnp.dot(G, res) - h
 
         info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
-        return u, info
+        return u, state, info
 
     def _make_objective_single(self, x: jnp.ndarray) -> tuple:
         """
@@ -368,6 +407,7 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
             'dynamics': self._dynamics,
             'barrier': self._barrier,
             'desired_control': self._desired_control,
+            'desired_control_init_state': self._desired_control_init_state,
             'Q': self._Q,
             'c': self._c,
             'slacked': self._slacked,
@@ -376,27 +416,59 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_desired_control(self, desired_control: Callable) -> 'MinIntervQPSafeControl':
+    def assign_desired_control(self, desired_control) -> 'MinIntervQPSafeControl':
         """
         Assign desired control and automatically set up cost.
 
+        Accepts either:
+        - A controller object with _optimal_control_single and get_init_state methods
+        - A plain function f(x) -> u (wrapped to stateful form)
+
         Args:
-            desired_control: Function that computes desired control
+            desired_control: Controller object or callable
 
         Returns:
             New MinIntervQPSafeControl instance with cost set up
         """
-        # Create cost functions for minimum intervention
-        # min ||u - u_d||^2 = min u^T*I*u - 2*u_d^T*u + u_d^T*u_d
-        # We only need the parts with u: u^T*I*u - 2*u_d^T*u
-        Q_func = lambda x: 2.0 * jnp.eye(self._action_dim)
-        c_func = lambda x: -2.0 * desired_control(x)
+        action_dim = self._action_dim
 
-        return self._create_updated_instance(
-            desired_control=desired_control,
-            Q=Q_func,
-            c=c_func
-        )
+        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
+            # Controller object -> wrap to stateful Q/c
+            ctrl_obj = desired_control
+
+            def stateful_desired(x, state):
+                return ctrl_obj._optimal_control_single(x, state)
+
+            init_state_fn = ctrl_obj.get_init_state
+
+            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
+
+            def c_func(x):
+                u_d, _ = ctrl_obj._optimal_control_single(x, ctrl_obj.get_init_state())
+                return -2.0 * u_d
+
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=init_state_fn,
+                Q=Q_func,
+                c=c_func,
+            )
+        else:
+            # Plain function f(x) -> u
+            func = desired_control
+
+            def stateful_desired(x, state):
+                return func(x), state
+
+            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
+            c_func = lambda x: -2.0 * func(x)
+
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=lambda: None,
+                Q=Q_func,
+                c=c_func,
+            )
 
     def assign_cost(self, Q: Callable, c: Callable) -> 'MinIntervQPSafeControl':
         """
@@ -507,18 +579,19 @@ class InputConstQPSafeControl(QPSafeControl):
         return self._create_updated_instance(control_low=low, control_high=high)
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute safe optimal control for single state with input constraints.
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
 
         Returns:
-            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
+            Tuple (u, new_state)
         """
         if self._slacked:
-            return self._optimal_control_single_slacked(x)
+            return self._optimal_control_single_slacked(x, state)
 
         # Make objective for single state
         Q_matrix, c_vector = self._make_objective_single(x)
@@ -553,22 +626,59 @@ class InputConstQPSafeControl(QPSafeControl):
         # Solve QP
         u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
-        # Compute constraint at u for info
+        return u, state
+
+    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute safe optimal control with diagnostic info for input-constrained QP.
+
+        Args:
+            x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        if self._slacked:
+            return self._optimal_control_single_slacked_with_info(x, state)
+
+        Q_matrix, c_vector = self._make_objective_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf = jnp.atleast_1d(hocbf)
+        lf_hocbf = jnp.atleast_1d(lf_hocbf)
+        lg_hocbf = jnp.atleast_2d(lg_hocbf)
+
+        G_cbf = -lg_hocbf
+        h_cbf = (lf_hocbf + jax.vmap(self._alpha)(hocbf))
+
+        if self._has_control_bounds:
+            G_low = -jnp.eye(self._action_dim)
+            h_low = -jnp.array(self._control_low)
+            G_high = jnp.eye(self._action_dim)
+            h_high = jnp.array(self._control_high)
+            G = jnp.vstack([G_cbf, G_low, G_high])
+            h = jnp.concatenate([h_cbf, h_low, h_high])
+        else:
+            G, h = G_cbf, h_cbf
+
+        A, b = self._make_eq_const_single(x, Q_matrix)
+        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
-
         info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
-        return u, info
+        return u, state, info
 
-    def _optimal_control_single_slacked(self, x: jnp.ndarray) -> tuple:
+    def _optimal_control_single_slacked(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute safe optimal control with slack variables for single state.
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
 
         Returns:
-            Tuple (u, info) where info is a dict with slack_vars and constraint_at_u
+            Tuple (u, new_state)
         """
         # Get CBF constraints with slack (base method)
         G_cbf, h_cbf = super()._make_ineq_const_slacked_single(x)
@@ -600,15 +710,46 @@ class InputConstQPSafeControl(QPSafeControl):
         # Solve QP for augmented decision variable [u, slack]
         res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
-        # Extract control and slack
+        # Extract control
+        u = res[:self._action_dim]
+
+        return u, state
+
+    def _optimal_control_single_slacked_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+        """
+        Compute safe optimal control with slack variables and diagnostic info.
+
+        Args:
+            x: Single state vector (state_dim,)
+            state: Controller state (unused for QP, passed through)
+
+        Returns:
+            Tuple (u, new_state, info)
+        """
+        G_cbf, h_cbf = super()._make_ineq_const_slacked_single(x)
+        num_cbf_constraints = h_cbf.shape[0]
+        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_cbf_constraints)
+
+        if self._has_control_bounds:
+            num_slack = G_cbf.shape[1] - self._action_dim
+            G_low = jnp.hstack([-jnp.eye(self._action_dim), jnp.zeros((self._action_dim, num_slack))])
+            h_low = -jnp.array(self._control_low)
+            G_high = jnp.hstack([jnp.eye(self._action_dim), jnp.zeros((self._action_dim, num_slack))])
+            h_high = jnp.array(self._control_high)
+            G = jnp.vstack([G_cbf, G_low, G_high])
+            h = jnp.concatenate([h_cbf, h_low, h_high])
+        else:
+            G, h = G_cbf, h_cbf
+
+        A, b = self._make_eq_const_single(x, Q_matrix)
+        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+
         u = res[:self._action_dim]
         slack_vars = res[self._action_dim:]
-
-        # Compute constraint at solution
         constraint_at_u = jnp.dot(G, res) - h
 
         info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
-        return u, info
+        return u, state, info
 
     def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':
         """Assign state barrier."""
@@ -657,6 +798,7 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
             'dynamics': self._dynamics,
             'barrier': self._barrier,
             'desired_control': self._desired_control,
+            'desired_control_init_state': self._desired_control_init_state,
             'Q': self._Q,
             'c': self._c,
             'control_low': self._control_low if self._has_control_bounds else None,
@@ -667,14 +809,48 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def assign_desired_control(self, desired_control: Callable) -> 'MinIntervInputConstQPSafeControl':
-        """Assign desired control and set up cost."""
-        # Set up minimum intervention cost
-        Q_func = lambda x: 2.0 * jnp.eye(self._action_dim)
-        c_func = lambda x: -2.0 * desired_control(x)
+    def assign_desired_control(self, desired_control) -> 'MinIntervInputConstQPSafeControl':
+        """
+        Assign desired control and set up cost.
 
-        return self._create_updated_instance(
-            desired_control=desired_control,
-            Q=Q_func,
-            c=c_func
-        )
+        Accepts either:
+        - A controller object with _optimal_control_single and get_init_state methods
+        - A plain function f(x) -> u (wrapped to stateful form)
+        """
+        action_dim = self._action_dim
+
+        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
+            ctrl_obj = desired_control
+
+            def stateful_desired(x, state):
+                return ctrl_obj._optimal_control_single(x, state)
+
+            init_state_fn = ctrl_obj.get_init_state
+
+            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
+
+            def c_func(x):
+                u_d, _ = ctrl_obj._optimal_control_single(x, ctrl_obj.get_init_state())
+                return -2.0 * u_d
+
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=init_state_fn,
+                Q=Q_func,
+                c=c_func,
+            )
+        else:
+            func = desired_control
+
+            def stateful_desired(x, state):
+                return func(x), state
+
+            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
+            c_func = lambda x: -2.0 * func(x)
+
+            return self._create_updated_instance(
+                desired_control=stateful_desired,
+                desired_control_init_state=lambda: None,
+                Q=Q_func,
+                c=c_func,
+            )
