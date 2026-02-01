@@ -102,7 +102,11 @@ class CFSafeControl(BaseCBFSafeControl):
         return self._create_updated_instance(dynamics=dynamics)
 
     def assign_cost(self, Q: Callable, c: Callable) -> 'CFSafeControl':
-        return self._create_updated_instance(Q=Q, c=c)
+        def stateful_Q(x, state):
+            return Q(x), state
+        def stateful_c(x, state):
+            return c(x), state
+        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
@@ -115,9 +119,9 @@ class CFSafeControl(BaseCBFSafeControl):
         Returns:
             Tuple (u, new_state)
         """
-        # Q and c are single-state functions
-        Q_matrix = self._Q(x)  # (action_dim, action_dim)
-        c_vector = self._c(x)  # (action_dim,)
+        # Q and c are stateful functions
+        Q_matrix, state = self._Q(x, state)  # (action_dim, action_dim)
+        c_vector, state = self._c(x, state)  # (action_dim,)
         Q_inv = jnp.linalg.inv(Q_matrix)
 
         # Get barrier values and Lie derivatives (single state version for efficiency)
@@ -147,8 +151,8 @@ class CFSafeControl(BaseCBFSafeControl):
 
     def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
         """Compute safe optimal control with diagnostic info."""
-        Q_matrix = self._Q(x)
-        c_vector = self._c(x)
+        Q_matrix, state = self._Q(x, state)
+        c_vector, state = self._c(x, state)
         Q_inv = jnp.linalg.inv(Q_matrix)
 
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
@@ -167,11 +171,12 @@ class CFSafeControl(BaseCBFSafeControl):
         lam = num / den
         u = -Q_inv @ (c_vector - lg_hocbf * lam)
 
+        u_desired = -Q_inv @ c_vector
         slack_vars = hocbf * lam / self._slack_gain
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_desired)
         return u, state, info
 
     def eval_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -346,7 +351,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_d)
         return u, new_state, info
 
 
@@ -553,7 +558,7 @@ class InputConstCFSafeControl(CFSafeControl):
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_d)
         return u, state, info
 
     def _make_composed_barrier(self) -> 'InputConstCFSafeControl':
@@ -613,8 +618,8 @@ class InputConstCFSafeControl(CFSafeControl):
 
         def desired_control_func(x):
             state_part = x[:self._state_dyn.state_dim]
-            Q = self._Q(state_part)
-            c = self._c(state_part)
+            Q, _ = self._Q(state_part, None)
+            c, _ = self._c(state_part, None)
             return -jnp.linalg.inv(Q) @ c
 
         return self

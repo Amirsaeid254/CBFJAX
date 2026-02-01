@@ -62,8 +62,6 @@ ilqr_params = {
     'constraints_threshold': 1e-4,
     'penalty_init': 1e5,
     'penalty_update_rate': 500.0,
-    'log_barrier_gain': 0.0,
-    'safety_margin': 0.0,
 }
 
 # ============================================

@@ -198,16 +198,24 @@ time_array = np.linspace(0, sim_time, n_steps + 1)
 
 print("\nComputing control actions and analysis data...")
 
-# Safety filter is stateless — compute with info via vmap
-u_safe_hist, _, safe_info_hist = safety_filter.optimal_control_with_info(x_hist)
+# Thread safety filter state through trajectory via scan (threads iLQR warm-start)
+def safe_scan_step(state, x):
+    u, new_state, info = safety_filter._optimal_control_single_with_info(x, state)
+    return new_state, (u, info)
 
-# Thread iLQR state through trajectory for warm-started controls and predictions
+safe_init_state = safety_filter.get_init_state()
+_, (u_safe_hist, safe_info_hist) = jax.lax.scan(safe_scan_step, safe_init_state, x_hist)
+
+# Extract desired control from safety filter info (warm-started iLQR)
+u_ilqr_hist = safe_info_hist.u_desired
+
+# Thread iLQR state separately for predicted trajectories (visualization only)
 def ilqr_scan_step(state, x):
     u, new_state, info = ilqr_controller._optimal_control_single_with_info(x, state)
     return new_state, (u, info)
 
 ilqr_init_state = ilqr_controller.get_init_state()
-_, (u_ilqr_hist, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, x_hist)
+_, (_, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, x_hist)
 
 # Predicted trajectories from iLQR info
 pred_trajs_np = np.array(ilqr_info_hist.x_traj)

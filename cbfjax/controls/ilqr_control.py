@@ -24,6 +24,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable, Optional, Tuple
+from immutabledict import immutabledict
 
 from trajax.optimizers import ilqr, constrained_ilqr
 
@@ -78,7 +79,7 @@ class iLQRControl(BaseControl):
         }
         if params is not None:
             default_params.update(params)
-        kwargs['params'] = default_params
+        kwargs['params'] = immutabledict(default_params)
 
         super().__init__(**kwargs)
         self._cost_func = cost_func
@@ -90,7 +91,7 @@ class iLQRControl(BaseControl):
     def _create_updated_instance(self, **kwargs):
         defaults = {
             'action_dim': self._action_dim,
-            'params': dict(self._params) if self._params else None,
+            'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'cost_func': self._cost_func,
         }
@@ -240,7 +241,7 @@ class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
     def _create_updated_instance(self, **kwargs):
         defaults = {
             'action_dim': self._action_dim,
-            'params': dict(self._params) if self._params else None,
+            'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'Q': self._Q,
             'R': self._R,
@@ -309,7 +310,7 @@ class ConstrainediLQRControl(iLQRControl):
         }
         if params is not None:
             constrained_params.update(params)
-        kwargs['params'] = constrained_params
+        kwargs['params'] = immutabledict(constrained_params)
 
         super().__init__(**kwargs)
 
@@ -342,7 +343,7 @@ class ConstrainediLQRControl(iLQRControl):
     def _create_updated_instance(self, **kwargs):
         defaults = {
             'action_dim': self._action_dim,
-            'params': dict(self._params) if self._params else None,
+            'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'cost_func': self._cost_func,
             'control_low': list(self._control_low) if self._has_control_bounds else None,
@@ -526,7 +527,7 @@ class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl
     def _create_updated_instance(self, **kwargs):
         defaults = {
             'action_dim': self._action_dim,
-            'params': dict(self._params) if self._params else None,
+            'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'control_low': list(self._control_low) if self._has_control_bounds else None,
             'control_high': list(self._control_high) if self._has_control_bounds else None,

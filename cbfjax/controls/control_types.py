@@ -48,17 +48,20 @@ class CFInfo(NamedTuple):
     """Diagnostic info from closed-form safe control."""
     slack_vars: jnp.ndarray
     constraint_at_u: jnp.ndarray
+    u_desired: jnp.ndarray
 
 
 class QPInfo(NamedTuple):
     """Diagnostic info from QP-based safe control."""
     slack_vars: jnp.ndarray
     constraint_at_u: jnp.ndarray
+    u_desired: jnp.ndarray
 
 
 class BackupInfo(NamedTuple):
     """Diagnostic info from backup safe control."""
     constraint_at_u: jnp.ndarray
+    u_desired: jnp.ndarray
     u_star: jnp.ndarray
     ub_select: jnp.ndarray
     feas_fact: jnp.ndarray

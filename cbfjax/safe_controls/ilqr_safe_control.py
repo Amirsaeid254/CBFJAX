@@ -10,10 +10,10 @@ Classes:
     QuadraticiLQRSafeControl: Constrained iLQR with barrier constraints (quadratic cost)
 """
 
-import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable, Optional, Any
+from immutabledict import immutabledict
 
 from ..controls.ilqr_control import ConstrainediLQRControl
 from ..controls.base_control import QuadraticCostMixin
@@ -28,9 +28,7 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
     - ConstrainediLQRControl: iLQR solving with box constraints
     - BaseSafeControl: barrier interface
 
-    Additional params:
-        'log_barrier_gain': 0.0,  # Gain for optional log barrier cost penalty
-        'safety_margin': 0.0,     # Safety margin for barrier constraint
+    Barrier is enforced purely via augmented Lagrangian inequality constraint.
     """
 
     def __init__(self, **kwargs):
@@ -44,16 +42,6 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
                 - cost_func: Handled by iLQRControl
                 - action_dim, params, dynamics: Handled by BaseControl
         """
-        # Add safe control specific params
-        params = kwargs.get('params', None)
-        safe_params = {
-            'log_barrier_gain': 0.0,
-            'safety_margin': 0.0,
-        }
-        if params is not None:
-            safe_params.update(params)
-        kwargs['params'] = safe_params
-
         super().__init__(**kwargs)
 
     @classmethod
@@ -63,7 +51,7 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
     def _create_updated_instance(self, **kwargs):
         defaults = {
             'action_dim': self._action_dim,
-            'params': dict(self._params) if self._params else None,
+            'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'cost_func': self._cost_func,
             'control_low': list(self._control_low) if self._has_control_bounds else None,
@@ -75,40 +63,6 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
-
-    # Barrier interface inherited from BaseSafeControl via cooperative inheritance
-
-    @property
-    def log_barrier_gain(self) -> float:
-        return self._params.get('log_barrier_gain', 0.0)
-
-    @property
-    def safety_margin(self) -> float:
-        return self._params.get('safety_margin', 0.0)
-
-    def _get_cost(self) -> Callable:
-        """
-        Get cost function with optional log barrier penalty.
-
-        If log_barrier_gain > 0 and barrier is assigned, adds:
-        -log_barrier_gain * sum(log(h(x))) to the cost for smooth repulsion.
-        """
-        base_cost_func = super()._get_cost()
-
-        if self.log_barrier_gain <= 0.0 or not self.has_barrier:
-            return base_cost_func
-
-        barrier = self._barrier
-        gain = self.log_barrier_gain
-
-        def cost_with_log_barrier(x, u, t):
-            base_cost = base_cost_func(x, u, t)
-            h_values = barrier._hocbf_single(x)
-            h_safe = jnp.maximum(h_values, 1e-8)
-            log_barrier_penalty = -gain * jnp.sum(jnp.log(h_safe))
-            return base_cost + log_barrier_penalty
-
-        return cost_with_log_barrier
 
     def _get_inequality_constraint(self) -> Callable:
         """
@@ -122,15 +76,13 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
             return base_constraint_func
 
         barrier = self._barrier
-        margin = self.safety_margin
 
         def inequality_constraint(x, u, t):
-            parts = []
-            if base_constraint_func is not None:
-                parts.append(base_constraint_func(x, u, t))
             h_values = barrier._hocbf_single(x)
-            parts.append(jnp.atleast_1d(-(h_values - margin)).flatten())
-            return jnp.concatenate(parts)
+            barrier_constraint = jnp.atleast_1d(-h_values).flatten()
+            if base_constraint_func is not None:
+                return jnp.concatenate([base_constraint_func(x, u, t), barrier_constraint])
+            return barrier_constraint
 
         return inequality_constraint
 
@@ -182,7 +134,7 @@ class QuadraticiLQRSafeControl(QuadraticCostMixin, iLQRSafeControl):
     def _create_updated_instance(self, **kwargs):
         defaults = {
             'action_dim': self._action_dim,
-            'params': dict(self._params) if self._params else None,
+            'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'control_low': list(self._control_low) if self._has_control_bounds else None,
             'control_high': list(self._control_high) if self._has_control_bounds else None,
@@ -199,22 +151,5 @@ class QuadraticiLQRSafeControl(QuadraticCostMixin, iLQRSafeControl):
         return self.__class__(**defaults)
 
     def _get_cost(self) -> Callable:
-        """
-        Get quadratic cost function with optional log barrier penalty.
-        """
-        base_cost_func = self._get_quadratic_cost_func()
-
-        if self.log_barrier_gain <= 0.0 or not self.has_barrier:
-            return base_cost_func
-
-        barrier = self._barrier
-        gain = self.log_barrier_gain
-
-        def cost_with_log_barrier(x, u, t):
-            base_cost = base_cost_func(x, u, t)
-            h_values = barrier._hocbf_single(x)
-            h_safe = jnp.maximum(h_values, 1e-8)
-            log_barrier_penalty = -gain * jnp.sum(jnp.log(h_safe))
-            return base_cost + log_barrier_penalty
-
-        return cost_with_log_barrier
+        """Get quadratic cost function."""
+        return self._get_quadratic_cost_func()

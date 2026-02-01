@@ -175,14 +175,20 @@ class BaseCBFSafeControl(BaseSafeControl):
         """
         Assign quadratic cost function.
 
+        Wraps plain x -> value functions to stateful (x, state) -> (value, state).
+
         Args:
-            Q: Function x -> Q_matrix or (x, state) -> (Q_matrix, new_state)
-            c: Function x -> c_vector or (x, state) -> (c_vector, new_state)
+            Q: Function x -> Q_matrix
+            c: Function x -> c_vector
 
         Returns:
             New controller instance with assigned cost
         """
-        return self._create_updated_instance(Q=Q, c=c)
+        def stateful_Q(x, state):
+            return Q(x), state
+        def stateful_c(x, state):
+            return c(x), state
+        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
 
 class BaseMinIntervSafeControl(BaseCBFSafeControl):

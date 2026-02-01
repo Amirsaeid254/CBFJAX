@@ -136,14 +136,20 @@ class QPSafeControl(BaseCBFSafeControl):
         """
         Assign quadratic cost function.
 
+        Wraps plain x -> value functions to stateful (x, state) -> (value, state).
+
         Args:
-            Q: Function that computes cost matrix from state
-            c: Function that computes cost vector from state
+            Q: Function x -> Q_matrix
+            c: Function x -> c_vector
 
         Returns:
             New QPSafeControl instance with assigned cost
         """
-        return self._create_updated_instance(Q=Q, c=c)
+        def stateful_Q(x, state):
+            return Q(x), state
+        def stateful_c(x, state):
+            return c(x), state
+        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
     @jax.jit
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
@@ -160,8 +166,8 @@ class QPSafeControl(BaseCBFSafeControl):
         if self._slacked:
             return self._optimal_control_single_slacked(x, state)
 
-        # Make objective for single state
-        Q_matrix, c_vector = self._make_objective_single(x)
+        # Make objective for single state (stateful)
+        Q_matrix, c_vector, state = self._make_objective_single(x, state)
 
         # Make inequality constraints for single state
         G, h = self._make_ineq_const_single(x)
@@ -181,7 +187,7 @@ class QPSafeControl(BaseCBFSafeControl):
 
         Args:
             x: Single state vector (state_dim,)
-            state: Controller state (unused for QP, passed through)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
             Tuple (u, new_state, info)
@@ -189,14 +195,15 @@ class QPSafeControl(BaseCBFSafeControl):
         if self._slacked:
             return self._optimal_control_single_slacked_with_info(x, state)
 
-        Q_matrix, c_vector = self._make_objective_single(x)
+        Q_matrix, c_vector, state = self._make_objective_single(x, state)
         G, h = self._make_ineq_const_single(x)
         A, b = self._make_eq_const_single(x, Q_matrix)
         u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
+        u_desired = -jnp.linalg.solve(Q_matrix, c_vector)
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
-        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_desired)
         return u, state, info
 
     def _optimal_control_single_slacked(self, x: jnp.ndarray, state=None) -> tuple:
@@ -205,7 +212,7 @@ class QPSafeControl(BaseCBFSafeControl):
 
         Args:
             x: Single state vector (state_dim,)
-            state: Controller state (unused for QP, passed through)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
             Tuple (u, new_state)
@@ -214,8 +221,8 @@ class QPSafeControl(BaseCBFSafeControl):
         G, h = self._make_ineq_const_slacked_single(x)
         num_constraints = h.shape[0]
 
-        # Make objective for slacked version
-        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_constraints)
+        # Make objective for slacked version (stateful)
+        Q_matrix, c_vector, state = self._make_objective_slacked_single(x, num_constraints, state)
 
         # Make equality constraints
         A, b = self._make_eq_const_single(x, Q_matrix)
@@ -234,14 +241,14 @@ class QPSafeControl(BaseCBFSafeControl):
 
         Args:
             x: Single state vector (state_dim,)
-            state: Controller state (unused for QP, passed through)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
             Tuple (u, new_state, info)
         """
         G, h = self._make_ineq_const_slacked_single(x)
         num_constraints = h.shape[0]
-        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_constraints)
+        Q_matrix, c_vector, state = self._make_objective_slacked_single(x, num_constraints, state)
         A, b = self._make_eq_const_single(x, Q_matrix)
         res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
@@ -249,36 +256,42 @@ class QPSafeControl(BaseCBFSafeControl):
         slack_vars = res[self._action_dim:]
         constraint_at_u = jnp.dot(G, res) - h
 
-        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        # Extract u_desired from non-augmented Q/c
+        Q_orig = Q_matrix[:self._action_dim, :self._action_dim]
+        c_orig = c_vector[:self._action_dim]
+        u_desired = -jnp.linalg.solve(Q_orig, c_orig)
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_desired)
         return u, state, info
 
-    def _make_objective_single(self, x: jnp.ndarray) -> tuple:
+    def _make_objective_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Create objective matrices for single state.
 
         Args:
             x: Single state vector (state_dim,)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
-            Tuple (Q, c) for quadratic objective
+            Tuple (Q, c, new_state) for quadratic objective
         """
-        Q_matrix = self._Q(x)  # (action_dim, action_dim)
-        c_vector = self._c(x)  # (action_dim,)
+        Q_matrix, state = self._Q(x, state)  # (action_dim, action_dim)
+        c_vector, state = self._c(x, state)  # (action_dim,)
 
-        return Q_matrix, c_vector
+        return Q_matrix, c_vector, state
 
-    def _make_objective_slacked_single(self, x: jnp.ndarray, num_constraints: int) -> tuple:
+    def _make_objective_slacked_single(self, x: jnp.ndarray, num_constraints: int, state=None) -> tuple:
         """
         Create objective matrices with slack variables for single state.
 
         Args:
             x: Single state vector (state_dim,)
             num_constraints: Number of constraints (slack variables)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
-            Tuple (Q, c) for augmented quadratic objective
+            Tuple (Q, c, new_state) for augmented quadratic objective
         """
-        Q_base, c_base = self._make_objective_single(x)
+        Q_base, c_base, state = self._make_objective_single(x, state)
 
         # Create block diagonal Q matrix
         Q_slack = self._slack_gain * 0.5 * jnp.eye(num_constraints)
@@ -291,7 +304,7 @@ class QPSafeControl(BaseCBFSafeControl):
         c_slack = jnp.zeros(num_constraints)
         c_vector = jnp.concatenate([c_base, c_slack])
 
-        return Q_matrix, c_vector
+        return Q_matrix, c_vector, state
 
     def _make_ineq_const_single(self, x: jnp.ndarray) -> tuple:
         """
@@ -419,7 +432,7 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
 
     def assign_desired_control(self, desired_control) -> 'MinIntervQPSafeControl':
         """
-        Assign desired control and automatically set up cost.
+        Assign desired control and automatically set up stateful cost.
 
         Accepts either:
         - A controller object with _optimal_control_single and get_init_state methods
@@ -442,11 +455,12 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
 
             init_state_fn = ctrl_obj.get_init_state
 
-            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
+            def Q_func(x, state):
+                return 2.0 * jnp.eye(action_dim), state
 
-            def c_func(x):
-                u_d, _ = ctrl_obj._optimal_control_single(x, ctrl_obj.get_init_state())
-                return -2.0 * u_d
+            def c_func(x, state):
+                u_d, new_state = ctrl_obj._optimal_control_single(x, state)
+                return -2.0 * u_d, new_state
 
             return self._create_updated_instance(
                 desired_control=stateful_desired,
@@ -461,8 +475,11 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
             def stateful_desired(x, state):
                 return func(x), state
 
-            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
-            c_func = lambda x: -2.0 * func(x)
+            def Q_func(x, state):
+                return 2.0 * jnp.eye(action_dim), state
+
+            def c_func(x, state):
+                return -2.0 * func(x), state
 
             return self._create_updated_instance(
                 desired_control=stateful_desired,
@@ -475,14 +492,20 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         """
         Internal method to assign cost functions.
 
+        Wraps plain x -> value functions to stateful (x, state) -> (value, state).
+
         Args:
-            Q: Cost matrix function
-            c: Cost vector function
+            Q: Function x -> Q_matrix
+            c: Function x -> c_vector
 
         Returns:
             New instance with assigned cost
         """
-        return self._create_updated_instance(Q=Q, c=c)
+        def stateful_Q(x, state):
+            return Q(x), state
+        def stateful_c(x, state):
+            return c(x), state
+        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
     def assign_state_barrier(self, barrier) -> 'MinIntervQPSafeControl':
         """Assign state barrier."""
@@ -594,8 +617,8 @@ class InputConstQPSafeControl(QPSafeControl):
         if self._slacked:
             return self._optimal_control_single_slacked(x, state)
 
-        # Make objective for single state
-        Q_matrix, c_vector = self._make_objective_single(x)
+        # Make objective for single state (stateful)
+        Q_matrix, c_vector, state = self._make_objective_single(x, state)
 
         # Get CBF constraints
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
@@ -635,7 +658,7 @@ class InputConstQPSafeControl(QPSafeControl):
 
         Args:
             x: Single state vector (state_dim,)
-            state: Controller state (unused for QP, passed through)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
             Tuple (u, new_state, info)
@@ -643,7 +666,7 @@ class InputConstQPSafeControl(QPSafeControl):
         if self._slacked:
             return self._optimal_control_single_slacked_with_info(x, state)
 
-        Q_matrix, c_vector = self._make_objective_single(x)
+        Q_matrix, c_vector, state = self._make_objective_single(x, state)
         hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
         hocbf = jnp.atleast_1d(hocbf)
         lf_hocbf = jnp.atleast_1d(lf_hocbf)
@@ -665,9 +688,10 @@ class InputConstQPSafeControl(QPSafeControl):
         A, b = self._make_eq_const_single(x, Q_matrix)
         u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
 
+        u_desired = -jnp.linalg.solve(Q_matrix, c_vector)
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
-        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_desired)
         return u, state, info
 
     def _optimal_control_single_slacked(self, x: jnp.ndarray, state=None) -> tuple:
@@ -676,7 +700,7 @@ class InputConstQPSafeControl(QPSafeControl):
 
         Args:
             x: Single state vector (state_dim,)
-            state: Controller state (unused for QP, passed through)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
             Tuple (u, new_state)
@@ -685,8 +709,8 @@ class InputConstQPSafeControl(QPSafeControl):
         G_cbf, h_cbf = super()._make_ineq_const_slacked_single(x)
         num_cbf_constraints = h_cbf.shape[0]
 
-        # Make objective with slack for CBF constraints only
-        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_cbf_constraints)
+        # Make objective with slack for CBF constraints only (stateful)
+        Q_matrix, c_vector, state = self._make_objective_slacked_single(x, num_cbf_constraints, state)
 
         if self._has_control_bounds:
             # Add control bound constraints (no slack variables for these)
@@ -722,14 +746,14 @@ class InputConstQPSafeControl(QPSafeControl):
 
         Args:
             x: Single state vector (state_dim,)
-            state: Controller state (unused for QP, passed through)
+            state: Controller state (threaded through stateful Q/c)
 
         Returns:
             Tuple (u, new_state, info)
         """
         G_cbf, h_cbf = super()._make_ineq_const_slacked_single(x)
         num_cbf_constraints = h_cbf.shape[0]
-        Q_matrix, c_vector = self._make_objective_slacked_single(x, num_cbf_constraints)
+        Q_matrix, c_vector, state = self._make_objective_slacked_single(x, num_cbf_constraints, state)
 
         if self._has_control_bounds:
             num_slack = G_cbf.shape[1] - self._action_dim
@@ -749,7 +773,11 @@ class InputConstQPSafeControl(QPSafeControl):
         slack_vars = res[self._action_dim:]
         constraint_at_u = jnp.dot(G, res) - h
 
-        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
+        # Extract u_desired from non-augmented Q/c
+        Q_orig = Q_matrix[:self._action_dim, :self._action_dim]
+        c_orig = c_vector[:self._action_dim]
+        u_desired = -jnp.linalg.solve(Q_orig, c_orig)
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_desired)
         return u, state, info
 
     def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':
@@ -812,7 +840,7 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
 
     def assign_desired_control(self, desired_control) -> 'MinIntervInputConstQPSafeControl':
         """
-        Assign desired control and set up cost.
+        Assign desired control and set up stateful cost.
 
         Accepts either:
         - A controller object with _optimal_control_single and get_init_state methods
@@ -828,11 +856,12 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
 
             init_state_fn = ctrl_obj.get_init_state
 
-            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
+            def Q_func(x, state):
+                return 2.0 * jnp.eye(action_dim), state
 
-            def c_func(x):
-                u_d, _ = ctrl_obj._optimal_control_single(x, ctrl_obj.get_init_state())
-                return -2.0 * u_d
+            def c_func(x, state):
+                u_d, new_state = ctrl_obj._optimal_control_single(x, state)
+                return -2.0 * u_d, new_state
 
             return self._create_updated_instance(
                 desired_control=stateful_desired,
@@ -846,8 +875,11 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
             def stateful_desired(x, state):
                 return func(x), state
 
-            Q_func = lambda x: 2.0 * jnp.eye(action_dim)
-            c_func = lambda x: -2.0 * func(x)
+            def Q_func(x, state):
+                return 2.0 * jnp.eye(action_dim), state
+
+            def c_func(x, state):
+                return -2.0 * func(x), state
 
             return self._create_updated_instance(
                 desired_control=stateful_desired,

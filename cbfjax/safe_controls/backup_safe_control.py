@@ -167,7 +167,7 @@ class BackupSafeControl(InputConstQPSafeControl):
         )
 
         # Compute QP-based safe control (always compute, select based on gamma)
-        Q_matrix, c_vector = self._make_objective_single(x)
+        Q_matrix, c_vector, state = self._make_objective_single(x, state)
 
         # CBF constraints - ensure correct shapes for QP
         G_cbf = -jnp.atleast_2d(Lg_hocbf).reshape(1, -1)  # (1, action_dim)
@@ -239,8 +239,8 @@ class BackupSafeControl(InputConstQPSafeControl):
             feas_fact / self.barrier_cfg['feas_scale']
         )
 
-        # Compute QP-based safe control
-        Q_matrix, c_vector = self._make_objective_single(x)
+        # Compute QP-based safe control (stateful)
+        Q_matrix, c_vector, state = self._make_objective_single(x, state)
 
         G_cbf = -jnp.atleast_2d(Lg_hocbf).reshape(1, -1)
         h_cbf_val = Lf_hocbf + self._alpha(hocbf - self.barrier_cfg['epsilon'])
@@ -267,8 +267,10 @@ class BackupSafeControl(InputConstQPSafeControl):
 
         constraint_at_u = jnp.dot(G, u) - h
 
+        u_desired = -jnp.linalg.solve(Q_matrix, c_vector)
         info = BackupInfo(
             constraint_at_u=constraint_at_u,
+            u_desired=u_desired,
             u_star=u_star,
             ub_select=ub_select,
             feas_fact=feas_fact,
@@ -425,21 +427,22 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
     def desired_control(self):
         return self._desired_control
 
-    def _make_objective_single(self, x: jnp.ndarray) -> tuple:
+    def _make_objective_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Create QP objective for minimum intervention.
 
         Args:
             x: State vector (state_dim,)
+            state: Controller state (threaded through desired control)
 
         Returns:
-            Tuple (Q, c) for QP objective
+            Tuple (Q, c, new_state) for QP objective
         """
-        # Get desired control (stateless call for QP objective)
-        u_des, _ = self._desired_control(x, self.get_init_state())
+        # Get desired control (stateful call)
+        u_des, state = self._desired_control(x, state)
 
         # Minimum intervention objective: min ||u - u_des||^2
         Q = jnp.eye(self._action_dim)
         c = -u_des
 
-        return Q, c
+        return Q, c, state

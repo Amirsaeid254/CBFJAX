@@ -81,13 +81,12 @@ dynamics_params = immutabledict({'d': 1.0, 'control_bounds': control_bounds})
 ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'maxiter': 10,
+    'maxiter': 20,
     'grad_norm_threshold': 1e-4,
-    'maxiter_al': 2,
+    'maxiter_al': 20,
     'constraints_threshold': 1e-4,
-    'penalty_init': 100.0,
-    'penalty_update_rate': 15.0,
-    'log_barrier_gain': 0.0,
+    'penalty_init': 1e5,
+    'penalty_update_rate': 500.0,
 }
 
 # Backup policy parameters
@@ -174,9 +173,9 @@ print("  - Backup barrier system built")
 print("\nSetting up iLQR safe controller...")
 
 # Cost matrices for trajectory tracking
-Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))   # State cost
-R = jnp.diag(jnp.array([10.0, 10.0]))              # Control cost
-Q_e = 100.0 * Q                                    # Terminal cost
+Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))   # State cost
+R = jnp.diag(jnp.array([0.1, 0.1]))              # Control cost
+Q_e = 5.0 * Q                                    # Terminal cost
 
 # Create iLQR controller WITH barrier as AL inequality constraint
 ilqr_controller = (
@@ -242,7 +241,7 @@ trajs = safety_filter.get_optimal_trajs_zoh(
     x0=x0_batch,
     sim_time=sim_time,
     timestep=timestep,
-    method='dopri5'
+    method='euler'
 )
 elapsed = time() - start_time
 print(f"  - Simulation completed in {elapsed:.2f}s")
@@ -257,16 +256,24 @@ traj = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = traj.shape[0] - 1
 time_array = np.linspace(0.0, sim_time, n_steps + 1)
 
-# Get safe controls and info
-u_safe, _, info = safety_filter.optimal_control_with_info(traj)
+# Thread safety filter state through trajectory via scan (threads iLQR warm-start)
+def safe_scan_step(state, x):
+    u, new_state, info = safety_filter._optimal_control_single_with_info(x, state)
+    return new_state, (u, info)
 
-# Thread iLQR state through trajectory for warm-started controls and predictions
+safe_init_state = safety_filter.get_init_state()
+_, (u_safe, info) = jax.lax.scan(safe_scan_step, safe_init_state, traj)
+
+# Extract desired control from safety filter info (warm-started iLQR)
+u_ilqr = info.u_desired
+
+# Thread iLQR state separately for predicted trajectories (visualization only)
 def ilqr_scan_step(state, x):
     u, new_state, info = ilqr_controller._optimal_control_single_with_info(x, state)
     return new_state, (u, info)
 
 ilqr_init_state = ilqr_controller.get_init_state()
-_, (u_ilqr, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, traj)
+_, (_, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, traj)
 
 # Predicted trajectories from iLQR info
 pred_trajs_np = np.array(ilqr_info_hist.x_traj)

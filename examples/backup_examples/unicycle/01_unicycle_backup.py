@@ -22,7 +22,6 @@ from immutabledict import immutabledict
 
 # CBFJAX imports
 import cbfjax.config  # Configure JAX (float64, device settings)
-import cbfjax
 from cbfjax.dynamics import UnicycleReducedOrderDynamics
 from cbfjax.barriers import Barrier, BackupBarrier
 from cbfjax.safe_controls import MinIntervBackupSafeControl
