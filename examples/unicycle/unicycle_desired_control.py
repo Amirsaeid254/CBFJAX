@@ -1,6 +1,5 @@
 """
-JAX implementation of unicycle desired control.
-Converted from PyTorch to JAX with JIT compilation for performance.
+Desired control for unicycle dynamics.
 """
 
 import jax
@@ -10,15 +9,15 @@ from math import pi
 
 def desired_control(x, goal_pos, k1=0.2, k2=1.0, k3=2.0):
     """
-    JIT-compiled desired control for unicycle dynamics.
+    Desired control for unicycle dynamics (single state).
 
     Args:
-        x: State tensor (batch, 4) - [q_x, q_y, v, theta]
-        goal_pos: Goal position tensor (batch, 2) - [goal_x, goal_y]
+        x: State array (4,) - [q_x, q_y, v, theta]
+        goal_pos: Goal position array (N, 2) - [goal_x, goal_y]
         k1, k2, k3: Control gains
 
     Returns:
-        Control input tensor (batch, 2) - [u1, u2]
+        Control input array (2,) - [u1, u2]
     """
     dist_to_goal = jnp.linalg.norm(x[:2] - goal_pos[:2], axis=-1)
     q_x, q_y, v, theta = x[0], x[1], x[2], x[3]

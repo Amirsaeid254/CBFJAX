@@ -277,9 +277,6 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
                 desired_control_init_state=init_state_fn,
             )
         else:
-            # Plain function or already stateful
-            # Try to detect if it's a simple x -> u function by checking arg count
-            # For safety, wrap as stateful with None state passthrough
             func = desired_control
             def stateful_desired(x, state):
                 return func(x), state
