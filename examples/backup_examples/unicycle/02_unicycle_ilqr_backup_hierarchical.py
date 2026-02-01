@@ -196,12 +196,12 @@ print("\nTesting controllers...")
 
 # Test iLQR alone
 print("  Testing iLQR controller...")
-u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None])
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None], ilqr_controller.get_init_state())
 print(f"    iLQR control: u = {np.array(u_ilqr_test[0])}")
 
 # Test backup safety filter
 print("  Testing backup safety filter...")
-u_safe_test, _ = safety_filter.optimal_control(x0[None])
+u_safe_test, _ = safety_filter.optimal_control(x0[None], safety_filter.get_init_state())
 print(f"    Backup-safe control: u = {np.array(u_safe_test[0])}")
 print(f"    Intervention: du = {np.array(u_safe_test[0] - u_ilqr_test[0])}")
 

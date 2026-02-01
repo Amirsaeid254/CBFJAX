@@ -187,7 +187,7 @@ def desired_control_func(x):
 
 safety_filter = safety_filter.assign_desired_control(desired_control_func)
 
-u_test, _ = safety_filter.optimal_control(x0)
+u_test, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
 print(f"  Test control: u = {np.array(u_test[0])}")
 
 # ============================================
@@ -224,7 +224,7 @@ traj = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = traj.shape[0] - 1
 time_array = np.linspace(0.0, sim_time, n_steps + 1)
 
-u_vals, _, info = safety_filter.optimal_control_with_info(traj)
+u_vals, _, info = safety_filter.optimal_control_with_info(traj, safety_filter.get_init_state())
 
 # Compute desired controls for each state
 des_ctrls = jax.vmap(desired_control_func)(traj)

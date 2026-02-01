@@ -171,35 +171,32 @@ class BaseControl(eqx.Module):
         u, new_state = self._optimal_control_single(x, state)
         return u, new_state, {}
 
-    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control(self, x: jnp.ndarray, state) -> tuple:
         """
         Compute optimal control with automatic batch support.
 
         Args:
             x: State(s) (state_dim,) or (batch, state_dim)
-            state: Controller state (optional, uses get_init_state() if None)
+            state: Controller state
 
         Returns:
             Tuple (u, new_state) with control(s)
         """
-        if state is None:
-            state = self.get_init_state()
+
         x_batched = ensure_batch_dim(x)
         return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x_batched, state)
 
-    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control_with_info(self, x: jnp.ndarray, state) -> tuple:
         """
         Compute optimal control with diagnostic info.
 
         Args:
             x: State(s) (state_dim,) or (batch, state_dim)
-            state: Controller state (optional, uses get_init_state() if None)
+            state: Controller state (from get_init_state())
 
         Returns:
             Tuple (u, new_state, info)
         """
-        if state is None:
-            state = self.get_init_state()
         x_batched = ensure_batch_dim(x)
         return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x_batched, state)
 

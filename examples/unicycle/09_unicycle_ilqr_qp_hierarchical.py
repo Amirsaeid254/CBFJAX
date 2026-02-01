@@ -163,12 +163,12 @@ x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
 # Test iLQR alone
 print("  Testing iLQR controller...")
-u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None])
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None], ilqr_controller.get_init_state())
 print(f"    iLQR control: u = {np.array(u_ilqr_test[0])}")
 
 # Test QP safety filter
 print("  Testing QP safety filter...")
-u_safe_test, _ = safety_filter.optimal_control(x0[None])
+u_safe_test, _ = safety_filter.optimal_control(x0[None], safety_filter.get_init_state())
 print(f"    Safe control: u = {np.array(u_safe_test[0])}")
 print(f"    Intervention: du = {np.array(u_safe_test[0] - u_ilqr_test[0])}")
 
