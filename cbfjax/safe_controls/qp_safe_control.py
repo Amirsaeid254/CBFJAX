@@ -15,6 +15,7 @@ from functools import partial
 from qpax import solve_qp_primal
 
 from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
+from ..controls.control_types import QPInfo
 from ..utils.utils import ensure_batch_dim
 
 
@@ -195,7 +196,7 @@ class QPSafeControl(BaseCBFSafeControl):
 
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, state, info
 
     def _optimal_control_single_slacked(self, x: jnp.ndarray, state=None) -> tuple:
@@ -248,7 +249,7 @@ class QPSafeControl(BaseCBFSafeControl):
         slack_vars = res[self._action_dim:]
         constraint_at_u = jnp.dot(G, res) - h
 
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, state, info
 
     def _make_objective_single(self, x: jnp.ndarray) -> tuple:
@@ -666,7 +667,7 @@ class InputConstQPSafeControl(QPSafeControl):
 
         constraint_at_u = jnp.dot(G, u) - h
         slack_vars = jnp.zeros(1)
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, state, info
 
     def _optimal_control_single_slacked(self, x: jnp.ndarray, state=None) -> tuple:
@@ -748,7 +749,7 @@ class InputConstQPSafeControl(QPSafeControl):
         slack_vars = res[self._action_dim:]
         constraint_at_u = jnp.dot(G, res) - h
 
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, state, info
 
     def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':

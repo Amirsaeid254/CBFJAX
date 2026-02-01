@@ -196,22 +196,19 @@ print(f"  - Barrier: handled as AL inequality constraint")
 
 print("Setting up backup safety filter...")
 
-# Create function that wraps iLQR safe controller as desired control
-def ilqr_safe_desired_control(x: jnp.ndarray) -> jnp.ndarray:
-    """Compute iLQR safe optimal control for state x."""
-    u, _ = ilqr_controller._optimal_control_single(x)
-    return u
-
 # Create backup safety filter with iLQR-safe as desired control
-safety_filter = MinIntervBackupSafeControl(
-    action_dim=nu,
-    alpha=lambda x: 1.0 * x,
-    slacked=False,
-    control_low=list(control_bounds[0]),
-    control_high=list(control_bounds[1])
-).assign_dynamics(dynamics).assign_state_barrier(fwd_barrier)
-
-safety_filter = safety_filter.assign_desired_control(ilqr_safe_desired_control)
+safety_filter = (
+    MinIntervBackupSafeControl(
+        action_dim=nu,
+        alpha=lambda x: 1.0 * x,
+        slacked=False,
+        control_low=list(control_bounds[0]),
+        control_high=list(control_bounds[1])
+    )
+    .assign_dynamics(dynamics)
+    .assign_state_barrier(fwd_barrier)
+    .assign_desired_control(ilqr_controller)
+)
 
 print(f"  - Control bounds: low={control_bounds[0]}, high={control_bounds[1]}")
 
@@ -223,14 +220,14 @@ print("\nTesting controllers...")
 
 # Test iLQR-safe alone
 print("  Testing iLQR-safe controller...")
-u_ilqr_test, _ = ilqr_controller.optimal_control(x0)
-print(f"    iLQR-safe control: u = {np.array(u_ilqr_test)}")
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None])
+print(f"    iLQR-safe control: u = {np.array(u_ilqr_test[0])}")
 
 # Test backup safety filter
 print("  Testing backup safety filter...")
-u_safe_test, _ = safety_filter._optimal_control_single(x0)
-print(f"    Backup-safe control: u = {np.array(u_safe_test)}")
-print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
+u_safe_test, _ = safety_filter.optimal_control(x0[None])
+print(f"    Backup-safe control: u = {np.array(u_safe_test[0])}")
+print(f"    Intervention: du = {np.array(u_safe_test[0] - u_ilqr_test[0])}")
 
 # ============================================================================
 # Simulation
@@ -263,8 +260,16 @@ time_array = np.linspace(0.0, sim_time, n_steps + 1)
 # Get safe controls and info
 u_safe, _, info = safety_filter.optimal_control_with_info(traj)
 
-# Get iLQR-safe controls (what iLQR-safe would have applied)
-u_ilqr, _ = ilqr_controller.optimal_control(traj)
+# Thread iLQR state through trajectory for warm-started controls and predictions
+def ilqr_scan_step(state, x):
+    u, new_state, info = ilqr_controller._optimal_control_single_with_info(x, state)
+    return new_state, (u, info)
+
+ilqr_init_state = ilqr_controller.get_init_state()
+_, (u_ilqr, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, traj)
+
+# Predicted trajectories from iLQR info
+pred_trajs_np = np.array(ilqr_info_hist.x_traj)
 
 # Compute intervention
 intervention = u_safe - u_ilqr
@@ -366,14 +371,14 @@ axs[3].set_ylabel(r'$\theta$', fontsize=14)
 # Control 1
 axs[4].plot(time_array, u_ilqr_np[:, 0], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
 axs[4].plot(time_array, u_safe_np[:, 0], 'k-', label=r'$u_{\rm backup}$')
-axs[4].plot(time_array, info['ub_select'][:, 0], 'g:', alpha=0.7, label=r'$u_b$')
+axs[4].plot(time_array, info.ub_select[:, 0], 'g:', alpha=0.7, label=r'$u_b$')
 axs[4].legend(fontsize=10, loc='upper right', ncol=3, frameon=False)
 axs[4].set_ylabel(r'$u_1$', fontsize=14)
 
 # Control 2
 axs[5].plot(time_array, u_ilqr_np[:, 1], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
 axs[5].plot(time_array, u_safe_np[:, 1], 'k-', label=r'$u_{\rm backup}$')
-axs[5].plot(time_array, info['ub_select'][:, 1], 'g:', alpha=0.7, label=r'$u_b$')
+axs[5].plot(time_array, info.ub_select[:, 1], 'g:', alpha=0.7, label=r'$u_b$')
 axs[5].legend(fontsize=10, loc='upper right', ncol=3, frameon=False)
 axs[5].set_ylabel(r'$u_2$', fontsize=14)
 axs[5].set_xlabel(r'$t~(\rm {s})$', fontsize=14)
@@ -397,7 +402,7 @@ axs[0].set_ylabel(r'$h$', fontsize=14)
 axs[0].legend(fontsize=12, frameon=False)
 axs[0].set_xlim(0, sim_time)
 
-axs[1].plot(time_array, info['beta'][:], color='blue')
+axs[1].plot(time_array, info.beta[:], color='blue')
 axs[1].set_ylabel(r'$\beta$ (blend)', fontsize=14)
 axs[1].set_xlim(0, sim_time)
 
@@ -417,13 +422,6 @@ plt.show()
 # --- Animation ---
 print("\nCreating animation...")
 import matplotlib.animation as animation
-
-# Store predicted trajectories for animation
-pred_trajs = []
-sample_indices_pred = np.arange(0, n_steps, 100)
-for i in sample_indices_pred:
-    x_traj_pred, _ = ilqr_controller.get_predicted_trajectory(traj[i])
-    pred_trajs.append(np.array(x_traj_pred))
 
 def create_animation():
     fig_anim, ax_anim = plt.subplots(figsize=(8, 8))
@@ -458,12 +456,10 @@ def create_animation():
         ax_anim.scatter([current_x], [current_y], s=100, c='blue', marker='o',
                         edgecolors='black', linewidths=2, label='Current', zorder=4)
 
-        # Draw iLQR predicted trajectory (if available)
-        pred_idx = frame // 100
-        if pred_idx < len(pred_trajs):
-            pred_traj = pred_trajs[pred_idx]
-            ax_anim.plot(pred_traj[:, 0], pred_traj[:, 1], 'c--', linewidth=2,
-                         alpha=0.6, label='iLQR-Safe Prediction', zorder=2)
+        # Draw iLQR predicted trajectory
+        pred_traj = pred_trajs_np[frame]
+        ax_anim.plot(pred_traj[:, 0], pred_traj[:, 1], 'c--', linewidth=2,
+                     alpha=0.6, label='iLQR-Safe Prediction', zorder=2)
 
         # Set plot properties
         ax_anim.set_xlabel(r'$x$', fontsize=14)
@@ -477,7 +473,7 @@ def create_animation():
         # Info text
         current_time_val = frame * timestep
         intervention_val = intervention_norm[frame] if frame < len(intervention_norm) else 0
-        beta_val = float(info['beta'][frame]) if frame < len(info['beta']) else 0
+        beta_val = float(info.beta[frame]) if frame < len(info.beta) else 0
         ax_anim.text(0.98, 0.98,
                      f'Time: {current_time_val:.2f}s\n'
                      f'Vel: {current_v:.2f} m/s\n'

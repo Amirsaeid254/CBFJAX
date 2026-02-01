@@ -188,8 +188,8 @@ def desired_control_func(x):
 
 safety_filter = safety_filter.assign_desired_control(desired_control_func)
 
-u_test, _ = safety_filter._optimal_control_single(x0.squeeze(0))
-print(f"  Test control: u = {np.array(u_test)}")
+u_test, _ = safety_filter.optimal_control(x0)
+print(f"  Test control: u = {np.array(u_test[0])}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -326,15 +326,15 @@ axs[3].set_ylabel(r'$\theta$', fontsize=14)
 
 # Controls with comparisons
 axs[4].plot(time_array, u_vals_np[:, 0], label='u', color='black')
-axs[4].plot(time_array, info['ub_select'][:, 0], label=r'$u_b$', color='green')
-axs[4].plot(time_array, info['u_star'][:, 0], label=r'$u_*$', color='blue')
+axs[4].plot(time_array, info.ub_select[:, 0], label=r'$u_b$', color='green')
+axs[4].plot(time_array, info.u_star[:, 0], label=r'$u_*$', color='blue')
 axs[4].plot(time_array, des_ctrls[:, 0], label=r'$u_d$', color='red', linestyle='--')
 axs[4].legend(fontsize=14, loc='upper right', frameon=False, ncol=4)
 axs[4].set_ylabel(r'$u_1$', fontsize=14)
 
 axs[5].plot(time_array, u_vals_np[:, 1], label='u', color='black')
-axs[5].plot(time_array, info['ub_select'][:, 1], label=r'$u_b$', color='green')
-axs[5].plot(time_array, info['u_star'][:, 1], label=r'$u_*$', color='blue')
+axs[5].plot(time_array, info.ub_select[:, 1], label=r'$u_b$', color='green')
+axs[5].plot(time_array, info.u_star[:, 1], label=r'$u_*$', color='blue')
 axs[5].plot(time_array, des_ctrls[:, 1], label=r'$u_d$', color='red', linestyle='--')
 axs[5].legend(fontsize=14, loc='upper right', frameon=False, ncol=4)
 axs[5].set_ylabel(r'$u_2$', fontsize=14)
@@ -371,7 +371,7 @@ axs[0].set_ylim(bottom=h_min * 0.5, top=h_max * 2.0)
 
 # Normalized factors
 h_normalized = (h_vals_np[:, 0] - backup_cfg['epsilon']) / backup_cfg['h_scale']
-feas_normalized = np.array(info['feas_fact'][:]) / backup_cfg['feas_scale']
+feas_normalized = np.array(info.feas_fact[:]) / backup_cfg['feas_scale']
 axs[1].plot(time_array, h_normalized, label=r'$\frac{h - \epsilon}{\kappa_h}$', color='blue')
 axs[1].plot(time_array, feas_normalized, label=r'$\frac{\beta}{\kappa_\beta}$', color='red')
 axs[1].axhline(y=0, color='green')
@@ -384,7 +384,7 @@ norm_max = np.max(np.concatenate([h_normalized, feas_normalized]))
 axs[1].set_ylim(bottom=norm_min * 0.5, top=norm_max * 2.0)
 
 # Blending factor (sigma)
-axs[2].plot(time_array, info['beta'][:], label=r'$\sigma$', color='blue')
+axs[2].plot(time_array, info.beta[:], label=r'$\sigma$', color='blue')
 axs[2].set_ylabel(r'$\sigma$', fontsize=14)
 axs[2].set_xlabel(r'$t~(\rm {s})$', fontsize=14)
 axs[2].set_xlim(0, sim_time)

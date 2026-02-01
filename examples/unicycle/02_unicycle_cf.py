@@ -115,8 +115,8 @@ print(f"  Alpha: 0.5 * h")
 
 print("\nTesting controller...")
 
-u_test, _ = safety_filter._optimal_control_single(x0)
-print(f"  Test control: u = {np.array(u_test)}")
+u_test, _ = safety_filter.optimal_control(x0[None])
+print(f"  Test control: u = {np.array(u_test[0])}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -149,8 +149,8 @@ x_hist = trajs[:, 0, :]  # (time_steps, state_dim)
 n_steps = x_hist.shape[0] - 1
 time_array = np.linspace(0, sim_time, n_steps + 1)
 
-# Compute controls
-u_hist, _ = safety_filter.optimal_control(x_hist)
+# Compute controls and info
+u_hist, _, info_hist = safety_filter.optimal_control_with_info(x_hist)
 
 # Compute barrier values
 h_vals = barrier.hocbf(x_hist)

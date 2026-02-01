@@ -117,10 +117,18 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
 
     if init_ctrl_state is not None:
         # Stateful action function: (x, ctrl_state) -> (u, new_ctrl_state)
+        # Each batch element gets its own controller state.
+        # Replicate init_ctrl_state across batch dimension.
+        batch_size = x0.shape[0]
+        batched_ctrl_state = jax.tree.map(
+            lambda leaf: jnp.broadcast_to(leaf, (batch_size,) + leaf.shape),
+            init_ctrl_state
+        )
+
         def step_forward(carry, i):
             current_state, ctrl_state = carry
             current_controls, new_ctrl_state = jax.vmap(
-                action_func, in_axes=(0, None)
+                action_func
             )(current_state, ctrl_state)
 
             def ode_func(t, y, args):
@@ -144,7 +152,7 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
             next_state = solution.ys[0]
             return (next_state, new_ctrl_state), next_state
 
-        _, states_sequence = jax.lax.scan(step_forward, (x0, init_ctrl_state), jnp.arange(num_steps - 1))
+        _, states_sequence = jax.lax.scan(step_forward, (x0, batched_ctrl_state), jnp.arange(num_steps - 1))
     else:
         # Stateless action function: x -> u (backward compatible)
         def step_forward(carry, i):

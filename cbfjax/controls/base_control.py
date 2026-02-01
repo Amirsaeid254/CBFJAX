@@ -203,7 +203,7 @@ class BaseControl(eqx.Module):
         x_batched = ensure_batch_dim(x)
         return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x_batched, state)
 
-    def _make_optimal_control_for_ode(self) -> Callable:
+    def _optimal_control_for_ode(self) -> Callable:
         """
         Create a stateless control function for ODE integration.
 
@@ -232,7 +232,7 @@ class BaseControl(eqx.Module):
         Returns:
             Trajectories (time_steps, batch, state_dim)
         """
-        action_func = self._make_optimal_control_for_ode()
+        action_func = self._optimal_control_for_ode()
         return get_trajs_from_state_action_func(
             x0=x0,
             dynamics=self._dynamics,
@@ -277,7 +277,7 @@ class BaseControl(eqx.Module):
             )
         else:
             # Stateless controller: use simple x -> u wrapper
-            action_func = self._make_optimal_control_for_ode()
+            action_func = self._optimal_control_for_ode()
 
             return get_trajs_from_state_action_func_zoh(
                 x0=x0,
@@ -325,7 +325,7 @@ class BaseControl(eqx.Module):
             )
         else:
             # Stateless controller: use simple x -> u wrapper
-            action_func = self._make_optimal_control_for_ode()
+            action_func = self._optimal_control_for_ode()
 
             return get_trajs_from_state_action_func_zoh_no_vmap(
                 x0=x0,
@@ -438,8 +438,6 @@ class QuadraticCostMixin:
     def _get_quadratic_cost_func(self) -> Callable:
         """
         Build quadratic cost function from Q, R matrices.
-
-        Used by iLQR-based controllers. NMPC uses different cost setup.
 
         Returns:
             Cost function f(x, u, t) -> scalar

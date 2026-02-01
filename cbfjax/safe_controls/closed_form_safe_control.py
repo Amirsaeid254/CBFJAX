@@ -18,6 +18,7 @@ from immutabledict import immutabledict
 from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
 from ..barriers.composite_barrier import SoftCompositionBarrier
 from ..dynamics.base_dynamic import AffineInControlDynamics, CustomDynamics
+from ..controls.control_types import CFInfo
 from cbfjax.utils.utils import make_higher_order_lie_deriv_series, lie_deriv, update_dict_no_overwrite
 
 
@@ -170,7 +171,7 @@ class CFSafeControl(BaseCBFSafeControl):
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, state, info
 
     def eval_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -345,7 +346,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, new_state, info
 
 
@@ -552,7 +553,7 @@ class InputConstCFSafeControl(CFSafeControl):
         constraint_at_u = (lf_hocbf + jnp.dot(lg_hocbf, u) +
                            self._alpha(hocbf) + slack_vars * hocbf)
 
-        info = {'slack_vars': slack_vars, 'constraint_at_u': constraint_at_u}
+        info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u)
         return u, state, info
 
     def _make_composed_barrier(self) -> 'InputConstCFSafeControl':

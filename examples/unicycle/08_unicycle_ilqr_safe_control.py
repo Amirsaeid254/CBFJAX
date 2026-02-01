@@ -8,7 +8,7 @@ Demonstrates QuadraticiLQRSafeControl with:
 - Quadratic tracking cost (Q, R matrices)
 - Control bounds via constrained iLQR
 
-Uses trajax for iLQR solving - pure JAX, no external dependencies.
+Uses trajax for iLQR solving.
 """
 
 import jax
@@ -56,13 +56,13 @@ cfg = immutabledict({
 ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'maxiter': 2,
+    'maxiter': 20,
     'grad_norm_threshold': 1e-4,
-    'maxiter_al': 4,
+    'maxiter_al': 20,
     'constraints_threshold': 1e-4,
-    'penalty_init': 1000.0,
-    'penalty_update_rate': 200.0,
-    'log_barrier_gain': 10.0,
+    'penalty_init': 1e5,
+    'penalty_update_rate': 500.0,
+    'log_barrier_gain': 0.0,
     'safety_margin': 0.0,
 }
 
@@ -97,8 +97,8 @@ nx = dynamics.state_dim  # 4
 nu = dynamics.action_dim  # 2
 
 # Cost matrices for tracking (as Callable for JIT compatibility)
-Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))  # State cost
-R = jnp.diag(jnp.array([5.0, 5.0]))               # Control cost
+Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))  # State cost
+R = jnp.diag(jnp.array([0.1, 0.1]))               # Control cost
 Q_e = 5.0 * Q                                    # Terminal cost
 
 # Control bounds: [acceleration, angular velocity]
@@ -147,35 +147,26 @@ simulation_time = time() - start_time
 print(f"\nSimulation completed in {simulation_time:.2f} seconds")
 
 # trajs shape: (time_steps, batch, state_dim) -> squeeze batch dim
-x_hist = trajs[:, 0, :]  # (time_steps, state_dim)
+x_hist = trajs[:, 0, :]  # (time_steps+1, state_dim)
 n_steps = x_hist.shape[0] - 1
-
-# Compute actions along trajectory
-print("\nComputing control actions...")
-u_hist, _ = controller.optimal_control(x_hist[:-1])  # (n_steps, action_dim)
-
-# Compute predicted trajectories and barrier values for analysis/animation
-print("Computing predicted trajectories and barrier values...")
-pred_trajs = []
-h_pred_min = []
-
-for i in range(n_steps):
-    # Get predicted trajectory at this state
-    x_traj_pred, u_traj_pred = controller.get_predicted_trajectory(x_hist[i])
-    pred_trajs.append(x_traj_pred)
-
-    # Compute min barrier along predicted trajectory
-    h_along_pred = barrier.hocbf(x_traj_pred)
-    h_min = jnp.min(h_along_pred, axis=0)
-    h_pred_min.append(np.array(h_min))
-
-    if (i + 1) % 500 == 0:
-        print(f"  Step {i + 1}/{n_steps}")
-
-pred_trajs = np.array(pred_trajs)  # (n_steps, N+1, state_dim)
-h_pred_min = np.array(h_pred_min)  # (n_steps, num_barriers)
-
 time_array = np.linspace(0, sim_time, n_steps + 1)
+
+# Compute controls, state, and info along trajectory using lax.scan
+print("\nComputing control actions and predicted trajectories...")
+
+def scan_step(state, x):
+    u, new_state, info = controller._optimal_control_single_with_info(x, state)
+    return new_state, (u, info)
+
+init_state = controller.get_init_state()
+_, (u_hist, info_hist) = jax.lax.scan(scan_step, init_state, x_hist)
+
+
+# Compute min barrier along each predicted trajectory
+print("Computing barrier values along predicted trajectories...")
+pred_trajs = info_hist.x_traj  # (n_steps+1, N+1, state_dim)
+h_pred = jax.vmap(barrier.hocbf)(pred_trajs)  # (n_steps+1, N+1, num_barriers)
+h_pred_min = jnp.min(h_pred, axis=1)  # (n_steps+1, num_barriers)
 
 # ============================================
 # Statistics
@@ -184,6 +175,8 @@ time_array = np.linspace(0, sim_time, n_steps + 1)
 # Convert to numpy for plotting and statistics
 x_hist_np = np.array(x_hist)
 u_hist_np = np.array(u_hist)
+h_pred_min_np = np.array(h_pred_min)
+pred_trajs_np = np.array(pred_trajs)
 goal_pos_np = np.array(goal_pos)
 
 print(f"\n{'='*50}")
@@ -192,8 +185,8 @@ print(f"  Total time: {simulation_time:.2f} s")
 print(f"  Avg time per step: {simulation_time/n_steps*1000:.3f} ms")
 print(f"{'='*50}")
 print(f"Barrier statistics (min over predicted horizon):")
-print(f"  Min h(x): {np.min(h_pred_min):.6f}")
-print(f"  Violations (h < 0): {np.sum(np.min(h_pred_min, axis=1) < 0)}")
+print(f"  Min h(x): {np.min(h_pred_min_np):.6f}")
+print(f"  Violations (h < 0): {np.sum(np.min(h_pred_min_np, axis=1) < 0)}")
 print(f"{'='*50}")
 print(f"Control statistics:")
 print(f"  u1 (accel): min={u_hist_np[:, 0].min():.3f}, max={u_hist_np[:, 0].max():.3f}")
@@ -279,14 +272,14 @@ axs[2].plot(time_array, x_hist_np[:, 3], color='black')
 axs[2].set_ylabel(r'$\theta$', fontsize=16)
 
 # Control 1 (acceleration)
-axs[3].plot(time_array[:-1], u_hist_np[:, 0], color='black')
+axs[3].plot(time_array, u_hist_np[:, 0], color='black')
 axs[3].axhline(y=control_low[0], color='gray', linestyle=':', alpha=0.7, label='Bounds')
 axs[3].axhline(y=control_high[0], color='gray', linestyle=':', alpha=0.7)
 axs[3].set_ylabel(r'$u_1$ (a)', fontsize=16)
 axs[3].legend(loc='lower right', frameon=False, fontsize=12)
 
 # Control 2 (angular velocity)
-axs[4].plot(time_array[:-1], u_hist_np[:, 1], color='black')
+axs[4].plot(time_array, u_hist_np[:, 1], color='black')
 axs[4].axhline(y=control_low[1], color='gray', linestyle=':', alpha=0.7, label='Bounds')
 axs[4].axhline(y=control_high[1], color='gray', linestyle=':', alpha=0.7)
 axs[4].set_ylabel(r'$u_2$ ($\omega$)', fontsize=16)
@@ -311,7 +304,7 @@ plt.show()
 # --- Barrier Values Plot (min over predicted horizon) ---
 fig, ax = plt.subplots(figsize=(8, 3))
 
-ax.plot(time_array[:-1], np.min(h_pred_min, axis=1), color='black',
+ax.plot(time_array, np.min(h_pred_min_np, axis=1), color='black',
         label=r'$\min_{t \in [0,T]} \min_i h_i(x(t))$')
 ax.axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='Constraint boundary')
 ax.set_xlabel(r'$t~(\rm {s})$', fontsize=16)
@@ -360,8 +353,8 @@ def create_ilqr_animation():
                         edgecolors='black', linewidths=2, label='Current Position', zorder=4)
 
         # Draw predicted trajectory from iLQR
-        if frame < len(pred_trajs):
-            pred_traj = pred_trajs[frame]  # (N+1, state_dim)
+        if frame < pred_trajs_np.shape[0]:
+            pred_traj = pred_trajs_np[frame]  # (N+1, state_dim)
             pred_x = pred_traj[:, 0]
             pred_y = pred_traj[:, 1]
             ax_anim.plot(pred_x, pred_y, 'c--', linewidth=2, alpha=0.8,

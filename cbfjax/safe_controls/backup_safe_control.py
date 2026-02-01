@@ -17,6 +17,7 @@ from cbfjax.utils import profile_jax
 
 from cbfjax.safe_controls.qp_safe_control import InputConstQPSafeControl, MinIntervQPSafeControl
 from cbfjax.safe_controls.base_safe_control import BaseMinIntervSafeControl
+from cbfjax.controls.control_types import BackupInfo
 
 
 class BackupSafeControl(InputConstQPSafeControl):
@@ -266,13 +267,13 @@ class BackupSafeControl(InputConstQPSafeControl):
 
         constraint_at_u = jnp.dot(G, u) - h
 
-        info = {
-            'constraint_at_u': constraint_at_u,
-            'u_star': u_star,
-            'ub_select': ub_select,
-            'feas_fact': feas_fact,
-            'beta': beta,
-        }
+        info = BackupInfo(
+            constraint_at_u=constraint_at_u,
+            u_star=u_star,
+            ub_select=ub_select,
+            feas_fact=feas_fact,
+            beta=beta,
+        )
         return u, state, info
 
     def _get_backup_blend(self, h_star_vals: jnp.ndarray, ub_vals: jnp.ndarray) -> jnp.ndarray:

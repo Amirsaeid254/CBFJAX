@@ -70,13 +70,13 @@ cfg_cf = immutabledict({
 ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'maxiter': 2,
+    'maxiter': 10,
     'grad_norm_threshold': 1e-4,
-    'maxiter_al': 4,
+    'maxiter_al': 10,
     'constraints_threshold': 1e-4,
-    'penalty_init': 300.0,
-    'penalty_update_rate': 200.0,
-    'log_barrier_gain': 10.0,
+    'penalty_init': 1e5,
+    'penalty_update_rate': 500.0,
+    'log_barrier_gain': 0.0,
     'safety_margin': 0.0,
 }
 
@@ -132,9 +132,9 @@ print(f"  CF barrier: composite barrier for closed-form safety")
 print("Setting up iLQR safe controller...")
 
 # Cost matrices for trajectory tracking
-Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))   # State cost
-R = jnp.diag(jnp.array([10.0, 10.0]))              # Control cost
-Q_e = 100.0 * Q                                    # Terminal cost
+Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))   # State cost
+R = jnp.diag(jnp.array([0.1, 0.1]))              # Control cost
+Q_e = 5.0 * Q                                    # Terminal cost
 
 # Goal position
 goal_pos = jnp.array([3.0, 4.5])
@@ -158,12 +158,6 @@ print(f"  Barrier: handled as AL inequality constraint")
 
 print("Setting up CF safety filter...")
 
-# Create function that wraps iLQR safe controller as desired control
-def ilqr_safe_desired_control(x: jnp.ndarray) -> jnp.ndarray:
-    """Compute iLQR safe optimal control for state x."""
-    u, _ = ilqr_controller._optimal_control_single(x)
-    return u
-
 # Create CF safety filter with iLQR-safe as desired control
 safety_filter = (
     MinIntervCFSafeControl(
@@ -173,7 +167,7 @@ safety_filter = (
     )
     .assign_dynamics(dynamics)
     .assign_state_barrier(barrier_cf)
-    .assign_desired_control(ilqr_safe_desired_control)
+    .assign_desired_control(ilqr_controller)
 )
 
 print(f"  Alpha: 0.5 * h")
@@ -189,14 +183,14 @@ x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
 # Test iLQR-safe alone
 print("  Testing iLQR-safe controller...")
-u_ilqr_test, _ = ilqr_controller.optimal_control(x0)
-print(f"    iLQR-safe control: u = {np.array(u_ilqr_test)}")
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None])
+print(f"    iLQR-safe control: u = {np.array(u_ilqr_test[0])}")
 
 # Test CF safety filter
 print("  Testing CF safety filter...")
-u_safe_test, _ = safety_filter._optimal_control_single(x0)
-print(f"    CF-safe control: u = {np.array(u_safe_test)}")
-print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
+u_safe_test, _ = safety_filter.optimal_control(x0[None])
+print(f"    CF-safe control: u = {np.array(u_safe_test[0])}")
+print(f"    Intervention: du = {np.array(u_safe_test[0] - u_ilqr_test[0])}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -234,11 +228,19 @@ time_array = np.linspace(0, sim_time, n_steps + 1)
 
 print("\nComputing control actions and analysis data...")
 
-# Compute safe actions (what was actually applied)
-u_safe_hist, _ = safety_filter.optimal_control(x_hist[:-1])
+# Safety filter is stateless — compute with info via vmap
+u_safe_hist, _, safe_info_hist = safety_filter.optimal_control_with_info(x_hist)
 
-# Compute iLQR-safe actions (what iLQR-safe would have applied)
-u_ilqr_hist, _ = ilqr_controller.optimal_control(x_hist[:-1])
+# Thread iLQR state through trajectory for warm-started controls and predictions
+def ilqr_scan_step(state, x):
+    u, new_state, info = ilqr_controller._optimal_control_single_with_info(x, state)
+    return new_state, (u, info)
+
+ilqr_init_state = ilqr_controller.get_init_state()
+_, (u_ilqr_hist, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, x_hist)
+
+# Predicted trajectories from iLQR info
+pred_trajs_np = np.array(ilqr_info_hist.x_traj)
 
 # Compute barrier values along trajectory
 h_vals = barrier_cf.hocbf(x_hist)
@@ -247,13 +249,6 @@ min_barrier_vals = barrier_cf.min_barrier(x_hist)
 # Compute intervention magnitude
 intervention = u_safe_hist - u_ilqr_hist
 intervention_norm = jnp.linalg.norm(intervention, axis=1)
-
-# Store predicted trajectories for animation
-pred_trajs = []
-sample_indices = np.arange(0, n_steps, 100)
-for i in sample_indices:
-    x_traj_pred, _ = ilqr_controller.get_predicted_trajectory(x_hist[i])
-    pred_trajs.append(np.array(x_traj_pred))
 
 # Convert to numpy
 x_hist_np = np.array(x_hist)
@@ -372,19 +367,19 @@ axs[2].plot(time_array, x_hist_np[:, 3], color='black')
 axs[2].set_ylabel(r'$\theta$', fontsize=16)
 
 # Control 1 - comparing iLQR-safe vs CF-safe
-axs[3].plot(time_array[:-1], u_ilqr_np[:, 0], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
-axs[3].plot(time_array[:-1], u_safe_np[:, 0], 'k-', label=r'$u_{\rm CF-safe}$')
+axs[3].plot(time_array, u_ilqr_np[:, 0], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
+axs[3].plot(time_array, u_safe_np[:, 0], 'k-', label=r'$u_{\rm CF-safe}$')
 axs[3].set_ylabel(r'$u_1$ (a)', fontsize=16)
 axs[3].legend(loc='lower center', ncol=3, frameon=False, fontsize=12)
 
 # Control 2
-axs[4].plot(time_array[:-1], u_ilqr_np[:, 1], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
-axs[4].plot(time_array[:-1], u_safe_np[:, 1], 'k-', label=r'$u_{\rm CF-safe}$')
+axs[4].plot(time_array, u_ilqr_np[:, 1], 'r--', alpha=0.7, label=r'$u_{\rm iLQR-safe}$')
+axs[4].plot(time_array, u_safe_np[:, 1], 'k-', label=r'$u_{\rm CF-safe}$')
 axs[4].set_ylabel(r'$u_2$ ($\omega$)', fontsize=16)
 axs[4].legend(loc='lower center', ncol=3, frameon=False, fontsize=12)
 
 # Intervention magnitude
-axs[5].plot(time_array[:-1], intervention_norm_np, color='purple')
+axs[5].plot(time_array, intervention_norm_np, color='purple')
 axs[5].set_ylabel(r'$\|u_{\rm CF} - u_{\rm iLQR}\|$', fontsize=16)
 axs[5].set_xlabel(r'$t~(\rm {s})$', fontsize=16)
 
@@ -466,12 +461,10 @@ def create_animation():
         ax_anim.scatter([current_x], [current_y], s=100, c='blue', marker='o',
                         edgecolors='black', linewidths=2, label='Current', zorder=4)
 
-        # Draw iLQR predicted trajectory (if available)
-        pred_idx = frame // 100
-        if pred_idx < len(pred_trajs):
-            pred_traj = pred_trajs[pred_idx]
-            ax_anim.plot(pred_traj[:, 0], pred_traj[:, 1], 'c--', linewidth=2,
-                         alpha=0.6, label='iLQR Prediction', zorder=2)
+        # Draw iLQR predicted trajectory
+        pred_traj = pred_trajs_np[frame]
+        ax_anim.plot(pred_traj[:, 0], pred_traj[:, 1], 'c--', linewidth=2,
+                     alpha=0.6, label='iLQR Prediction', zorder=2)
 
         # Set plot properties
         ax_anim.set_xlabel(r'$q_{\rm x}$', fontsize=14)

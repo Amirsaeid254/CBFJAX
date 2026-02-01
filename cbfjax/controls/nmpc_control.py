@@ -20,6 +20,7 @@ from ..utils.jax2casadi import convert
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
 from .base_control import BaseControl, QuadraticCostMixin
+from .control_types import NMPCInfo
 from ..dynamics.base_dynamic import DummyDynamics
 
 
@@ -531,13 +532,12 @@ class NMPCControl(BaseControl):
 
         u_jax = jnp.array(u_opt)
 
-        info = {
-            'status': status,
-            'cost': cost,
-            'solver_status': status,
-            'x_traj': x_traj,
-            'u_traj': u_traj,
-        }
+        info = NMPCInfo(
+            status=jnp.array(status),
+            cost=jnp.array(cost),
+            x_traj=x_traj,
+            u_traj=u_traj,
+        )
 
         return u_jax, state, info
 
@@ -646,13 +646,15 @@ class NMPCControl(BaseControl):
                 info_list.append(info_i)
 
             u_batch = jnp.stack(u_list)
-            info_batch = {
-                'status': jnp.array([info['status'] for info in info_list]),
-                'cost': jnp.array([info['cost'] for info in info_list]),
-            }
+            info_batch = NMPCInfo(
+                status=jnp.array([info_i.status for info_i in info_list]),
+                cost=jnp.array([info_i.cost for info_i in info_list]),
+                x_traj=jnp.stack([info_i.x_traj for info_i in info_list]),
+                u_traj=jnp.stack([info_i.u_traj for info_i in info_list]),
+            )
             return u_batch, state, info_batch
 
-    def _make_optimal_control_for_ode(self) -> Callable:
+    def _optimal_control_for_ode(self) -> Callable:
         """
         Create a stateless control function for ODE integration.
 

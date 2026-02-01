@@ -24,6 +24,7 @@ from .control_types import (
     CFInfo,
     QPInfo,
     BackupInfo,
+    NMPCInfo,
 )
 from ..dynamics.base_dynamic import DummyDynamics
 
@@ -44,4 +45,5 @@ __all__ = [
     "CFInfo",
     "QPInfo",
     "BackupInfo",
+    "NMPCInfo",
 ]
