@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import equinox as eqx
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 
 import casadi as ca
 from ..utils.jax2casadi import convert
@@ -35,9 +35,12 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
     Additional params for safe control:
         params = {
             ...  # inherited from NMPCControl
-            'slacked': False,        # True = soft constraint, False = hard
-            'slack_gain_l1': 0.0,    # L1 penalty weight (linear)
-            'slack_gain_l2': 1000.0, # L2 penalty weight (quadratic)
+            'slacked': False,        # True = soft path constraint, False = hard
+            'slack_gain_l1': 0.0,    # L1 penalty weight (linear) for path
+            'slack_gain_l2': 1000.0, # L2 penalty weight (quadratic) for path
+            'slacked_e': False,        # True = soft terminal constraint
+            'slack_gain_l1_e': 0.0,    # L1 penalty for terminal
+            'slack_gain_l2_e': 1000.0, # L2 penalty for terminal
         }
     """
 
@@ -48,6 +51,7 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
         Args:
             **kwargs: All args passed via cooperative inheritance
                 - barrier: Handled by BaseSafeControl
+                - terminal_barrier: Handled by BaseSafeControl
                 - control_low, control_high, cost_running, etc.: Handled by NMPCControl
                 - action_dim, params, dynamics: Handled by BaseControl
         """
@@ -57,6 +61,9 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
             'slacked': False,
             'slack_gain_l1': 0.0,
             'slack_gain_l2': 1000.0,
+            'slacked_e': False,
+            'slack_gain_l1_e': 0.0,
+            'slack_gain_l2_e': 1000.0,
         }
         if params is not None:
             safe_params.update(params)
@@ -81,6 +88,7 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
             'cost_running': self._cost_running,
             'cost_terminal': self._cost_terminal,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
@@ -98,17 +106,18 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
     # ==========================================
 
     def _setup_constraints(self, ocp: AcadosOcp, model: AcadosModel, x0: np.ndarray):
-        """Setup constraints in OCP including barrier constraint with optional slack."""
+        """Setup constraints in OCP including path and terminal barrier constraints with optional slack."""
         # Call parent to setup control and state bounds
         super()._setup_constraints(ocp, model, x0)
 
-        # Add barrier constraint if assigned
+        nx = self._dynamics.state_dim
+
+        # Add path barrier constraint if assigned
         if self.has_barrier:
-            nx = self._dynamics.state_dim
             nh = self._barrier.num_constraints
 
             # Convert each HOCBF function to CasADi
-            print(f"Converting {nh} JAX barrier(s) to CasADi...")
+            print(f"Converting {nh} JAX path barrier(s) to CasADi...")
             h_exprs = []
             for i, hocbf_func in enumerate(self._barrier._hocbf_funcs):
                 barrier_ca = convert(
@@ -139,7 +148,44 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
                 ocp.cost.Zl = slack_l2 * np.ones(nh)
                 ocp.cost.Zu = np.zeros(nh)
 
-                print(f"Barrier constraint slacked with L1={slack_l1}, L2={slack_l2}")
+                print(f"Path barrier slacked with L1={slack_l1}, L2={slack_l2}")
+
+        # Add terminal barrier constraint if assigned
+        if self.has_terminal_barrier:
+            nh_e = self._terminal_barrier.num_constraints
+
+            print(f"Converting {nh_e} JAX terminal barrier(s) to CasADi...")
+            h_e_exprs = []
+            for i, hocbf_func in enumerate(self._terminal_barrier._hocbf_funcs):
+                barrier_ca = convert(
+                    hocbf_func,
+                    [('x', (nx,))],
+                    name=f'barrier_e_{i}',
+                    validate=True,
+                    tolerance=1e-6
+                )
+                h_e_exprs.append(barrier_ca(model.x))
+
+            # Stack terminal barrier constraints: h_e(x_N) >= 0
+            model.con_h_expr_e = ca.vertcat(*h_e_exprs)
+
+            # Terminal constraint bounds: h_e >= 0
+            ocp.constraints.lh_e = np.zeros(nh_e)
+            ocp.constraints.uh_e = 1e9 * np.ones(nh_e)
+
+            # Setup terminal slack if enabled
+            if self._params.get('slacked_e', False):
+                ocp.constraints.idxsh_e = np.arange(nh_e)
+
+                slack_l1_e = self._params.get('slack_gain_l1_e', 0.0)
+                slack_l2_e = self._params.get('slack_gain_l2_e', 1000.0)
+
+                ocp.cost.zl_e = slack_l1_e * np.ones(nh_e)
+                ocp.cost.zu_e = np.zeros(nh_e)
+                ocp.cost.Zl_e = slack_l2_e * np.ones(nh_e)
+                ocp.cost.Zu_e = np.zeros(nh_e)
+
+                print(f"Terminal barrier slacked with L1={slack_l1_e}, L2={slack_l2_e}")
 
     def make(self, x0: Optional[np.ndarray] = None) -> 'NMPCSafeControl':
         """
@@ -254,6 +300,7 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
             'Q_e': self._Q_e,
             'x_ref': self._x_ref,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)

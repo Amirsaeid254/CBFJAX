@@ -138,8 +138,10 @@ class BackupSafeControl(InputConstQPSafeControl):
         feas_fact = self._get_feasibility_factor(x, Lf_hocbf, Lg_hocbf, hocbf)
 
         # TODO: Optimize to avoid redundant trajectory computation
-        h_star_vals = self._barrier.get_h_stars(x)  # (action_num,)
-        action_num = h_star_vals.shape[0]
+        # h_star_vals = self._barrier.get_h_stars(x)  # (action_num,)
+        # action_num = h_star_vals.shape[0]
+        action_num = 1
+        h_star_vals = jnp.array([0.0])
 
         # Compute backup control selection
         if action_num > 1:

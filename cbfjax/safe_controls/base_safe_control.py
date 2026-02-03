@@ -51,12 +51,14 @@ class BaseSafeControl(BaseControl):
 
     Attributes:
         _barrier: Barrier function object for safety constraints
+        _terminal_barrier: Optional terminal barrier for end-of-horizon constraint
     """
 
-    # Safety-specific field
+    # Safety-specific fields
     _barrier: Any = eqx.field(static=True)
+    _terminal_barrier: Any = eqx.field(static=True)
 
-    def __init__(self, barrier=None, **kwargs):
+    def __init__(self, barrier=None, terminal_barrier=None, **kwargs):
         """
         Initialize BaseSafeControl.
 
@@ -73,6 +75,7 @@ class BaseSafeControl(BaseControl):
 
         super().__init__(**kwargs)
         self._barrier = barrier if barrier is not None else DummyBarrier()
+        self._terminal_barrier = terminal_barrier
 
     @classmethod
     def create_empty(cls, action_dim: int, params: Optional[dict] = None):
@@ -84,12 +87,25 @@ class BaseSafeControl(BaseControl):
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
     def assign_state_barrier(self, barrier):
         return self._create_updated_instance(barrier=barrier)
+
+    def assign_terminal_barrier(self, terminal_barrier):
+        """
+        Assign terminal barrier constraint.
+
+        Args:
+            terminal_barrier: Barrier object for terminal constraint.
+
+        Returns:
+            New controller instance with terminal barrier assigned
+        """
+        return self._create_updated_instance(terminal_barrier=terminal_barrier)
 
     def _is_dummy_barrier(self, barrier) -> bool:
         """Check if barrier is a dummy object."""
@@ -101,9 +117,19 @@ class BaseSafeControl(BaseControl):
         return self._barrier
 
     @property
+    def terminal_barrier(self):
+        """Get assigned terminal barrier."""
+        return self._terminal_barrier
+
+    @property
     def has_barrier(self) -> bool:
         """Check if real barrier assigned."""
         return not self._is_dummy_barrier(self._barrier)
+
+    @property
+    def has_terminal_barrier(self) -> bool:
+        """Check if terminal barrier is assigned."""
+        return self._terminal_barrier is not None
 
 
 class BaseCBFSafeControl(BaseSafeControl):
@@ -165,6 +191,7 @@ class BaseCBFSafeControl(BaseSafeControl):
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
             'Q': self._Q,
             'c': self._c,
         }
@@ -237,6 +264,7 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
             'Q': self._Q,
             'c': self._c,
             'desired_control': self._desired_control,

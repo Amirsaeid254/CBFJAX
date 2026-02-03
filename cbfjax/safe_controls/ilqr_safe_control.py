@@ -10,9 +10,10 @@ Classes:
     QuadraticiLQRSafeControl: Constrained iLQR with barrier constraints (quadratic cost)
 """
 
+import jax
 import jax.numpy as jnp
 import equinox as eqx
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 from immutabledict import immutabledict
 
 from ..controls.ilqr_control import ConstrainediLQRControl
@@ -29,20 +30,8 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
     - BaseSafeControl: barrier interface
 
     Barrier is enforced purely via augmented Lagrangian inequality constraint.
+    Supports optional terminal barrier applied only at t == T.
     """
-
-    def __init__(self, **kwargs):
-        """
-        Initialize iLQRSafeControl.
-
-        Args:
-            **kwargs: All args passed via cooperative inheritance
-                - barrier: Handled by BaseSafeControl
-                - control_low, control_high, etc.: Handled by ConstrainediLQRControl
-                - cost_func: Handled by iLQRControl
-                - action_dim, params, dynamics: Handled by BaseControl
-        """
-        super().__init__(**kwargs)
 
     @classmethod
     def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'iLQRSafeControl':
@@ -60,29 +49,48 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
             'state_low': list(self._state_low) if self._has_state_bounds else None,
             'state_high': list(self._state_high) if self._has_state_bounds else None,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
     def _get_inequality_constraint(self) -> Callable:
         """
-        Build inequality constraint including barrier constraints.
+        Build inequality constraint including barrier and terminal barrier constraints.
 
         Barrier constraint h(x) >= 0 is converted to -h(x) <= 0.
+        Terminal barrier is only evaluated at t == T; zeros otherwise.
         """
         base_constraint_func = super()._get_inequality_constraint()
 
-        if not self.has_barrier:
+        if not self.has_barrier and not self.has_terminal_barrier:
             return base_constraint_func
 
-        barrier = self._barrier
+        barrier = self._barrier if self.has_barrier else None
+        terminal_barrier = self._terminal_barrier if self.has_terminal_barrier else None
+        T = self.N_horizon
 
         def inequality_constraint(x, u, t):
-            h_values = barrier._hocbf_single(x)
-            barrier_constraint = jnp.atleast_1d(-h_values).flatten()
+            parts = []
+
             if base_constraint_func is not None:
-                return jnp.concatenate([base_constraint_func(x, u, t), barrier_constraint])
-            return barrier_constraint
+                parts.append(base_constraint_func(x, u, t))
+
+            # Path barrier: -h(x) <= 0 at all timesteps
+            if barrier is not None:
+                h_values = barrier._hocbf_single(x)
+                parts.append(jnp.atleast_1d(-h_values).flatten())
+
+            # Terminal barrier: only evaluated at t == T
+            if terminal_barrier is not None:
+                terminal_constraint = jax.lax.cond(
+                    t == T,
+                    lambda: jnp.atleast_1d(-terminal_barrier._hocbf_single(x)).flatten(),
+                    lambda: jnp.zeros(1),
+                )
+                parts.append(terminal_constraint)
+
+            return jnp.concatenate(parts)
 
         return inequality_constraint
 
@@ -146,6 +154,7 @@ class QuadraticiLQRSafeControl(QuadraticCostMixin, iLQRSafeControl):
             'Q_e': self._Q_e,
             'x_ref': self._x_ref,
             'barrier': self._barrier,
+            'terminal_barrier': self._terminal_barrier,
         }
         defaults.update(kwargs)
         return self.__class__(**defaults)
