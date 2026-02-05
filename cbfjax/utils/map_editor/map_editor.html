@@ -581,6 +581,7 @@ Tools:
   E                - Ellipse tool
 
 Editing:
+  Ctrl+Z           - Undo
   Delete/Backspace - Delete selected
   Ctrl+D           - Duplicate selected
   Escape           - Deselect all
@@ -620,6 +621,26 @@ Mouse:
         let isPanning = false;
         let dragStart = null;
         let dragOffset = {x: 0, y: 0};
+
+        // Undo history
+        const undoStack = [];
+        const MAX_UNDO = 50;
+
+        function saveUndoState() {
+            undoStack.push(JSON.parse(JSON.stringify(geoms)));
+            if (undoStack.length > MAX_UNDO) undoStack.shift();
+        }
+
+        function undo() {
+            if (undoStack.length === 0) {
+                showToast('Nothing to undo');
+                return;
+            }
+            geoms = undoStack.pop();
+            selectGeom(null);
+            render();
+            showToast('Undo');
+        }
 
         // Canvas
         const canvas = document.getElementById('mapCanvas');
@@ -864,6 +885,7 @@ Mouse:
                 selectGeom(clicked);
 
                 if (clicked) {
+                    saveUndoState();
                     isDragging = true;
                     dragStart = {x: cx, y: cy};
                     dragOffset = {
@@ -932,7 +954,10 @@ Mouse:
         function onKeyDown(e) {
             // Handle shortcuts
             if (e.ctrlKey || e.metaKey) {
-                if (e.key === 'd') {
+                if (e.key === 'z') {
+                    e.preventDefault();
+                    undo();
+                } else if (e.key === 'd') {
                     e.preventDefault();
                     duplicateSelected();
                 } else if (e.key === 'e') {
@@ -1074,6 +1099,7 @@ Mouse:
             }
 
             if (geom) {
+                saveUndoState();
                 geoms.push(geom);
                 selectGeom(geom);
                 render();
@@ -1091,6 +1117,7 @@ Mouse:
             if (selectedGeom) {
                 const idx = geoms.indexOf(selectedGeom);
                 if (idx !== -1) {
+                    saveUndoState();
                     geoms.splice(idx, 1);
                     selectGeom(null);
                     render();
@@ -1101,6 +1128,7 @@ Mouse:
 
         function duplicateSelected() {
             if (selectedGeom) {
+                saveUndoState();
                 const newGeom = JSON.parse(JSON.stringify(selectedGeom));
                 newGeom.center[0] += 1;
                 newGeom.center[1] += 1;
@@ -1245,6 +1273,7 @@ Mouse:
 
         function updateGeomFromProps() {
             if (!selectedGeom) return;
+            saveUndoState();
 
             const geom = selectedGeom;
 
@@ -1300,6 +1329,7 @@ Mouse:
         // ====================
         function newMap() {
             if (geoms.length > 0 && !confirm('Discard current map?')) return;
+            saveUndoState();
             geoms = [];
             selectGeom(null);
             render();
@@ -1435,6 +1465,7 @@ Mouse:
 
         function loadFromInput() {
             const input = document.getElementById('loadInput').value.trim();
+            saveUndoState();
 
             try {
                 // Try JSON first
@@ -1581,6 +1612,7 @@ Mouse:
             const sizeMax = parseFloat(document.getElementById('randomSizeMax').value) || 2.0;
             const clearFirst = document.getElementById('randomClearFirst').checked;
 
+            saveUndoState();
             if (clearFirst) {
                 // Keep boundaries, clear obstacles
                 geoms = geoms.filter(g => g.type.includes('boundary'));
@@ -1631,6 +1663,7 @@ Mouse:
             const startX = centerX - (cols - 1) * spacing / 2;
             const startY = centerY - (rows - 1) * spacing / 2;
 
+            saveUndoState();
             for (let r = 0; r < rows; r++) {
                 for (let c = 0; c < cols; c++) {
                     const cx = startX + c * spacing;
@@ -1667,6 +1700,7 @@ Mouse:
             const w = parseFloat(document.getElementById('boundWidth').value) || 10;
             const h = parseFloat(document.getElementById('boundHeight').value) || 10;
 
+            saveUndoState();
             geoms.push({
                 type: 'norm_boundary',
                 center: [cx, cy],
