@@ -59,11 +59,11 @@ cfg_ilqr = immutabledict({
 # Barrier configuration for QP (needs HOCBF with Lie derivatives)
 cfg_qp = immutabledict({
     'softmax_rho': 20,
-    'softmin_rho': 10,
+    'softmin_rho': 20,
     'pos_barrier_rel_deg': 2,
     'vel_barrier_rel_deg': 1,
-    'obstacle_alpha': (2.5,),
-    'boundary_alpha': (1.0,),
+    'obstacle_alpha': (10.0,),
+    'boundary_alpha': (10.0,),
     'velocity_alpha': (),
 })
 
@@ -71,9 +71,9 @@ cfg_qp = immutabledict({
 ilqr_params = {
     'horizon': 4.0,
     'time_steps': 0.05,
-    'maxiter': 20,
+    'maxiter': 10,
     'grad_norm_threshold': 1e-4,
-    'maxiter_al': 20,
+    'maxiter_al': 10,
     'constraints_threshold': 1e-4,
     'penalty_init': 1e5,
     'penalty_update_rate': 500.0,
@@ -135,6 +135,7 @@ Q_e = 5.0 * Q                                    # Terminal cost
 
 # Goal position
 goal_pos = jnp.array([3.0, 4.5])
+goal_pos = jnp.array([7.5, 7.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
 # Create iLQR controller WITH barrier as AL inequality constraint
@@ -159,7 +160,7 @@ print("Setting up QP safety filter...")
 safety_filter = (
     MinIntervInputConstQPSafeControl(
         action_dim=nu,
-        alpha=lambda h: 0.5 * h,
+        alpha=lambda h: 1.0 * h,
         params=qp_params,
         control_low=control_low,
         control_high=control_high,
@@ -179,6 +180,7 @@ print("\nTesting controllers...")
 
 # Initial state
 x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
+x0 = jnp.array([-7.5, -7.5, 0.0, 0.0])
 
 # Test iLQR-safe alone
 print("  Testing iLQR-safe controller...")

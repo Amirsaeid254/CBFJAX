@@ -118,6 +118,30 @@ class iLQRControl(BaseControl):
         """Get initial controller state with zero U trajectory."""
         return ILQRState(U=jnp.zeros((self.N_horizon, self._action_dim)))
 
+    def _get_default_guess(self) -> jnp.ndarray:
+        """Get default U guess (zeros)."""
+        return jnp.zeros((self.N_horizon, self._action_dim))
+
+    def set_init_guess(self, U: jnp.ndarray = None, state=None) -> ILQRState:
+        """
+        Set initial guess U on a controller state.
+
+        If state is None, creates one from get_init_state() first.
+        If U is None, uses default zeros.
+
+        Args:
+            U: Control trajectory guess (N_horizon, action_dim). If None, uses default.
+            state: Existing controller state to update. If None, uses default.
+
+        Returns:
+            ILQRState with the provided (or default) U trajectory
+        """
+        if state is None:
+            state = self.get_init_state()
+        if U is None:
+            U = self._get_default_guess()
+        return state._replace(U=jnp.asarray(U))
+
     def _get_discrete_dynamics(self):
         """Get discrete dynamics wrapped for trajax (x, u, t) -> x_next."""
         discrete_rhs = self._dynamics.discrete_rhs

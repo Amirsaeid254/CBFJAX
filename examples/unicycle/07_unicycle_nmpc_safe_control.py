@@ -67,6 +67,7 @@ nmpc_params = {
     'slacked': True,
     'slack_gain_l1': 0.0,
     'slack_gain_l2': 1e6,
+    'shift_warm_start': False,
 }
 
 # ============================================
@@ -133,6 +134,7 @@ controller = (
 # Build the controller
 print("Building NMPC solver (this may take a moment)...")
 controller = controller.make(x0)
+controller.set_init_guess()
 
 # ============================================
 # Closed-Loop Simulation

@@ -354,7 +354,6 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
         # Check quadratic cost is assigned
         assert self._Q is not None and self._R is not None, \
             "Cost matrices must be assigned. Use assign_cost_matrices()."
-        assert self.has_barrier, "Barrier must be assigned before make() for QuadraticNMPCSafeControl"
         assert self.has_dynamics, "Dynamics must be assigned before make()"
         assert self._has_control_bounds, "Control bounds must be assigned before make()"
 
@@ -377,10 +376,17 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
 
         object.__setattr__(self, '_ocp', ocp)
 
+        # Create solver (force regeneration to avoid stale code)
         print("Creating acados solver...")
         from acados_template import AcadosOcpSolver
-        solver = AcadosOcpSolver(ocp)
+        solver = AcadosOcpSolver(ocp, build=True, generate=True)
         object.__setattr__(self, '_solver', solver)
+
+        # Create sim solver for shift warm-start if enabled
+        if self._params.get('shift_warm_start', False):
+            print("Creating acados integrator for shift warm-start...")
+            sim_solver = self._create_sim_solver(model)
+            object.__setattr__(self, '_sim_solver', sim_solver)
 
         object.__setattr__(self, '_is_built', True)
         print("NMPC ready!")

@@ -17,7 +17,7 @@ import casadi as ca
 from typing import Callable, Optional, Any, Tuple
 
 from ..utils.jax2casadi import convert
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 
 from .base_control import BaseControl, QuadraticCostMixin
 from .control_types import NMPCInfo
@@ -78,6 +78,7 @@ class NMPCControl(BaseControl):
     _solver: Any
     _dynamics_casadi: Any
     _ocp: Any
+    _sim_solver: Any  # AcadosSimSolver for shift propagation
 
     def __init__(
         self,
@@ -156,6 +157,7 @@ class NMPCControl(BaseControl):
         self._solver = None
         self._dynamics_casadi = None
         self._ocp = None
+        self._sim_solver = None
 
     @classmethod
     def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'NMPCControl':
@@ -267,6 +269,116 @@ class NMPCControl(BaseControl):
             New NMPCControl instance with terminal cost assigned
         """
         return self._create_updated_instance(cost_terminal=cost_func)
+
+    # ==========================================
+    # Initial Guess / Warm-Starting
+    # ==========================================
+
+    def _get_default_guess(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Get default guess: x0 replicated across horizon, zeros for u."""
+        N = self.N_horizon
+        nx = self._dynamics.state_dim
+        nu = self._action_dim
+        x0 = self._solver.get(0, "x")
+        x_traj = np.tile(x0, (N + 1, 1))
+        return x_traj, np.zeros((N, nu))
+
+    def set_init_guess(
+        self,
+        x_traj: Optional[np.ndarray] = None,
+        u_traj: Optional[np.ndarray] = None,
+    ) -> None:
+        """
+        Set initial guess for the solver (warm-starting).
+
+        If x_traj or u_traj is None, uses default zeros for that component.
+
+        Args:
+            x_traj: State trajectory guess (N+1, nx). If None, uses default.
+            u_traj: Control trajectory guess (N, nu). If None, uses default.
+        """
+        assert self._is_built, "Must call make() before setting initial guess"
+
+        N = self.N_horizon
+        x_default, u_default = self._get_default_guess()
+
+        if x_traj is None:
+            x_traj = x_default
+        x_traj = np.asarray(x_traj)
+        for k in range(N + 1):
+            self._solver.set(k, "x", x_traj[k])
+
+        if u_traj is None:
+            u_traj = u_default
+        u_traj = np.asarray(u_traj)
+        for k in range(N):
+            self._solver.set(k, "u", u_traj[k])
+
+    def set_init_guess_linear(
+        self,
+        x0: np.ndarray,
+        x_target: np.ndarray,
+    ) -> None:
+        """
+        Set a linear interpolation initial guess from x0 to x_target.
+
+        Args:
+            x0: Initial state (nx,)
+            x_target: Target state (nx,)
+        """
+        x0 = np.asarray(x0)
+        x_target = np.asarray(x_target)
+        N = self.N_horizon
+
+        alphas = np.linspace(0.0, 1.0, N + 1)
+        x_traj = x0[None, :] + alphas[:, None] * (x_target - x0)[None, :]
+
+        self.set_init_guess(x_traj=x_traj)
+
+    # ==========================================
+    # Post-Solve Warm-Start
+    # ==========================================
+
+    def _create_sim_solver(self, model: AcadosModel) -> AcadosSimSolver:
+        """Create an AcadosSimSolver for shift propagation using Euler integration."""
+        sim = AcadosSim()
+        sim.model = model
+        sim.solver_options.T = self.time_steps
+        sim.solver_options.integrator_type = 'ERK'
+        sim.solver_options.num_stages = 1
+        sim.solver_options.num_steps = 1
+        return AcadosSimSolver(sim)
+
+    def _post_solve(self):
+        """Post-solve hook: shift warm-start if sim_solver is available, no-op otherwise."""
+        if self._sim_solver is None:
+            return
+        self._shift_warm_start()
+
+    def _shift_warm_start(self):
+        """Shift solution forward by one step and propagate dynamics."""
+        N = self.N_horizon
+
+        # Extract current solution
+        x_traj = np.array([self._solver.get(k, "x") for k in range(N + 1)])
+        u_traj = np.array([self._solver.get(k, "u") for k in range(N)])
+
+        # Shift controls: drop first, repeat last
+        u_shifted = np.empty_like(u_traj)
+        u_shifted[:-1] = u_traj[1:]
+        u_shifted[-1] = u_traj[-1]
+
+        # Propagate states from x_traj[1] using shifted controls
+        x_shifted = np.empty_like(x_traj)
+        x_shifted[0] = x_traj[1]
+        for k in range(N):
+            x_shifted[k + 1] = self._sim_solver.simulate(x=x_shifted[k], u=u_shifted[k])
+
+        # Set back into solver
+        for k in range(N + 1):
+            self._solver.set(k, "x", x_shifted[k])
+        for k in range(N):
+            self._solver.set(k, "u", u_shifted[k])
 
     # ==========================================
     # Properties for horizon/timestep access
@@ -417,6 +529,9 @@ class NMPCControl(BaseControl):
         ocp.solver_options.qp_solver_iter_max = self._params['qp_solver_iter_max']
         ocp.solver_options.tol = self._params['tol']
 
+        # Set code export directory
+        ocp.code_export_directory = 'c_generated_code'
+
     def make(self, x0: Optional[np.ndarray] = None) -> 'NMPCControl':
         """
         Build the NMPC controller.
@@ -465,10 +580,16 @@ class NMPCControl(BaseControl):
         # Store OCP
         object.__setattr__(self, '_ocp', ocp)
 
-        # Create solver
+        # Create solver (force regeneration to avoid stale code)
         print("Creating acados solver...")
-        solver = AcadosOcpSolver(ocp)
+        solver = AcadosOcpSolver(ocp, build=True, generate=True)
         object.__setattr__(self, '_solver', solver)
+
+        # Create sim solver for shift warm-start if enabled
+        if self._params.get('shift_warm_start', False):
+            print("Creating acados integrator for shift warm-start...")
+            sim_solver = self._create_sim_solver(model)
+            object.__setattr__(self, '_sim_solver', sim_solver)
 
         object.__setattr__(self, '_is_built', True)
         print("NMPC ready!")
@@ -502,6 +623,7 @@ class NMPCControl(BaseControl):
         # Solve
         status = self._solver.solve()
         u_opt = self._solver.get(0, "u")
+        self._post_solve()
 
         # Convert back to JAX
         u_jax = jnp.array(u_opt)
@@ -529,6 +651,7 @@ class NMPCControl(BaseControl):
         u_opt = self._solver.get(0, "u")
         cost = self._solver.get_cost()
         x_traj, u_traj = self._extract_trajectory()
+        self._post_solve()
 
         u_jax = jnp.array(u_opt)
 
@@ -918,9 +1041,16 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
 
         object.__setattr__(self, '_ocp', ocp)
 
+        # Create solver (force regeneration to avoid stale code)
         print("Creating acados solver...")
-        solver = AcadosOcpSolver(ocp)
+        solver = AcadosOcpSolver(ocp, build=True, generate=True)
         object.__setattr__(self, '_solver', solver)
+
+        # Create sim solver for shift warm-start if enabled
+        if self._params.get('shift_warm_start', False):
+            print("Creating acados integrator for shift warm-start...")
+            sim_solver = self._create_sim_solver(model)
+            object.__setattr__(self, '_sim_solver', sim_solver)
 
         object.__setattr__(self, '_is_built', True)
         print("NMPC ready!")
