@@ -582,6 +582,8 @@ Tools:
 
 Editing:
   Ctrl+Z           - Undo
+  Ctrl+C           - Copy selected
+  Ctrl+V           - Paste
   Delete/Backspace - Delete selected
   Ctrl+D           - Duplicate selected
   Escape           - Deselect all
@@ -619,8 +621,12 @@ Mouse:
         // Interaction state
         let isDragging = false;
         let isPanning = false;
+        let isResizing = false;
+        let resizeHandle = null;
+        let resizeGeom = null;
         let dragStart = null;
         let dragOffset = {x: 0, y: 0};
+        let clipboard = null;
 
         // Undo history
         const undoStack = [];
@@ -864,6 +870,137 @@ Mouse:
         }
 
         // ====================
+        // Resize helpers
+        // ====================
+        function getResizeHandle(worldX, worldY, geom) {
+            const thresh = 8 / scale;
+
+            if (geom.type === 'cylinder') {
+                const dx = worldX - geom.center[0];
+                const dy = worldY - geom.center[1];
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (Math.abs(dist - geom.params.radius) < thresh) {
+                    return {type: 'radius', angle: Math.atan2(dy, dx)};
+                }
+                return null;
+            }
+
+            if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                const size = geom.params.size || [1, 1];
+                const rotation = geom.params.rotation || 0;
+                const dx = worldX - geom.center[0];
+                const dy = worldY - geom.center[1];
+                const cos_r = Math.cos(-rotation);
+                const sin_r = Math.sin(-rotation);
+                const lx = dx * cos_r - dy * sin_r;
+                const ly = dx * sin_r + dy * cos_r;
+                const w = size[0], h = size[1];
+
+                const nearR = Math.abs(lx - w) < thresh;
+                const nearL = Math.abs(lx + w) < thresh;
+                const nearT = Math.abs(ly - h) < thresh;
+                const nearB = Math.abs(ly + h) < thresh;
+                const inX = Math.abs(lx) <= w + thresh;
+                const inY = Math.abs(ly) <= h + thresh;
+
+                let handle = '';
+                if (nearT && inX) handle += 'n';
+                if (nearB && inX) handle += 's';
+                if (nearR && inY) handle += 'e';
+                if (nearL && inY) handle += 'w';
+
+                if (handle) return {type: handle, rotation: rotation};
+                return null;
+            }
+
+            if (geom.type === 'ellipse') {
+                const A = geom.params.A || [[1, 0], [0, 1]];
+                const dx = worldX - geom.center[0];
+                const dy = worldY - geom.center[1];
+                const val = A[0][0]*dx*dx + (A[0][1]+A[1][0])*dx*dy + A[1][1]*dy*dy;
+                const sqrtVal = Math.sqrt(Math.max(val, 0.001));
+                if (Math.abs(sqrtVal - 1.0) < thresh * 0.5) {
+                    return {type: 'ellipse', angle: Math.atan2(dy, dx)};
+                }
+                return null;
+            }
+
+            return null;
+        }
+
+        function findResizeHandle(x, y) {
+            if (selectedGeom) {
+                const h = getResizeHandle(x, y, selectedGeom);
+                if (h) return {geom: selectedGeom, handle: h};
+            }
+            for (let i = geoms.length - 1; i >= 0; i--) {
+                if (geoms[i] === selectedGeom) continue;
+                const h = getResizeHandle(x, y, geoms[i]);
+                if (h) return {geom: geoms[i], handle: h};
+            }
+            return null;
+        }
+
+        function getResizeCursor(handle) {
+            const baseAngles = {
+                'e': 0, 'w': 0,
+                'n': 90, 's': 90,
+                'nw': 45, 'se': 45,
+                'ne': 135, 'sw': 135,
+            };
+            let deg;
+            if (handle.type === 'radius' || handle.type === 'ellipse') {
+                deg = (-handle.angle * 180 / Math.PI);
+            } else {
+                deg = (baseAngles[handle.type] || 0) - (handle.rotation || 0) * 180 / Math.PI;
+            }
+            deg = ((deg % 180) + 180) % 180;
+            if (deg < 22.5 || deg >= 157.5) return 'ew-resize';
+            if (deg < 67.5) return 'nwse-resize';
+            if (deg < 112.5) return 'ns-resize';
+            return 'nesw-resize';
+        }
+
+        function performResize(worldX, worldY) {
+            const geom = resizeGeom;
+            const dx = worldX - geom.center[0];
+            const dy = worldY - geom.center[1];
+
+            if (geom.type === 'cylinder') {
+                geom.params.radius = Math.max(0.1, Math.sqrt(dx * dx + dy * dy));
+            }
+            else if (['norm_box', 'box', 'norm_boundary', 'boundary'].includes(geom.type)) {
+                const rotation = geom.params.rotation || 0;
+                const cos_r = Math.cos(-rotation);
+                const sin_r = Math.sin(-rotation);
+                const lx = dx * cos_r - dy * sin_r;
+                const ly = dx * sin_r + dy * cos_r;
+                const h = resizeHandle.type;
+                if (h.includes('e') || h.includes('w')) {
+                    geom.params.size[0] = Math.max(0.1, Math.abs(lx));
+                }
+                if (h.includes('n') || h.includes('s')) {
+                    geom.params.size[1] = Math.max(0.1, Math.abs(ly));
+                }
+            }
+            else if (geom.type === 'ellipse') {
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 0.01) {
+                    const factor = 1.0 / (dist * dist);
+                    const A = geom.params.A;
+                    const origDist2 = A[0][0]*dx*dx + (A[0][1]+A[1][0])*dx*dy + A[1][1]*dy*dy;
+                    if (origDist2 > 0.001) {
+                        const s = factor / (origDist2 / (dist * dist));
+                        geom.params.A = [
+                            [A[0][0] * s, A[0][1] * s],
+                            [A[1][0] * s, A[1][1] * s]
+                        ];
+                    }
+                }
+            }
+        }
+
+        // ====================
         // Mouse events
         // ====================
         function onMouseDown(e) {
@@ -881,6 +1018,17 @@ Mouse:
             }
 
             if (currentTool === 'select' || currentTool === 'move') {
+                // Check for resize handle first
+                const rh = findResizeHandle(world.x, world.y);
+                if (rh) {
+                    saveUndoState();
+                    isResizing = true;
+                    resizeHandle = rh.handle;
+                    resizeGeom = rh.geom;
+                    selectGeom(rh.geom);
+                    return;
+                }
+
                 const clicked = findGeomAt(world.x, world.y);
                 selectGeom(clicked);
 
@@ -915,17 +1063,27 @@ Mouse:
                 offsetX = dragStart.ox + dx;
                 offsetY = dragStart.oy + dy;
                 render();
+            } else if (isResizing && resizeGeom) {
+                performResize(world.x, world.y);
+                updatePropertiesPanel();
+                render();
             } else if (isDragging && selectedGeom && dragStart) {
                 selectedGeom.center[0] = world.x + dragOffset.x;
                 selectedGeom.center[1] = world.y + dragOffset.y;
                 updatePropertiesPanel();
                 render();
+            } else if (!isDragging && !isPanning && (currentTool === 'select' || currentTool === 'move')) {
+                const rh = findResizeHandle(world.x, world.y);
+                canvas.style.cursor = rh ? getResizeCursor(rh.handle) : '';
             }
         }
 
         function onMouseUp(e) {
             isDragging = false;
             isPanning = false;
+            isResizing = false;
+            resizeHandle = null;
+            resizeGeom = null;
             dragStart = null;
             canvas.style.cursor = '';
         }
@@ -952,11 +1110,21 @@ Mouse:
         }
 
         function onKeyDown(e) {
+            // Let inputs/textareas handle their own keyboard events
+            const tag = document.activeElement.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
             // Handle shortcuts
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === 'z') {
                     e.preventDefault();
                     undo();
+                } else if (e.key === 'c') {
+                    e.preventDefault();
+                    copySelected();
+                } else if (e.key === 'v') {
+                    e.preventDefault();
+                    pasteClipboard();
                 } else if (e.key === 'd') {
                     e.preventDefault();
                     duplicateSelected();
@@ -1102,6 +1270,7 @@ Mouse:
                 saveUndoState();
                 geoms.push(geom);
                 selectGeom(geom);
+                setTool('select');
                 render();
                 showToast(`Added ${geom.type}`);
             }
@@ -1137,6 +1306,30 @@ Mouse:
                 render();
                 showToast('Geometry duplicated');
             }
+        }
+
+        function copySelected() {
+            if (selectedGeom) {
+                clipboard = JSON.parse(JSON.stringify(selectedGeom));
+                showToast('Copied');
+            } else {
+                showToast('Nothing selected');
+            }
+        }
+
+        function pasteClipboard() {
+            if (!clipboard) {
+                showToast('Nothing to paste');
+                return;
+            }
+            saveUndoState();
+            const newGeom = JSON.parse(JSON.stringify(clipboard));
+            newGeom.center[0] += 1;
+            newGeom.center[1] += 1;
+            geoms.push(newGeom);
+            selectGeom(newGeom);
+            render();
+            showToast('Pasted');
         }
 
         // ====================
