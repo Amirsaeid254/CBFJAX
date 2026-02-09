@@ -133,7 +133,7 @@ controller = (
 
 # Build the controller
 print("Building NMPC solver (this may take a moment)...")
-controller = controller.make(x0)
+controller = controller.make()
 controller.set_init_guess()
 
 # ============================================
