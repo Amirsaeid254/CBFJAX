@@ -228,7 +228,7 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
         assert self.has_barrier, "Barrier must be assigned before make() for NMPCSafeControl"
         assert self.has_dynamics, "Dynamics must be assigned before make()"
         assert self._has_control_bounds, "Control bounds must be assigned before make()"
-        if not self._params.get('continuous', True):
+        if self._params.get('dynamic_type', 'ct') != 'ct':
             assert self._dynamics._dt is not None, \
                 "Discrete dynamics require discretization_dt in dynamics params."
             assert abs(self._dynamics._dt - self.time_steps) < 1e-10, \

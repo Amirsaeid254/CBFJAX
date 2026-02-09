@@ -688,6 +688,8 @@ class NMPCControl(BaseControl):
             # Do-mpc-specific
             'collocation_deg': 3,
             'nlpsol_opts': {},
+            # Dynamics type: 'ct' (continuous-time) or 'dt' (discrete-time)
+            'dynamic_type': 'ct',
         }
         if params is not None:
             default_params.update(params)
@@ -753,10 +755,8 @@ class NMPCControl(BaseControl):
     # Assignment Methods
     # ==========================================
 
-    def assign_dynamics(self, dynamics, continuous=True) -> 'NMPCControl':
-        params = dict(self._params)
-        params['continuous'] = continuous
-        return self._create_updated_instance(dynamics=dynamics, params=params)
+    def assign_dynamics(self, dynamics) -> 'NMPCControl':
+        return self._create_updated_instance(dynamics=dynamics)
 
     def assign_control_bounds(self, low: list, high: list) -> 'NMPCControl':
         assert len(low) == len(high), 'low and high should have the same length'
@@ -826,7 +826,7 @@ class NMPCControl(BaseControl):
         nx = self._dynamics.state_dim
         nu = self._action_dim
 
-        if self._params.get('continuous', True):
+        if self._params.get('dynamic_type', 'ct') == 'ct':
             jax_func = self._dynamics.rhs
             name = 'dynamics'
         else:
@@ -880,7 +880,7 @@ class NMPCControl(BaseControl):
         assert self._cost_running is not None, \
             "Running cost must be assigned. Use assign_cost_running()."
 
-        if not self._params.get('continuous', True):
+        if self._params.get('dynamic_type', 'ct') != 'ct':
             assert self._dynamics._dt is not None, \
                 "Discrete dynamics require discretization_dt in dynamics params."
             assert abs(self._dynamics._dt - self.time_steps) < 1e-10, \
@@ -918,7 +918,7 @@ class NMPCControl(BaseControl):
 
         nx = self._dynamics.state_dim
         nu = self._action_dim
-        continuous = self._params.get('continuous', True)
+        continuous = self._params.get('dynamic_type', 'ct') == 'ct'
 
         print("Converting JAX dynamics to CasADi...")
         dynamics_casadi = self._convert_dynamics_to_casadi()
@@ -962,11 +962,17 @@ class NMPCControl(BaseControl):
 
     def set_init_guess(
         self,
-        x_traj: Optional[np.ndarray] = None,
-        u_traj: Optional[np.ndarray] = None,
+        x0=None,
+        x_traj=None,
+        u_traj=None,
     ) -> None:
-        """Set initial guess for the solver (warm-starting)."""
+        """Set initial guess for the solver (warm-starting).
+
+        If x0 is provided (and x_traj is not), broadcasts x0 as a constant trajectory.
+        """
         assert self._is_built, "Must call make() before setting initial guess"
+        if x0 is not None and x_traj is None:
+            x_traj = jnp.tile(jnp.asarray(x0).reshape(-1), (self.N_horizon + 1, 1))
         self._backend.set_init_guess(x_traj, u_traj)
 
     def set_init_guess_linear(
@@ -1180,7 +1186,7 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
             "Cost matrices must be assigned. Use assign_cost_matrices()."
         assert self.has_dynamics, "Dynamics must be assigned before make()"
         assert self._has_control_bounds, "Control bounds must be assigned before make()"
-        if not self._params.get('continuous', True):
+        if self._params.get('dynamic_type', 'ct') != 'ct':
             assert self._dynamics._dt is not None, \
                 "Discrete dynamics require discretization_dt in dynamics params."
             assert abs(self._dynamics._dt - self.time_steps) < 1e-10, \
