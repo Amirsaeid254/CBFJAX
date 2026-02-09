@@ -43,6 +43,7 @@ gpu = ["jax[cuda12_pip]"]
 examples = [
     "matplotlib>=3.10.3",
 ]
+dompc = ["do-mpc[full]>=4.6.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

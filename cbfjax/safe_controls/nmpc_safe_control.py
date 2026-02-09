@@ -17,9 +17,8 @@ from typing import Callable, Optional
 
 import casadi as ca
 from ..utils.jax2casadi import convert
-from acados_template import AcadosModel, AcadosOcp
 
-from ..controls.nmpc_control import NMPCControl
+from ..controls.nmpc_control import NMPCControl, _import_acados
 from ..controls.base_control import QuadraticCostMixin
 from .base_safe_control import BaseSafeControl, DummyBarrier
 
@@ -105,7 +104,7 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
     # Build Methods (Override to add barrier)
     # ==========================================
 
-    def _setup_constraints(self, ocp: AcadosOcp, model: AcadosModel, x0: np.ndarray):
+    def _setup_constraints(self, ocp, model, x0: np.ndarray):
         """Setup constraints in OCP including path and terminal barrier constraints with optional slack."""
         # Call parent to setup control and state bounds
         super()._setup_constraints(ocp, model, x0)
@@ -307,7 +306,7 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
 
     # assign_cost_matrices, assign_reference from QuadraticCostMixin
 
-    def _setup_cost(self, ocp: AcadosOcp, model: AcadosModel):
+    def _setup_cost(self, ocp, model):
         """Setup LINEAR_LS cost function in OCP."""
         nx = self._dynamics.state_dim
         nu = self._action_dim
@@ -364,6 +363,8 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
         dynamics_casadi = self._convert_dynamics_to_casadi()
         object.__setattr__(self, '_dynamics_casadi', dynamics_casadi)
 
+        _, AcadosOcp, AcadosOcpSolver, _, _ = _import_acados()
+
         print("Building acados OCP...")
         ocp = AcadosOcp()
 
@@ -378,7 +379,6 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
 
         # Create solver (force regeneration to avoid stale code)
         print("Creating acados solver...")
-        from acados_template import AcadosOcpSolver
         solver = AcadosOcpSolver(ocp, build=True, generate=True)
         object.__setattr__(self, '_solver', solver)
 

@@ -10,6 +10,7 @@ All controllers follow the stateful interface:
 
 from .base_control import BaseControl
 from .nmpc_control import NMPCControl, QuadraticNMPCControl
+from .nmpc_control_dompc import DoMPCNMPCControl, QuadraticDoMPCNMPCControl
 from .ilqr_control import (
     iLQRControl,
     QuadraticiLQRControl,
@@ -32,6 +33,8 @@ __all__ = [
     "BaseControl",
     "NMPCControl",
     "QuadraticNMPCControl",
+    "DoMPCNMPCControl",
+    "QuadraticDoMPCNMPCControl",
     "iLQRControl",
     "QuadraticiLQRControl",
     "ConstrainediLQRControl",

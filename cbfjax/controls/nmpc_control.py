@@ -17,9 +17,13 @@ import casadi as ca
 from typing import Callable, Optional, Any, Tuple
 
 from ..utils.jax2casadi import convert
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 
 from .base_control import BaseControl, QuadraticCostMixin
+
+
+def _import_acados():
+    from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
+    return AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 from .control_types import NMPCInfo
 from ..dynamics.base_dynamic import DummyDynamics
 
@@ -339,8 +343,9 @@ class NMPCControl(BaseControl):
     # Post-Solve Warm-Start
     # ==========================================
 
-    def _create_sim_solver(self, model: AcadosModel) -> AcadosSimSolver:
+    def _create_sim_solver(self, model):
         """Create an AcadosSimSolver for shift propagation using Euler integration."""
+        _, _, _, AcadosSim, AcadosSimSolver = _import_acados()
         sim = AcadosSim()
         sim.model = model
         sim.solver_options.T = self.time_steps
@@ -445,8 +450,9 @@ class NMPCControl(BaseControl):
             )
         return cost_ca
 
-    def _create_acados_model(self, dynamics_casadi: ca.Function) -> AcadosModel:
+    def _create_acados_model(self, dynamics_casadi: ca.Function):
         """Create acados model using converted dynamics."""
+        AcadosModel, _, _, _, _ = _import_acados()
         model_name = "nmpc_model"
 
         nx = self._dynamics.state_dim
@@ -472,7 +478,7 @@ class NMPCControl(BaseControl):
 
         return model
 
-    def _setup_cost(self, ocp: AcadosOcp, model: AcadosModel):
+    def _setup_cost(self, ocp, model):
         """Setup EXTERNAL cost function in OCP using JAX-converted functions."""
         nx = self._dynamics.state_dim
         nu = self._action_dim
@@ -496,7 +502,7 @@ class NMPCControl(BaseControl):
         model.cost_expr_ext_cost = cost_running_ca(model.x, model.u)
         model.cost_expr_ext_cost_e = cost_terminal_ca(model.x)
 
-    def _setup_constraints(self, ocp: AcadosOcp, model: AcadosModel, x0: np.ndarray):
+    def _setup_constraints(self, ocp, model, x0: np.ndarray):
         """Setup constraints in OCP."""
         nu = self._action_dim
 
@@ -515,7 +521,7 @@ class NMPCControl(BaseControl):
         # Initial state constraint
         ocp.constraints.x0 = x0
 
-    def _setup_solver_options(self, ocp: AcadosOcp):
+    def _setup_solver_options(self, ocp):
         """Setup solver options in OCP from params."""
         ocp.solver_options.N_horizon = self.N_horizon
         ocp.solver_options.tf = self.horizon
@@ -560,6 +566,8 @@ class NMPCControl(BaseControl):
         print("Converting JAX dynamics to CasADi...")
         dynamics_casadi = self._convert_dynamics_to_casadi()
         object.__setattr__(self, '_dynamics_casadi', dynamics_casadi)
+
+        _, AcadosOcp, AcadosOcpSolver, _, _ = _import_acados()
 
         print("Building acados OCP...")
         ocp = AcadosOcp()
@@ -961,7 +969,7 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
     # assign_cost_matrices, assign_reference from QuadraticCostMixin
     # Note: _get_quadratic_cost_func not used by NMPC (uses _setup_cost with acados LINEAR_LS)
 
-    def _setup_cost(self, ocp: AcadosOcp, model: AcadosModel):
+    def _setup_cost(self, ocp, model):
         """Setup LINEAR_LS cost function in OCP."""
         nx = self._dynamics.state_dim
         nu = self._action_dim
@@ -1028,6 +1036,8 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
         print("Converting JAX dynamics to CasADi...")
         dynamics_casadi = self._convert_dynamics_to_casadi()
         object.__setattr__(self, '_dynamics_casadi', dynamics_casadi)
+
+        _, AcadosOcp, AcadosOcpSolver, _, _ = _import_acados()
 
         print("Building acados OCP...")
         ocp = AcadosOcp()
