@@ -33,7 +33,8 @@ def get_solver(method: str):
 
 
 def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
-                                     timestep: float, sim_time: float, method: str = 'tsit5') -> jnp.ndarray:
+                                     timestep: float, sim_time: float, method: str = 'tsit5',
+                                     use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories from action function using diffrax.
 
@@ -44,12 +45,14 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
         timestep: Integration timestep (must be static)
         sim_time: Total simulation time (must be static)
         method: Integration method
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
     """
     # Ensure batch dimension using existing utility
     x0 = ensure_batch_dim(x0)
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
     steps = int(sim_time / timestep) + 1
 
@@ -61,7 +64,7 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
     def ode_func(t, y, args):
         # y shape: (batch, state_dim)
         control = jax.vmap(action_func)(y)  # Vectorize action function over batch
-        return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, control)  # Vectorize dynamics
+        return jax.vmap(rhs_func, in_axes=(0, 0))(y, control)  # Vectorize dynamics
 
     # Set up diffrax problem
     solver = get_solver(method)
@@ -89,7 +92,8 @@ def get_trajs_from_state_action_func(x0: jnp.ndarray, dynamics, action_func: Cal
 
 def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Callable,
                                          timestep: float, sim_time: float, intermediate_steps: int = 2,
-                                         method: str = 'tsit5', init_ctrl_state=None) -> jnp.ndarray:
+                                         method: str = 'tsit5', init_ctrl_state=None,
+                                         use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories with zero-order hold control using diffrax.
 
@@ -105,12 +109,14 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
         intermediate_steps: Integration substeps per control update
         method: Integration method
         init_ctrl_state: Initial controller state (None for stateless)
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
     """
     x0 = ensure_batch_dim(x0)
     num_steps = int(sim_time / timestep) + 1
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
     solver = get_solver(method)
     adjoint = diffrax.RecursiveCheckpointAdjoint()
@@ -133,7 +139,7 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
 
             def ode_func(t, y, args):
                 controls = args
-                return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, controls)
+                return jax.vmap(rhs_func, in_axes=(0, 0))(y, controls)
 
             term = diffrax.ODETerm(ode_func)
             solution = diffrax.diffeqsolve(
@@ -161,7 +167,7 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
 
             def ode_func(t, y, args):
                 controls = args
-                return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, controls)
+                return jax.vmap(rhs_func, in_axes=(0, 0))(y, controls)
 
             term = diffrax.ODETerm(ode_func)
             solution = diffrax.diffeqsolve(
@@ -191,7 +197,8 @@ def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_fun
                                      timestep: Union[float, jnp.ndarray] = None,
                                      start_time: Union[float, jnp.ndarray] = 0.0,
                                      sim_time: Union[float, jnp.ndarray] = None,
-                                     num_steps: int = None, method: str = 'tsit5') -> jnp.ndarray:
+                                     num_steps: int = None, method: str = 'tsit5',
+                                     use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories from action function using diffrax.
 
@@ -204,10 +211,13 @@ def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_fun
         sim_time: Total simulation time (can be jnp.ndarray for gradient)
         num_steps: Number of time steps (static, required when sim_time is traced)
         method: Integration method
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, state_dim)
     """
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
+
     # Convert to jnp arrays if not already
     start_time = jnp.asarray(start_time)
     if sim_time is not None:
@@ -227,7 +237,7 @@ def get_trajs_from_time_action_func_single(x0: jnp.ndarray, dynamics, action_fun
     t_eval = jnp.linspace(start_time, sim_time, steps)
 
     def vector_field(t, y, args):
-        return dynamics.rhs(y, action_func(t))
+        return rhs_func(y, action_func(t))
 
     # Set up diffrax problem
     solver = get_solver(method)
@@ -257,7 +267,8 @@ def get_trajs_from_time_action_func_with_dense_single(x0: jnp.ndarray, dynamics,
                                      timestep: Union[float, jnp.ndarray] = None,
                                      start_time: Union[float, jnp.ndarray] = 0.0,
                                      sim_time: Union[float, jnp.ndarray] = None,
-                                     num_steps: int = None, method: str = 'tsit5') -> jnp.ndarray:
+                                     num_steps: int = None, method: str = 'tsit5',
+                                     use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories from action function using diffrax.
 
@@ -270,10 +281,13 @@ def get_trajs_from_time_action_func_with_dense_single(x0: jnp.ndarray, dynamics,
         sim_time: Total simulation time (can be jnp.ndarray for gradient)
         num_steps: Number of time steps (static, required when sim_time is traced)
         method: Integration method
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, state_dim)
     """
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
+
     # Convert to jnp arrays if not already
     start_time = jnp.asarray(start_time)
     if sim_time is not None:
@@ -293,7 +307,7 @@ def get_trajs_from_time_action_func_with_dense_single(x0: jnp.ndarray, dynamics,
     t_eval = jnp.linspace(start_time, sim_time, steps)
 
     def vector_field(t, y, args):
-        return dynamics.rhs(y, action_func(t))
+        return rhs_func(y, action_func(t))
 
     # Set up diffrax problem
     solver = get_solver(method)
@@ -321,7 +335,7 @@ def get_trajs_from_time_action_func_with_dense_single(x0: jnp.ndarray, dynamics,
 
 def get_trajs_from_time_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: Callable,
                                          timestep: float, sim_time: float, intermediate_steps: int = 2,
-                                         method: str = 'tsit5') -> jnp.ndarray:
+                                         method: str = 'tsit5', use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories with zero-order hold control using diffrax.
 
@@ -333,12 +347,14 @@ def get_trajs_from_time_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: 
         sim_time: Total simulation time
         intermediate_steps: Integration substeps per control update
         method: Integration method
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
     """
     # Ensure batch dimension
     x0 = ensure_batch_dim(x0)
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
     batch_size, state_dim = x0.shape
     num_steps = int(sim_time / timestep) + 1
@@ -355,7 +371,7 @@ def get_trajs_from_time_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: 
         current_controls = jax.vmap(action_func)(jnp.full(batch_size, current_time))
 
         def ode_func(t, y, args):
-            return jax.vmap(dynamics.rhs, in_axes=(0, 0))(y, current_controls)
+            return jax.vmap(rhs_func, in_axes=(0, 0))(y, current_controls)
 
         # Set up integration time points
         t_eval = jnp.linspace(0.0, timestep, intermediate_steps)
@@ -390,7 +406,8 @@ def get_trajs_from_time_action_func_zoh(x0: jnp.ndarray, dynamics, action_func: 
 
 
 def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_func: Callable,
-                                              timestep: float, sim_time: float, method: str = 'tsit5') -> jnp.ndarray:
+                                              timestep: float, sim_time: float, method: str = 'tsit5',
+                                              use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories from action function using diffrax with Python loop for batching.
 
@@ -403,6 +420,7 @@ def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_f
         timestep: Integration timestep (must be static)
         sim_time: Total simulation time (must be static)
         method: Integration method
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
@@ -410,6 +428,7 @@ def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_f
     # Ensure batch dimension using existing utility
     x0 = ensure_batch_dim(x0)
     batch_size = x0.shape[0]
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
     steps = int(sim_time / timestep) + 1
     t_eval = jnp.linspace(0.0, sim_time, steps)
@@ -420,7 +439,7 @@ def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_f
         # Define ODE function for single trajectory
         def ode_func(t, y, args):
             control = action_func(y)
-            return dynamics.rhs(y, control)
+            return rhs_func(y, control)
 
         # Set up diffrax problem
         solver = get_solver(method)
@@ -447,7 +466,8 @@ def get_trajs_from_state_action_func_no_vmap(x0: jnp.ndarray, dynamics, action_f
 
 def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, action_func: Callable,
                                                    timestep: float, sim_time: float, intermediate_steps: int = 2,
-                                                   method: str = 'tsit5', init_ctrl_state=None) -> jnp.ndarray:
+                                                   method: str = 'tsit5', init_ctrl_state=None,
+                                                   use_disturbed: bool = False) -> jnp.ndarray:
     """
     Generate trajectories with zero-order hold control using diffrax with Python loop for batching.
 
@@ -466,6 +486,7 @@ def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, acti
         intermediate_steps: Integration substeps per control update
         method: Integration method
         init_ctrl_state: Initial controller state (None for stateless)
+        use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
     Returns:
         Trajectories (time_steps, batch, state_dim)
@@ -473,6 +494,7 @@ def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, acti
     x0 = ensure_batch_dim(x0)
     batch_size = x0.shape[0]
     num_steps = int(sim_time / timestep) + 1
+    rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
     solver = get_solver(method)
     adjoint = diffrax.RecursiveCheckpointAdjoint()
@@ -481,7 +503,7 @@ def get_trajs_from_state_action_func_zoh_no_vmap(x0: jnp.ndarray, dynamics, acti
     @jax.jit
     def integrate_with_fixed_control(current_state, control):
         def ode_func(t, y, args):
-            return dynamics.rhs(y, args)
+            return rhs_func(y, args)
 
         term = diffrax.ODETerm(ode_func)
         solution = diffrax.diffeqsolve(

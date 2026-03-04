@@ -24,6 +24,7 @@ class AffineInControlDynamics(eqx.Module):
     _params: Optional[Dict[str, Any]] = eqx.field(static=True)
     _dt: Optional[float] = eqx.field(static=True)
     _discretization_method: Optional[str] = eqx.field(static=True)
+    _disturbance_func: Optional[Callable] = eqx.field(static=True)
 
     def __init__(self, params=None, **kwargs):
         self._params = immutabledict(params or {})
@@ -35,6 +36,7 @@ class AffineInControlDynamics(eqx.Module):
         # Optional discretization config from params
         self._dt = self._params.get('discretization_dt', None)
         self._discretization_method = self._params.get('discretization_method', None)
+        self._disturbance_func = self._params.get('disturbance_func', None)
 
         if self._discretization_method is not None and self._discretization_method not in ('euler', 'rk4'):
             raise ValueError(f"Unknown discretization method: {self._discretization_method}. Use 'euler' or 'rk4'.")
@@ -92,7 +94,8 @@ class AffineInControlDynamics(eqx.Module):
 
     def rhs(self, x, action):
         """
-        Right-hand-side of dynamics: f(x) + g(x) @ u
+        Nominal right-hand-side of dynamics: f(x) + g(x) @ u
+        Used by barriers, controllers, and forward propagation.
         x: (state_dim,) - single state vector
         action: (action_dim,) - single action vector
         output: (state_dim,) - derivative
@@ -100,54 +103,52 @@ class AffineInControlDynamics(eqx.Module):
         assert action.shape == (self.action_dim,), f"Expected action shape {(self.action_dim,)}, got {action.shape}"
         return self.f(x) + self.g(x) @ action
 
-    def _euler_step(self, x, action):
+    def disturbed_rhs(self, x, action):
         """
-        Euler integration step: x_{k+1} = x_k + dt * f(x_k, u_k)
-
-        Args:
-            x: (state_dim,) - current state
-            action: (action_dim,) - control action
-
-        Returns:
-            x_next: (state_dim,) - next state
+        Disturbed right-hand-side: f(x) + g(x) @ u + d(x)
+        For closed-loop simulation only. Falls back to nominal rhs if no disturbance set.
+        x: (state_dim,) - single state vector
+        action: (action_dim,) - single action vector
+        output: (state_dim,) - derivative
         """
-        return x + self._dt * self.rhs(x, action)
+        nominal = self.rhs(x, action)
+        if self._disturbance_func is None:
+            return nominal
+        return nominal + self._disturbance_func(x)
 
-    def _rk4_step(self, x, action):
-        """
-        4th-order Runge-Kutta integration step with zero-order hold on action.
+    def _euler_step(self, x, action, rhs_func=None):
+        rhs_func = rhs_func or self.rhs
+        return x + self._dt * rhs_func(x, action)
 
-        Args:
-            x: (state_dim,) - current state
-            action: (action_dim,) - control action (held constant)
-
-        Returns:
-            x_next: (state_dim,) - next state
-        """
-        k1 = self.rhs(x, action)
-        k2 = self.rhs(x + 0.5 * self._dt * k1, action)
-        k3 = self.rhs(x + 0.5 * self._dt * k2, action)
-        k4 = self.rhs(x + self._dt * k3, action)
+    def _rk4_step(self, x, action, rhs_func=None):
+        rhs_func = rhs_func or self.rhs
+        k1 = rhs_func(x, action)
+        k2 = rhs_func(x + 0.5 * self._dt * k1, action)
+        k3 = rhs_func(x + 0.5 * self._dt * k2, action)
+        k4 = rhs_func(x + self._dt * k3, action)
         return x + (self._dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
     def discrete_rhs(self, x, action):
         """
-        Discrete dynamics: x_{k+1} = f(x_k, u_k)
-
-        Uses euler or rk4 based on discretization_method param.
-        Since _discretization_method is static, JIT eliminates the branch.
-
-        Args:
-            x: (state_dim,) - current state
-            action: (action_dim,) - control action
-
-        Returns:
-            x_next: (state_dim,) - next state
+        Nominal discrete dynamics: x_{k+1} = integrate(f(x) + g(x)@u)
+        Used by controllers and forward propagation.
         """
         if self._discretization_method == 'euler':
             return self._euler_step(x, action)
         else:
             return self._rk4_step(x, action)
+
+    def disturbed_discrete_rhs(self, x, action):
+        """
+        Disturbed discrete dynamics: x_{k+1} = integrate(f(x) + g(x)@u + d(x))
+        For closed-loop simulation only. Falls back to nominal if no disturbance set.
+        """
+        if self._disturbance_func is None:
+            return self.discrete_rhs(x, action)
+        if self._discretization_method == 'euler':
+            return self._euler_step(x, action, rhs_func=self.disturbed_rhs)
+        else:
+            return self._rk4_step(x, action, rhs_func=self.disturbed_rhs)
 
 
 class CustomDynamics(AffineInControlDynamics):

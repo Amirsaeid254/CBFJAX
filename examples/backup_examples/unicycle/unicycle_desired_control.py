@@ -19,7 +19,7 @@ def desired_control(x, goal_pos, dyn_params, k1=0.8, k2=0.8):
     """
     # Extract max control limits from tuple structure
     # control_bounds = ((min_u1, min_u2), (max_u1, max_u2))
-    max_ac_lim = dyn_params['control_bounds'][1]  # (max_u1, max_u2)
+    max_ac_lim = dyn_params['control_high']  # (max_u1, max_u2)
 
     # State variables
     q_x, q_y, v, theta = x[0], x[1], x[2], x[3]
