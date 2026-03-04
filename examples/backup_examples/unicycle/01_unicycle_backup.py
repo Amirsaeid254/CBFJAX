@@ -66,8 +66,10 @@ map_cfg = immutabledict({
 })
 
 # Dynamics parameters
-control_bounds = ((-2.0, -1.0), (2.0, 1.0))
-dynamics_params = immutabledict({'d': 1.0, 'control_bounds': control_bounds})
+control_low = (-2.0, -1.0)   # (min acceleration, min angular velocity)
+control_high = (2.0, 1.0)    # (max acceleration, max angular velocity)
+
+dynamics_params = immutabledict({'d': 1.0, 'control_low': tuple(control_low), 'control_high': tuple(control_high)})
 
 # Backup policy parameters
 ub_gain = ((-15.0, 0.0),)
@@ -114,7 +116,7 @@ print(f"  State barrier: {len(map_.barrier._barriers)} obstacle/boundary barrier
 
 print("Setting up backup policies...")
 
-backup_controls = UnicycleBackupControl(ub_gain, control_bounds)()
+backup_controls = UnicycleBackupControl(ub_gain, dynamics_params)()
 
 print(f"  Backup policies: {len(backup_controls)} policies")
 
@@ -126,9 +128,8 @@ print("Setting up backup barriers...")
 
 # Backup barrier = state barrier - velocity penalty
 def backup_barrier_func(x):
-    """Backup barrier: combine state safety with velocity constraint."""
     h_state = state_barrier._hocbf_single(x)
-    velocity_penalty = (1.0 * jnp.pow(x[2:3], 2)) / control_bounds[1][0]
+    velocity_penalty = (0.5 * jnp.pow(x[2], 2)) / control_high[0]
     return h_state - velocity_penalty
 
 backup_barriers = [
@@ -168,8 +169,8 @@ safety_filter = MinIntervBackupSafeControl(
     action_dim=dynamics.action_dim,
     alpha=lambda x: 1.0 * x,
     slacked=False,
-    control_low=list(control_bounds[0]),
-    control_high=list(control_bounds[1])
+    control_low=control_low,
+    control_high=control_high,
 ).assign_dynamics(dynamics).assign_state_barrier(fwd_barrier)
 
 print("  Safety filter configured")
@@ -256,7 +257,6 @@ print(f"{'='*60}")
 print(f"Control statistics:")
 print(f"  u1: min={u_vals_np[:, 0].min():.3f}, max={u_vals_np[:, 0].max():.3f}")
 print(f"  u2: min={u_vals_np[:, 1].min():.3f}, max={u_vals_np[:, 1].max():.3f}")
-print(f"  Control bounds: u1 in [{control_bounds[0][0]}, {control_bounds[1][0]}], u2 in [{control_bounds[0][1]}, {control_bounds[1][1]}]")
 print(f"{'='*60}")
 print(f"State statistics:")
 print(f"  Velocity: min={traj_np[:, 2].min():.3f}, max={traj_np[:, 2].max():.3f}")
