@@ -276,7 +276,3 @@ If you use CBFJAX in your research, please cite it as:
 ## Related work
 
 - [CBFTorch](https://github.com/pedramrabiee/cbftorch) — PyTorch implementation of CBFs.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
