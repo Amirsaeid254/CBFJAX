@@ -1,23 +1,17 @@
-# Core dependencies
+# Runtime dependencies (mirrors `[project.dependencies]` in pyproject.toml).
+# This file is provided for convenience. Prefer installing via:
+#   pip install -e .             # core
+#   pip install -e .[examples]   # core + matplotlib
+#   pip install -e .[nmpc]       # NMPC backends (casadi, do-mpc)
+#   pip install -e .[gpu]        # JAX CUDA 12 wheels
+#   pip install -e .[dev]        # development tooling
+
 jax>=0.6.2
 jaxlib>=0.6.2
 equinox>=0.13.1
 diffrax>=0.7.0
 qpax>=0.0.9
+mpax>=0.2.0
 immutabledict>=4.2.1
-numpy>=2.2.6
-scipy>=1.15.3
-
-# Optional dependencies for examples
-matplotlib>=3.10.3
-
-# Development dependencies (install with pip install -e .[dev])
-# pytest>=7.0
-# pytest-cov>=4.0
-# black>=22.0
-# isort>=5.10
-# mypy>=1.0
-# pre-commit>=2.20
-
-# GPU support (install with pip install -e .[gpu])
-# jax[cuda12_pip]>=0.4.20
+numpy>=2.0
+scipy>=1.13

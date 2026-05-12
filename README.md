@@ -1,244 +1,264 @@
-# CBFJAX: Control Barrier Functions in JAX
+# CBFJAX — Control Barrier Functions in JAX
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![JAX](https://img.shields.io/badge/JAX-0.4.20+-orange.svg)](https://jax.readthedocs.io/)
+[![JAX](https://img.shields.io/badge/JAX-0.6+-orange.svg)](https://jax.readthedocs.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI version](https://img.shields.io/pypi/v/cbfjax.svg)](https://pypi.org/project/cbfjax/)
 
-CBFJAX is a high-performance JAX implementation of Control Barrier Functions (CBFs) for safe control, adapted from the pioneering [CBFTorch](https://github.com/pedramrabiee/cbftorch) framework. This implementation leverages JAX's JIT compilation and functional programming paradigms to deliver superior computational performance for safety-critical control applications.
+**CBFJAX** is a high-performance [JAX](https://jax.readthedocs.io/) implementation of
+**Control Barrier Functions (CBFs)** for safety-critical control. It provides a clean,
+functional, JIT-compatible API for building safe controllers — from simple closed-form
+filters up to Backup-CBFs and NMPC with barrier constraints — and runs efficiently on
+CPU and GPU.
 
+This project is the JAX successor to the
+[CBFTorch](https://github.com/pedramrabiee/cbftorch) framework.
+
+---
 
 ## Features
 
-- **Pure JAX Implementation**: Fully JIT-compiled for maximum performance
-- **Control Barrier Functions**: Complete CBF framework with Higher-Order CBFs (HOCBFs)
-- **Multiple Safe Control Methods**:
-  - Closed-form safe control
-  - QP-based safe control with quadratic programming
-  - Input-constrained QP safe control
-  - Minimum intervention control
-  - Backup Control Barrier Function
-  - Nonlinear Model Predictive Control (NMPC)
-  - Constrained iLQR
-- **Advanced Barrier Types**:
-  - Single barriers with automatic differentiation
-  - MultiBarriers for handling multiple constraints
-  - Composite barriers with soft/hard composition
-  - Backup barriers with forward invariance
-- **High Performance**: 64-bit precision, JIT compilation, and optimized algorithms
-- **Modern Dependencies**: Diffrax for ODE solving, qpax for QP optimization, trajax for iLQR, acados for NMPC
+- **Pure JAX, end-to-end JIT** — barriers, dynamics, and safety filters are all
+  `equinox` modules with functional semantics; trajectory rollouts use
+  [diffrax](https://github.com/patrick-kidger/diffrax).
+- **Higher-Order CBFs (HOCBFs)** with automatic differentiation for arbitrary relative
+  degree.
+- **A toolbox of safe-control backends**:
+  - Closed-form min-intervention safe control (`MinIntervCFSafeControl`)
+  - QP-based safe control with slack variables (`MinIntervQPSafeControl`)
+  - Input-constrained QP (`MinIntervInputConstQPSafeControl`)
+  - Backup-CBF with forward invariance (`MinIntervBackupSafeControl`)
+  - NMPC with barrier constraints (acados / do-mpc — optional)
+  - Constrained iLQR with barrier-aware cost (trajax — optional)
+- **Composable barrier algebra**: `MultiBarriers`, `SoftCompositionBarrier`,
+  `NonSmoothCompositionBarrier`, `BackupBarrier`.
+- **Built-in dynamics**: unicycle, single/double integrator, bicycle, inverted pendulum,
+  reduced-order unicycle — plus a generic `AffineInControlDynamics` base.
+- **Map editor** (`cbfjax-map-editor`) for visually authoring obstacle/boundary maps.
+- **64-bit precision by default** for the numerical stability that CBF methods require.
+
+---
 
 ## Installation
 
-Install from PyPI:
+### From PyPI
+
 ```bash
 pip install cbfjax
 ```
 
-For development installation:
+The core install is lightweight — it pulls in JAX, Equinox, Diffrax, qpax, NumPy, and
+SciPy, and is sufficient for the closed-form, QP, and Backup-CBF safety filters.
+
+### Optional extras
+
+| Extra | Adds | Install |
+|-------|------|---------|
+| `examples` | matplotlib, animation deps | `pip install cbfjax[examples]` |
+| `gpu` | JAX CUDA 12 wheels | `pip install cbfjax[gpu]` |
+| `nmpc` | CasADi + do-mpc (IPOPT backend) | `pip install cbfjax[nmpc]` |
+| `dev` | pytest, build, twine, ruff, black, mypy, … | `pip install cbfjax[dev]` |
+
+The `nmpc` extra provides an IPOPT-based NMPC backend out of the box. For the
+acados SQP backend, install [acados](https://docs.acados.org/) separately from source.
+
+The `iLQR` controllers depend on Google's `trajax`, which is not on PyPI; install it
+directly from GitHub:
+
+```bash
+pip install "trajax @ git+https://github.com/google/trajax.git"
+```
+
+NMPC and iLQR controllers are lazily imported, so the core package keeps working even
+when these optional dependencies are not installed — the `ImportError` is only raised
+when you actually instantiate the controller.
+
+### From source
+
 ```bash
 git clone https://github.com/amirsaeid254/cbfjax.git
 cd cbfjax
-pip install -e .
+pip install -e .[dev,examples]
 ```
+
+---
 
 ## Quick Start
 
-### Basic Usage
+The pattern is the same for every safe controller in CBFJAX:
+
+```text
+dynamics  ──┐
+            ├──► safety_filter ──► safe action u(x)
+barrier   ──┤
+            ├──► assign_desired_control(u_des)
+desired u ──┘
+```
+
+### Minimal example — QP safety filter on a unicycle
 
 ```python
 import jax.numpy as jnp
 import cbfjax
+from cbfjax.barriers import Barrier
 
-# Create unicycle dynamics
-dynamics = cbfjax.dynamics.UnicycleDynamics()
+# 1. Dynamics
+dynamics = cbfjax.UnicycleDynamics()  # state: [x, y, v, theta], control: [a, omega]
 
-# Create a simple barrier (e.g., avoid obstacles)
-def barrier_func(x):
-    return jnp.linalg.norm(x[:2]) - 1.0  # Stay outside unit circle
-
-barrier = cbfjax.barriers.Barrier(
-    barrier_func=barrier_func,
-    rel_deg=1,
-    alpha=lambda h: 0.5 * h
+# 2. Barrier: stay outside the unit disk centered at the origin
+#    h(x) = ||p|| - 1.0 >= 0  (relative degree 2 for unicycle position)
+barrier = (
+    Barrier.create_empty()
+    .assign(barrier_func=lambda x: jnp.linalg.norm(x[:2]) - 1.0, rel_deg=2)
+    .assign_dynamics(dynamics)
 )
 
-# Create safe control filter
-safety_filter = cbfjax.safe_controls.MinIntervCFSafeControl(
-    action_dim=dynamics.action_dim,
-    alpha=lambda x: 0.5 * x
-).assign_dynamics(dynamics).assign_state_barrier(barrier)
-
-# Define desired control
-def desired_control(x):
-    return jnp.array([1.0, 0.1])  # Move forward, slight turn
-
-safety_filter = safety_filter.assign_desired_control(desired_control)
-
-# Compute safe control
-state = jnp.array([0.5, 0.5, 0.0, 0.0])  # [x, y, v, theta]
-safe_control, _, _ = safety_filter.safe_optimal_control(state)
-print(f"Safe control: {safe_control}")
-```
-
-### QP-based Safe Control
-
-```python
-import cbfjax
-
-# Create QP-based safety filter with multiple barriers
-safety_filter = cbfjax.safe_controls.MinIntervQPSafeControl(
-    action_dim=2,
-    alpha=lambda x: 1.0 * x,
-    params={
-        'slack_gain': 200,
-        'slacked': True,
-        'use_softplus': False,
-        'softplus_gain': 2.0
-    }
-)
-
-# With input constraints
-constrained_filter = cbfjax.safe_controls.MinIntervInputConstQPSafeControl(
-    action_dim=2,
-    alpha=lambda x: 1.0 * x,
-    control_low=[-2.0, -1.0],   # Lower bounds
-    control_high=[2.0, 1.0],    # Upper bounds
-    params={'slack_gain': 200, 'slacked': True}
-)
-```
-
-### MultiBarriers for Multiple Constraints
-
-```python
-import jax.numpy as jnp
-import cbfjax
-
-# Create multiple barriers
-barriers = []
-# Obstacle avoidance barriers
-for center in [[2.0, 2.0], [-1.0, 3.0]]:
-    barrier_func = lambda x, c=center: jnp.linalg.norm(x[:2] - jnp.array(c)) - 0.5
-    barriers.append(cbfjax.barriers.Barrier(barrier_func, rel_deg=1))
-
-# Boundary constraints
-def boundary_barrier(x):
-    return jnp.min(jnp.array([10.0 - jnp.abs(x[0]), 10.0 - jnp.abs(x[1])]))
-
-barriers.append(cbfjax.barriers.Barrier(boundary_barrier, rel_deg=1))
-
-# Combine into MultiBarriers
-multi_barrier = cbfjax.barriers.MultiBarriers.create_empty()
-multi_barrier = multi_barrier.add_barriers(barriers, infer_dynamics=True)
-```
-
-### Complete Example with Trajectory Simulation
-
-```python
-import jax.numpy as jnp
-import cbfjax
-
-# Setup
-dynamics = cbfjax.dynamics.UnicycleDynamics()
-barrier = cbfjax.barriers.Barrier(
-    barrier_func=lambda x: jnp.linalg.norm(x[:2]) - 1.0,
-    rel_deg=1
-)
-
-safety_filter = cbfjax.safe_controls.MinIntervCFSafeControl(
-    action_dim=2,
-    alpha=lambda x: 0.5 * x
-).assign_dynamics(dynamics).assign_state_barrier(barrier)
-
-# Desired control toward goal
+# 3. Desired (nominal) controller — drive to a goal
 goal = jnp.array([5.0, 5.0])
 def desired_control(x):
-    pos_error = goal - x[:2]
-    return 0.5 * pos_error
+    return 0.5 * jnp.array([goal[0] - x[0], goal[1] - x[1]])
 
-safety_filter = safety_filter.assign_desired_control(desired_control)
+# 4. QP-based min-intervention safety filter
+safety_filter = (
+    cbfjax.MinIntervQPSafeControl(
+        action_dim=dynamics.action_dim,
+        alpha=lambda h: 1.0 * h,
+        params={"slack_gain": 200.0, "slacked": True},
+    )
+    .assign_dynamics(dynamics)
+    .assign_state_barrier(barrier)
+    .assign_desired_control(desired_control)
+)
 
-# Simulate trajectory
-x0 = jnp.array([[0.0, 0.0, 0.0, 0.0]])  # Initial state
-trajectory = safety_filter.get_safe_optimal_trajs(
+# 5. Query the safe action
+x0 = jnp.array([[-2.0, -2.0, 0.0, 0.0]])     # batched (1, 4)
+u_safe, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
+print(u_safe)
+```
+
+### Multiple barriers via `MultiBarriers`
+
+```python
+import jax.numpy as jnp
+from cbfjax.barriers import Barrier, MultiBarriers
+import cbfjax
+
+dynamics = cbfjax.UnicycleDynamics()
+
+# Two obstacle barriers + workspace boundary, each with dynamics already assigned.
+def obstacle(center, radius):
+    return lambda x: jnp.linalg.norm(x[:2] - jnp.array(center)) - radius
+
+barriers = [
+    Barrier.create_empty().assign(obstacle([2.0, 2.0], 0.5), rel_deg=2).assign_dynamics(dynamics),
+    Barrier.create_empty().assign(obstacle([-1.0, 3.0], 0.5), rel_deg=2).assign_dynamics(dynamics),
+    Barrier.create_empty().assign(
+        lambda x: 10.0 - jnp.maximum(jnp.abs(x[0]), jnp.abs(x[1])), rel_deg=2
+    ).assign_dynamics(dynamics),
+]
+
+# Pass infer_dynamics=True to pick up the dynamics from the first barrier.
+multi = MultiBarriers.create_empty().add_barriers(barriers, infer_dynamics=True)
+```
+
+### Closed-loop simulation
+
+```python
+trajs = safety_filter.get_optimal_trajs(
     x0=x0,
     sim_time=10.0,
     timestep=0.01,
-    method='euler'
+    method="euler",
 )
-
-print(f"Trajectory shape: {trajectory.shape}")
+print(trajs.shape)  # (T, batch, state_dim)
 ```
 
-## Examples
-
-The `examples/` directory contains comprehensive examples demonstrating various safe control methods:
-
-- **`examples/unicycle/`**: Unicycle dynamics examples including closed-form control, QP-based control, input-constrained QP, NMPC, iLQR, and hierarchical control architectures
-- **`examples/backup_examples/`**: Backup barrier function examples with forward invariance guarantees
-
-Each example includes trajectory visualization, control plots, barrier value analysis, and animations.
+More end-to-end scripts live under `examples/unicycle/` (closed-form, QP, input-constrained
+QP, NMPC, iLQR, hierarchical) and `examples/backup_examples/` (Backup-CBF).
 
 ```bash
 cd examples/unicycle
-python 02_unicycle_cf.py
+python 03_unicycle_qp.py
 ```
+
+---
+
+## Map editor
+
+CBFJAX ships with a browser-based visual editor for authoring obstacle/boundary maps:
+
+```bash
+cbfjax-map-editor
+```
+
+It opens an HTML canvas in your default browser where you can drop in cylinders,
+ellipses, norm-boxes, and boundaries and export a CBFJAX `map_config.py`.
+
+---
 
 ## Architecture
 
 ```
 cbfjax/
-├── barriers/                       # Barrier function implementations
-│   ├── barrier.py                  # Single barrier functions
-│   ├── multi_barrier.py            # Multiple barrier handling
-│   ├── composite_barrier.py        # Barrier composition
-│   └── backup_barrier.py           # Backup Barrier Function
-├── dynamics/                       # System dynamics
-│   ├── base_dynamic.py             # Base dynamics classes
-│   ├── unicycle.py                 # Unicycle dynamics
-│   ├── double_integrator.py        # Double integrator
-│   ├── single_integrator.py        # Single integrator
-│   ├── bicycle.py                  # Bicycle dynamics
-│   ├── inverted_pendulum.py        # Inverted pendulum
-│   └── unicycle_reduced_order.py   # Reduced-order unicycle
-├── controls/                       # Control implementations
-│   ├── base_control.py             # BaseControl class
-│   ├── ilqr_control.py             # iLQR trajectory optimization
-│   └── nmpc_control.py             # NMPC via acados
-├── safe_controls/                  # Safe control implementations
-│   ├── base_safe_control.py        # BaseSafeControl classes
-│   ├── closed_form_safe_control.py # Closed-form CBF
-│   ├── qp_safe_control.py          # QP-based CBF
-│   ├── backup_safe_control.py      # Backup-CBF control
-│   ├── ilqr_safe_control.py        # iLQR with barrier-aware cost
-│   └── nmpc_safe_control.py        # NMPC with barriers
-├── utils/                          # Utilities and helpers
-│   ├── integration.py              # ODE integration (diffrax)
-│   ├── utils.py                    # Mathematical utilities
-│   ├── make_map.py                 # Environment/map creation
-│   ├── jax2casadi.py               # JAX to CasADi conversion
-│   └── profile_utils.py            # Profiling utilities
-└── config.py                       # Configuration and JAX setup
+├── barriers/                       # CBF & HOCBF
+│   ├── barrier.py                  #  Single barrier
+│   ├── multi_barrier.py            #  Multiple barriers
+│   ├── composite_barrier.py        #  Soft / non-smooth composition
+│   └── backup_barrier.py           #  Backup-CBF
+├── dynamics/                       # Affine-in-control system dynamics
+│   ├── base_dynamic.py
+│   ├── unicycle.py
+│   ├── unicycle_reduced_order.py
+│   ├── double_integrator.py
+│   ├── single_integrator.py
+│   ├── bicycle.py
+│   └── inverted_pendulum.py
+├── controls/                       # Nominal/optimal controllers
+│   ├── base_control.py
+│   ├── ilqr_control.py             #  (optional: trajax)
+│   ├── nmpc_control.py             #  (optional: casadi + acados/do-mpc)
+│   └── control_types.py
+├── safe_controls/                  # Safety filters
+│   ├── base_safe_control.py
+│   ├── closed_form_safe_control.py
+│   ├── qp_safe_control.py
+│   ├── backup_safe_control.py
+│   ├── nmpc_safe_control.py        #  (optional)
+│   └── ilqr_safe_control.py        #  (optional)
+├── utils/
+│   ├── integration.py              #  Diffrax-based ODE rollouts
+│   ├── make_map.py                 #  Map / barrier factory
+│   ├── jax2casadi/                 #  JAX → CasADi conversion (used by NMPC)
+│   ├── map_editor/                 #  HTML map editor
+│   ├── profile_utils.py
+│   ├── run_map_editor.py
+│   └── utils.py
+└── config.py                       # JAX configuration helpers
 ```
 
-## Key Concepts
+---
 
-### Control Barrier Functions (CBFs)
+## Key concepts
 
-CBFs provide safety guarantees by ensuring the system stays in a safe set. For a dynamical system ẋ = f(x) + g(x)u with safe set C = {x | h(x) ≥ 0}, the CBF condition is:
+### Control Barrier Functions
 
-```
-L_f h(x) + L_g h(x) u ≥ -α(h(x))
-```
-
-Where α is a class-K function ensuring forward invariance.
-
-### Higher-Order CBFs (HOCBFs)
-
-For barriers with relative degree > 1, HOCBFs extend the framework:
+For a control-affine system `ẋ = f(x) + g(x) u` and a safe set
+`C = {x | h(x) ≥ 0}`, a barrier function `h` ensures forward invariance of `C`
+whenever there exists `u` such that
 
 ```
-L_f^n h(x) + L_g L_f^{n-1} h(x) u ≥ -α(ψ(x))
+L_f h(x) + L_g h(x) · u ≥ -α(h(x))
 ```
+
+where `α` is a class-K function.
+
+### Higher-Order CBFs
+
+For barriers of relative degree `r > 1`, CBFJAX automatically constructs the HOCBF
+series `ψ_0, ψ_1, …, ψ_r` from a user-provided list of class-K functions
+(via `Barrier(...).assign(barrier_func, rel_deg=r, alphas=[α_1, …, α_r])`).
+
+---
 
 ## Citation
 
@@ -248,11 +268,15 @@ If you use CBFJAX in your research, please cite it as:
 @software{CBFJAX,
   author       = {Safari, Amirsaeid},
   title        = {{CBFJAX}: Control Barrier Functions in {JAX}},
-  howpublished = {[Online]. Available: \url{https://github.com/amirsaeid254/cbfjax}},
+  howpublished = {\url{https://github.com/amirsaeid254/cbfjax}},
   year         = {2025}
 }
 ```
 
-## Related Work
+## Related work
 
-- [CBFTorch](https://github.com/pedramrabiee/cbftorch): PyTorch implementation of CBFs
+- [CBFTorch](https://github.com/pedramrabiee/cbftorch) — PyTorch implementation of CBFs.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

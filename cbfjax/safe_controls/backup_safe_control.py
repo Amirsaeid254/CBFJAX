@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable, Optional, Any
 from functools import partial
-from mpax import create_lp, r2HPDHG, raPDHG
+from mpax import create_lp, raPDHG
 from qpax import solve_qp_primal
 from cbfjax.utils import profile_jax
 

@@ -1,8 +1,9 @@
 """
-CBF-JAX: Control Barrier Functions in JAX
+CBFJAX: Control Barrier Functions in JAX.
 
-A JAX-based implementation of Control Barrier Functions for safe control
-with high-performance JIT compilation and functional programming paradigms.
+A JAX-based implementation of Control Barrier Functions for safe control,
+featuring JIT-compiled barrier functions, multiple safe-control backends
+(closed-form, QP, backup-CBF, NMPC, iLQR), and a rich set of system dynamics.
 """
 
 __version__ = "0.1.0"
@@ -10,60 +11,95 @@ __author__ = "Amirsaeid Safari"
 __email__ = "safari.amirsaeid@gmail.com"
 __license__ = "MIT"
 
-# Import configuration first to set up JAX
+# Configure JAX before anything else imports from it.
 from . import config
 
-# Core modules
+# Core public submodules
 from . import dynamics
 from . import barriers
 from . import controls
 from . import safe_controls
 from . import utils
 
-# Main classes for convenience
-from .dynamics import UnicycleDynamics, AffineInControlDynamics
-from .barriers import Barrier
-from .barriers.multi_barrier import MultiBarriers
-from .barriers.composite_barrier import SoftCompositionBarrier, NonSmoothCompositionBarrier
+# Commonly used classes promoted to the top-level namespace
+from .dynamics import (
+    AffineInControlDynamics,
+    UnicycleDynamics,
+    DoubleIntegratorDynamics,
+    SingleIntegratorDynamics,
+    BicycleDynamics,
+    InvertedPendulumDynamics,
+    UnicycleReducedOrderDynamics,
+)
+from .barriers import (
+    Barrier,
+    MultiBarriers,
+    SoftCompositionBarrier,
+    NonSmoothCompositionBarrier,
+    BackupBarrier,
+)
 from .controls import BaseControl
 from .safe_controls import (
+    CFSafeControl,
     MinIntervCFSafeControl,
+    InputConstCFSafeControl,
+    MinIntervInputConstCFSafeControl,
+    QPSafeControl,
     MinIntervQPSafeControl,
     InputConstQPSafeControl,
-    MinIntervInputConstQPSafeControl
+    MinIntervInputConstQPSafeControl,
+    BackupSafeControl,
+    MinIntervBackupSafeControl,
 )
 
-# Configuration functions
-from .config import configure_jax, get_jax_config, set_default_dtype, get_default_dtype
+# Configuration helpers
+from .config import (
+    configure_jax,
+    get_jax_config,
+    set_default_dtype,
+    get_default_dtype,
+)
 
 __all__ = [
-    # Version info
+    # Metadata
     "__version__",
     "__author__",
     "__email__",
     "__license__",
-
-    # Modules
+    # Submodules
     "config",
     "dynamics",
     "barriers",
     "controls",
     "safe_controls",
     "utils",
-
-    # Main classes
-    "UnicycleDynamics",
+    # Dynamics
     "AffineInControlDynamics",
+    "UnicycleDynamics",
+    "DoubleIntegratorDynamics",
+    "SingleIntegratorDynamics",
+    "BicycleDynamics",
+    "InvertedPendulumDynamics",
+    "UnicycleReducedOrderDynamics",
+    # Barriers
     "Barrier",
     "MultiBarriers",
     "SoftCompositionBarrier",
     "NonSmoothCompositionBarrier",
+    "BackupBarrier",
+    # Controls
     "BaseControl",
+    # Safe controls (always available)
+    "CFSafeControl",
     "MinIntervCFSafeControl",
+    "InputConstCFSafeControl",
+    "MinIntervInputConstCFSafeControl",
+    "QPSafeControl",
     "MinIntervQPSafeControl",
     "InputConstQPSafeControl",
     "MinIntervInputConstQPSafeControl",
-
+    "BackupSafeControl",
+    "MinIntervBackupSafeControl",
     # Configuration
     "configure_jax",
     "get_jax_config",

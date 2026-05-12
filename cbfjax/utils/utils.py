@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 import functools
 from typing import Callable, List, Dict
-from mpax import create_lp, raPDHG
 
 
 
@@ -475,13 +474,14 @@ def make_tanh_alpha_function_form_list_of_coef(coef_list):
     return [create_tanh_alpha(c) for c in coef_list]
 
 
-@jax.jit
 def check_qp_feasibility(G, h, tol=1e-4):
     """
     Check if QP constraints G @ x <= h are feasible using LP.
 
     Solves: minimize s  subject to  G @ x - s*1 <= h,  s >= 0
     Feasible if optimal s <= tol.
+
+    Requires the optional ``mpax`` LP solver (``pip install mpax``).
 
     Args:
         G: Inequality constraint matrix (m, n) - JAX array
@@ -491,6 +491,14 @@ def check_qp_feasibility(G, h, tol=1e-4):
     Returns:
         True if feasible, False otherwise.
     """
+    try:
+        from mpax import create_lp, raPDHG
+    except ImportError as e:
+        raise ImportError(
+            "check_qp_feasibility requires the optional 'mpax' package. "
+            "Install with: pip install mpax"
+        ) from e
+
     m, n = G.shape
 
     # Decision variable: y = [x (n), s (1)]

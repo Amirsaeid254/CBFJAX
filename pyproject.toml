@@ -1,16 +1,30 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cbfjax"
 version = "0.1.0"
 description = "High-performance JAX implementation of Control Barrier Functions for safe control"
-authors = [{name = "Amirsaeid Safari"}]
-license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.9"
-keywords = ["jax", "control", "barrier-functions", "safe-control", "robotics", "optimization"]
+license = {text = "MIT"}
+authors = [
+    {name = "Amirsaeid Safari", email = "safari.amirsaeid@gmail.com"},
+]
+maintainers = [
+    {name = "Amirsaeid Safari", email = "safari.amirsaeid@gmail.com"},
+]
+keywords = [
+    "jax",
+    "control-barrier-functions",
+    "cbf",
+    "safe-control",
+    "robotics",
+    "optimal-control",
+    "model-predictive-control",
+    "quadratic-programming",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -24,7 +38,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -33,60 +49,113 @@ dependencies = [
     "equinox>=0.13.1",
     "diffrax>=0.7.0",
     "qpax>=0.0.9",
+    "mpax>=0.2.0",
     "immutabledict>=4.2.1",
-    "numpy>=2.2.6",
-    "scipy>=1.15.3",
+    "numpy>=2.0",
+    "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
-gpu = ["jax[cuda12_pip]"]
+# GPU support (CUDA 12). Run: pip install cbfjax[gpu]
+gpu = ["jax[cuda12]>=0.6.2"]
+
+# Plotting and example dependencies
 examples = [
-    "matplotlib>=3.10.3",
+    "matplotlib>=3.7",
 ]
-dompc = ["do-mpc[full]>=4.6.0"]
+
+# NMPC controllers (CasADi + acados or do-mpc/IPOPT backend).
+# Note: acados is NOT on PyPI and must be installed separately from source
+# (https://docs.acados.org/). do-mpc is installable via pip and provides
+# an IPOPT-based NMPC backend out of the box.
+nmpc = [
+    "casadi>=3.6",
+    "do-mpc>=4.6.0",
+]
+
+# iLQR controllers (trajax).
+# Note: trajax is not on PyPI; install from GitHub:
+#   pip install "trajax @ git+https://github.com/google/trajax.git"
+ilqr = []
+
+# Development tooling
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "build>=1.0",
+    "twine>=4.0",
     "black>=22.0",
     "isort>=5.10",
     "mypy>=1.0",
+    "ruff>=0.1",
     "pre-commit>=2.20",
-    "matplotlib>=3.10.3",
+    "matplotlib>=3.7",
+]
+
+# Convenience: everything that is pip-installable in one shot
+all = [
+    "matplotlib>=3.7",
+    "casadi>=3.6",
+    "do-mpc>=4.6.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/amirsaeid/cbfjax"
-Repository = "https://github.com/amirsaeid/cbfjax"
-Documentation = "https://cbfjax.readthedocs.io"
-"Bug Reports" = "https://github.com/amirsaeid/cbfjax/issues"
+Homepage = "https://github.com/amirsaeid254/cbfjax"
+Repository = "https://github.com/amirsaeid254/cbfjax"
+Issues = "https://github.com/amirsaeid254/cbfjax/issues"
+Changelog = "https://github.com/amirsaeid254/cbfjax/releases"
+
+[project.scripts]
+cbfjax-map-editor = "cbfjax.utils.run_map_editor:main"
+
+# ---------------------------------------------------------------------------
+# Setuptools configuration
+# ---------------------------------------------------------------------------
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cbfjax*"]
-exclude = ["tests*", "examples*"]
+exclude = ["tests*", "examples*", "flowbarrier*"]
 
 [tool.setuptools.package-data]
-cbfjax = ["py.typed"]
+cbfjax = ["py.typed", "utils/map_editor/*.html"]
+
+# ---------------------------------------------------------------------------
+# Tooling configuration
+# ---------------------------------------------------------------------------
 
 [tool.black]
-line-length = 88
-target-version = ['py39']
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
-  examples
+    examples
   | tests
+  | build
+  | dist
 )/
 '''
 
 [tool.isort]
 profile = "black"
-line_length = 88
-skip_glob = ["examples/*", "tests/*"]
+line_length = 100
+skip_glob = ["examples/*", "tests/*", "build/*", "dist/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = ["examples", "tests", "build", "dist"]
 
 [tool.mypy]
 python_version = "3.9"
-warn_return_any = true
+warn_return_any = false
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
