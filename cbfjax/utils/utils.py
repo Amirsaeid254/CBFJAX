@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import functools
 from typing import Callable, List, Dict
+from mpax import create_lp, raPDHG
 
 
 
@@ -472,5 +473,47 @@ def make_tanh_alpha_function_form_list_of_coef(coef_list):
         return alpha_func
 
     return [create_tanh_alpha(c) for c in coef_list]
+
+
+@jax.jit
+def check_qp_feasibility(G, h, tol=1e-4):
+    """
+    Check if QP constraints G @ x <= h are feasible using LP.
+
+    Solves: minimize s  subject to  G @ x - s*1 <= h,  s >= 0
+    Feasible if optimal s <= tol.
+
+    Args:
+        G: Inequality constraint matrix (m, n) - JAX array
+        h: Inequality constraint vector (m,) - JAX array
+        tol: Feasibility tolerance (default 1e-4)
+
+    Returns:
+        True if feasible, False otherwise.
+    """
+    m, n = G.shape
+
+    # Decision variable: y = [x (n), s (1)]
+    # Objective: minimize s
+    c = jnp.zeros(n + 1).at[-1].set(1.0)
+
+    # Constraint: -G @ x + s * ones >= -h  (mpax convention: A_ub @ y >= b_ub)
+    A_ub = jnp.hstack([-G, jnp.ones((m, 1))])
+    b_ub = -h
+
+    # No equality constraints
+    A_eq = jnp.zeros((0, n + 1))
+    b_eq = jnp.zeros(0)
+
+    # Bounds: x unbounded, s >= 0
+    l_bound = jnp.concatenate([-jnp.inf * jnp.ones(n), jnp.zeros(1)])
+    u_bound = jnp.inf * jnp.ones(n + 1)
+
+    lp = create_lp(c, A_eq, b_eq, A_ub, b_ub, l_bound, u_bound, use_sparse_matrix=False)
+    solver = raPDHG(eps_abs=1e-4, eps_rel=1e-4, verbose=False)
+    result = solver.optimize(lp)
+
+    s_opt = result.primal_solution[-1]
+    return s_opt <= tol
 
 

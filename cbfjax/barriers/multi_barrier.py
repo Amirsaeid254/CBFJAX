@@ -261,7 +261,10 @@ class MultiBarriers(Barrier):
         for i, hocbf_func in enumerate(self._hocbf_funcs):
             if i in self._multidim_indices:
                 # Multi-dimensional barrier: use jacrev with has_aux
-                jac_hocbf, barrier_val = jax.jacrev(lambda x: (hocbf_func(x), hocbf_func(x)), has_aux=True)(x)
+                def _hocbf_with_aux(x, _func=hocbf_func):
+                    val = _func(x)
+                    return val, val
+                jac_hocbf, barrier_val = jax.jacrev(_hocbf_with_aux, has_aux=True)(x)
 
                 lf_vals = jnp.einsum('ij,j->i', jac_hocbf, f_val)
                 lg_vals = jnp.einsum('ij,jk->ik', jac_hocbf, g_val)
