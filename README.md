@@ -23,11 +23,12 @@ This project is the JAX successor to the
   [diffrax](https://github.com/patrick-kidger/diffrax).
 - **Higher-Order CBFs (HOCBFs)** with automatic differentiation for arbitrary relative
   degree.
-- **A toolbox of safe-control backends**:
+- **A toolbox of controllers and safe-control backends**:
   - Closed-form min-intervention safe control (`MinIntervCFSafeControl`)
   - QP-based safe control with slack variables (`MinIntervQPSafeControl`)
   - Input-constrained QP (`MinIntervInputConstQPSafeControl`)
   - Backup-CBF with forward invariance (`MinIntervBackupSafeControl`)
+  - MPPI with barrier-aware cost (`MPPIControl`)
   - NMPC with barrier constraints (acados / do-mpc — optional)
   - Constrained iLQR with barrier-aware cost (trajax — optional)
 - **Composable barrier algebra**: `MultiBarriers`, `SoftCompositionBarrier`,
@@ -215,6 +216,7 @@ cbfjax/
 │   └── inverted_pendulum.py
 ├── controls/                       # Nominal/optimal controllers
 │   ├── base_control.py
+│   ├── mppi_control.py             #  MPPI (GPU-parallel, vmap+scan)
 │   ├── ilqr_control.py             #  (optional: trajax)
 │   ├── nmpc_control.py             #  (optional: casadi + acados/do-mpc)
 │   └── control_types.py

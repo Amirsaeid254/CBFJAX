@@ -9,6 +9,7 @@ All controllers follow the stateful interface:
 """
 
 from .base_control import BaseControl
+from .mppi_control import MPPIControl
 from .control_types import (
     ILQRState,
     ConstrainedILQRState,
@@ -18,6 +19,8 @@ from .control_types import (
     QPInfo,
     BackupInfo,
     NMPCInfo,
+    MPPIState,
+    MPPIInfo,
 )
 from ..dynamics.base_dynamic import DummyDynamics
 
@@ -26,7 +29,7 @@ from ..dynamics.base_dynamic import DummyDynamics
 # deps are not installed. Accessing the attribute triggers the heavy import and
 # raises a clear ImportError with installation instructions.
 _LAZY_IMPORTS = {
-    "NMPCControl": (".nmpc_control", "nmpc"),
+    "NMPCControl":    (".nmpc_control",  "nmpc"),
     "QuadraticNMPCControl": (".nmpc_control", "nmpc"),
     "iLQRControl": (".ilqr_control", "ilqr"),
     "QuadraticiLQRControl": (".ilqr_control", "ilqr"),
@@ -53,6 +56,7 @@ def __getattr__(name):
 
 __all__ = [
     "BaseControl",
+    "MPPIControl",
     "NMPCControl",
     "QuadraticNMPCControl",
     "iLQRControl",
@@ -69,4 +73,6 @@ __all__ = [
     "QPInfo",
     "BackupInfo",
     "NMPCInfo",
+    "MPPIState",
+    "MPPIInfo",
 ]

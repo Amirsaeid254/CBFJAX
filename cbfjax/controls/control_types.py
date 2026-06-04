@@ -74,3 +74,16 @@ class NMPCInfo(NamedTuple):
     cost: jnp.ndarray
     x_traj: jnp.ndarray
     u_traj: jnp.ndarray
+
+
+class MPPIState(NamedTuple):
+    """State for MPPI controller (warm-start trajectory + RNG key)."""
+    U:   jnp.ndarray  # (N_horizon, action_dim) nominal control trajectory
+    key: jnp.ndarray  # PRNGKey — threaded so the controller is a pure function
+
+
+class MPPIInfo(NamedTuple):
+    """Diagnostic info from MPPI solve."""
+    S:       jnp.ndarray  # (K,)        per-sample total costs
+    weights: jnp.ndarray  # (K,)        normalized importance weights
+    U_new:   jnp.ndarray  # (N, m)      updated nominal trajectory (before warm-start shift)
