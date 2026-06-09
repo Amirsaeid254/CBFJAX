@@ -54,7 +54,7 @@ mpl.rcParams['font.family'] = 'serif'
 # MPPI parameters
 mppi_params = {
     'num_samples': 1000,
-    'horizon':     4.0,     # seconds  → N = 20 steps
+    'horizon':     1.0,     # seconds  → N = 20 steps
     'time_steps':  0.1,     # dt (must match dynamics discretization_dt)
     'temperature': 0.5,     # lambda: lower = more peaked weights
     'init_seed':   0,

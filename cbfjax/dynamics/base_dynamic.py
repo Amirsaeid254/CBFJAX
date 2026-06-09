@@ -2,8 +2,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Optional, Callable, Dict, Any, List
-# Import configuration
-from cbfjax.config import DEFAULT_DTYPE
+from cbfjax.config import get_default_dtype
 
 from immutabledict import immutabledict
 
@@ -204,7 +203,7 @@ class LowPassFilterDynamics(AffineInControlDynamics):
                 len(params["gains"]) == state_dim
         ), "gains should be a list of gains of length state_dim"
 
-        self._gains = jnp.array(params["gains"], dtype=DEFAULT_DTYPE)
+        self._gains = jnp.array(params["gains"], dtype=get_default_dtype())
         self._gains_mat = jnp.diag(self._gains)
 
     def _f(self, x):

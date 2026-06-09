@@ -19,7 +19,8 @@ import datetime
 import os
 
 # CBFJAX imports
-import cbfjax.config
+import cbfjax
+cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.utils.make_map import Map
 from cbfjax.barriers.multi_barrier import MultiBarriers

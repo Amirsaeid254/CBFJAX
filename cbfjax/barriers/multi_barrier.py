@@ -10,7 +10,7 @@ import equinox as eqx
 from typing import List, Optional, Tuple
 
 from .barrier import Barrier
-from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple, lie_deriv, ensure_batch_dim
+from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple, ensure_batch_dim
 from cbfjax.dynamics.base_dynamic import DummyDynamics
 
 class MultiBarriers(Barrier):
@@ -310,15 +310,10 @@ class MultiBarriers(Barrier):
             x: State vector (n,) or batch (batch, n)
 
         Returns:
-            Lie derivatives with shape (batch, total_barriers, f dimension)
+            Lie derivatives with shape (batch, total_barriers)
         """
-        if not self._hocbf_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
-        if self._dynamics is None:
-            raise ValueError("Dynamics not assigned. Use assign_dynamics() first.")
-
-        # Concatenate along barrier dimension
-        return jnp.concatenate([lie_deriv(x, hocbf_func, self._dynamics.f) for hocbf_func in self._hocbf_funcs], axis=1)
+        _, lf_hocbf, _ = self.get_hocbf_and_lie_derivs(x)
+        return lf_hocbf
 
     def Lg_hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -328,15 +323,10 @@ class MultiBarriers(Barrier):
             x: State vector (n,) or batch (batch, n)
 
         Returns:
-            Lie derivatives with shape (batch, total_barriers, g.shape)
+            Lie derivatives with shape (batch, total_barriers, action_dim)
         """
-        if not self._hocbf_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
-        if self._dynamics is None:
-            raise ValueError("Dynamics not assigned. Use assign_dynamics() first.")
-
-        # Concatenate along barrier dimension to handle multi-dimensional barriers
-        return jnp.concatenate([lie_deriv(x, hocbf_func, self._dynamics.g) for hocbf_func in self._hocbf_funcs], axis=1)
+        _, _, lg_hocbf = self.get_hocbf_and_lie_derivs(x)
+        return lg_hocbf
 
     def min_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """

@@ -18,7 +18,8 @@ import os
 from immutabledict import immutabledict
 
 # CBFJAX imports
-import cbfjax.config
+import cbfjax
+cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.utils.make_map import Map
 from cbfjax.safe_controls.closed_form_safe_control import MinIntervCFSafeControl

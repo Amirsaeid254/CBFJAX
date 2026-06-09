@@ -15,17 +15,17 @@ class UnicycleBackupControl:
     Note: Policy function works on SINGLE states (state_dim,) as it's called inside vmap.
     """
 
-    def __init__(self, gain, dynamic_param):
+    def __init__(self, gain, control_bounds):
         """
         Initialize backup control.
 
         Args:
             gain: Braking gain
-            ac_lim: Action limits (2, 2) - [[u1_min, u1_max], [u2_min, u2_max]]
+            control_bounds: bounds tuple ((u_min...), (u_max...)).
         """
 
         self.braking_gain = gain[0][0]
-        self.ac_max = dynamic_param['control_high'][0]  # Max acceleration
+        self.ac_max = control_bounds[1][0]  # Max acceleration
 
     def __call__(self):
         """

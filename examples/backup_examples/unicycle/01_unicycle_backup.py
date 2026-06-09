@@ -21,7 +21,8 @@ import time
 from immutabledict import immutabledict
 
 # CBFJAX imports
-import cbfjax.config  # Configure JAX (float64, device settings)
+import cbfjax
+cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics import UnicycleReducedOrderDynamics
 from cbfjax.barriers import Barrier, BackupBarrier
 from cbfjax.safe_controls import MinIntervBackupSafeControl
@@ -116,7 +117,7 @@ print(f"  State barrier: {len(map_.barrier._barriers)} obstacle/boundary barrier
 
 print("Setting up backup policies...")
 
-backup_controls = UnicycleBackupControl(ub_gain, dynamics_params)()
+backup_controls = UnicycleBackupControl(ub_gain, (control_low, control_high))()
 
 print(f"  Backup policies: {len(backup_controls)} policies")
 

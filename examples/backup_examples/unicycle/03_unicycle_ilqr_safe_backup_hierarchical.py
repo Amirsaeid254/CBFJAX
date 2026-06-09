@@ -23,7 +23,8 @@ import datetime
 from immutabledict import immutabledict
 
 # CBFJAX imports
-import cbfjax.config
+import cbfjax
+cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics import UnicycleReducedOrderDynamics
 from cbfjax.barriers import Barrier, BackupBarrier
 from cbfjax.safe_controls import MinIntervBackupSafeControl

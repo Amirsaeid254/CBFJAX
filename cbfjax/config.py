@@ -5,10 +5,6 @@ Configuration settings for CBF-JAX.
 import jax
 import jax.numpy as jnp
 
-# Configure JAX for high-performance computation
-jax.config.update("jax_platform_name", "cpu")
-jax.config.update("jax_enable_x64", True)  # Enable 64-bit precision
-
 # Default precision for all CBF-JAX computations
 # CBF methods require high precision for numerical stability
 DEFAULT_DTYPE = jnp.float64
@@ -43,13 +39,16 @@ def set_default_dtype(dtype):
     DEFAULT_DTYPE = dtype
 
 
-def configure_jax(platform="cpu", enable_x64=True, debug_nans=False):
+def configure_jax(platform=None, enable_x64=True, debug_nans=False):
     """
     Configure JAX settings for CBF computations.
 
+    Must be called before the first JAX computation to take effect.
+
     Parameters:
-        platform: str
-            Platform to use ("cpu", "gpu", or "tpu")
+        platform: str or None
+            Platform to use ("cpu", "gpu", or "tpu"). None keeps JAX's
+            automatic platform selection.
         enable_x64: bool
             Whether to enable 64-bit precision (recommended for CBF)
         debug_nans: bool
@@ -58,7 +57,8 @@ def configure_jax(platform="cpu", enable_x64=True, debug_nans=False):
     Example:
         configure_jax(platform="gpu", enable_x64=True)
     """
-    jax.config.update("jax_platform_name", platform)
+    if platform is not None:
+        jax.config.update("jax_platform_name", platform)
     jax.config.update("jax_enable_x64", enable_x64)
 
     if debug_nans:
