@@ -169,4 +169,5 @@ tests/
 # acados build artifacts
 c_generated_code/
 nmpc_model_ocp.json
-examples/unicycle/flowbarrier/
+
+/examples/unicycle/flowbarrier/figs/

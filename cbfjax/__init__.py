@@ -37,8 +37,15 @@ from .barriers import (
     SoftCompositionBarrier,
     HardCompositionBarrier,
     BackupBarrier,
+    FlowBarrier,
 )
-from .controls import BaseControl
+from .controls import (
+    BaseControl,
+    ParametricControl,
+    ZOHParametricControl,
+    FOHParametricControl,
+    create_parametric_control,
+)
 from .safe_controls import (
     CFSafeControl,
     MinIntervCFSafeControl,
@@ -50,6 +57,7 @@ from .safe_controls import (
     MinIntervInputConstQPSafeControl,
     BackupSafeControl,
     MinIntervBackupSafeControl,
+    ParametricFlowSafeControl,
 )
 
 # Config-driven construction
@@ -93,8 +101,13 @@ __all__ = [
     "SoftCompositionBarrier",
     "HardCompositionBarrier",
     "BackupBarrier",
+    "FlowBarrier",
     # Controls
     "BaseControl",
+    "ParametricControl",
+    "ZOHParametricControl",
+    "FOHParametricControl",
+    "create_parametric_control",
     # Safe controls (always available)
     "CFSafeControl",
     "MinIntervCFSafeControl",
@@ -106,6 +119,7 @@ __all__ = [
     "MinIntervInputConstQPSafeControl",
     "BackupSafeControl",
     "MinIntervBackupSafeControl",
+    "ParametricFlowSafeControl",
     # Config-driven construction
     "from_config",
     "System",

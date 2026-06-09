@@ -10,6 +10,12 @@ All controllers follow the stateful interface:
 
 from .base_control import BaseControl
 from .mppi_control import MPPIControl
+from .parametric_control import (
+    ParametricControl,
+    ZOHParametricControl,
+    FOHParametricControl,
+    create_parametric_control,
+)
 from .control_types import (
     ILQRState,
     ConstrainedILQRState,
@@ -57,6 +63,10 @@ def __getattr__(name):
 __all__ = [
     "BaseControl",
     "MPPIControl",
+    "ParametricControl",
+    "ZOHParametricControl",
+    "FOHParametricControl",
+    "create_parametric_control",
     "NMPCControl",
     "QuadraticNMPCControl",
     "iLQRControl",

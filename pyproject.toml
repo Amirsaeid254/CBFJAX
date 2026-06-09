@@ -51,6 +51,7 @@ dependencies = [
     "qpax>=0.0.9",
     "jaxopt>=0.8.3",
     "mpax>=0.2.0",
+    "jaxopt>=0.8",
     "immutabledict>=4.2.1",
     "numpy>=2.0",
     "scipy>=1.13",
