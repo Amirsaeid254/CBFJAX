@@ -84,23 +84,13 @@ class iLQRControl(BaseControl):
         super().__init__(**kwargs)
         self._cost_func = cost_func
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'iLQRControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'cost_func': self._cost_func,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_cost_func(self, cost_func: Callable) -> 'iLQRControl':
-        """Assign cost function f(x, u, t) -> scalar."""
-        return self._create_updated_instance(cost_func=cost_func)
 
     @property
     def horizon(self) -> float:
@@ -262,8 +252,8 @@ class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
         # QuadraticCostMixin.__init__ extracts Q, R, Q_e, x_ref and passes rest to iLQRControl
         super().__init__(cost_func=None, **kwargs)
 
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -272,8 +262,6 @@ class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
             'Q_e': self._Q_e,
             'x_ref': self._x_ref,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def _get_cost(self) -> Callable:
         """Override to return quadratic cost."""
@@ -360,12 +348,8 @@ class ConstrainediLQRControl(iLQRControl):
             self._state_high = tuple()
             self._has_state_bounds = False
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'ConstrainediLQRControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -376,16 +360,6 @@ class ConstrainediLQRControl(iLQRControl):
             'state_low': list(self._state_low) if self._has_state_bounds else None,
             'state_high': list(self._state_high) if self._has_state_bounds else None,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_control_bounds(self, low: list, high: list) -> 'ConstrainediLQRControl':
-        assert len(low) == len(high) == self._action_dim
-        return self._create_updated_instance(control_low=low, control_high=high)
-
-    def assign_state_bounds(self, idx: list, low: list, high: list) -> 'ConstrainediLQRControl':
-        assert len(idx) == len(low) == len(high)
-        return self._create_updated_instance(state_bounds_idx=idx, state_low=low, state_high=high)
 
     def get_init_state(self):
         """Get initial controller state with zero U trajectory."""
@@ -548,8 +522,8 @@ class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl
         """
         super().__init__(cost_func=None, **kwargs)
 
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -563,8 +537,6 @@ class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl
             'Q_e': self._Q_e,
             'x_ref': self._x_ref,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def _get_cost(self) -> Callable:
         """Override to return quadratic cost."""

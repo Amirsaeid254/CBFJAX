@@ -45,7 +45,7 @@ class MultiBarriers(Barrier):
             rel_deg: Not used in MultiBarriers
             alphas: Not used in MultiBarriers
             barriers: List of Barrier objects, or tuple of barrier series
-                (internal use by _create_updated_instance)
+                (internal use by _replace)
             hocbf_func: Not used in MultiBarriers
             cfg: Configuration dictionary
             barrier_funcs: Tuple of barrier functions from added barriers
@@ -92,30 +92,9 @@ class MultiBarriers(Barrier):
     def _barriers(self) -> tuple:
         return self._mb_barriers
 
-    @classmethod
-    def create_empty(cls, cfg=None):
-        """
-        Create empty MultiBarriers instance.
-
-        Args:
-            cfg: Optional configuration dictionary
-
-        Returns:
-            Empty MultiBarriers ready for barrier addition
-        """
-        return cls(cfg=cfg)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New MultiBarriers instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
             'dynamics': self._dynamics,
             'cfg': self.cfg,
             'barrier_funcs': self._barrier_funcs,
@@ -123,77 +102,6 @@ class MultiBarriers(Barrier):
             'barriers': self._barriers,
             'multidim_indices': self._multidim_indices
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign(self, barrier_func, rel_deg=1, alphas=None):
-        """
-
-        Raises:
-            Exception: Always raised to direct to add_barriers method
-        """
-        raise Exception("Use add_barriers method to add barriers for MultiBarriers class")
-
-    def add_barriers(self, barriers: List[Barrier], infer_dynamics: bool = False, multidim: bool = False) -> 'MultiBarriers':
-        """
-        Add barriers to MultiBarriers collection.
-
-        Args:
-            barriers: List of Barrier objects to add
-            infer_dynamics: If True, infer dynamics from first barrier
-            multidim: If True, mark these barriers as multi-dimensional
-
-        Returns:
-            New MultiBarriers instance with added barriers
-        """
-        # Infer dynamics of the first barrier if infer_dynamics = True and dynamics is not already assigned
-        dynamics = self._dynamics
-        if infer_dynamics:
-            # Check if dynamics is None or DummyDynamics
-            if self._dynamics is None or isinstance(self._dynamics, DummyDynamics):
-                dynamics = barriers[0]._dynamics
-
-        # Extend the lists (convert to tuples for JAX)
-        new_barrier_funcs = list(self._barrier_funcs)
-        new_hocbf_funcs = list(self._hocbf_funcs)
-        new_barriers = list(self._barriers)
-        new_multidim_indices = list(self._multidim_indices)
-
-        # Add new barriers - store the _single methods to match CBFJAX structure
-        base_idx = len(self._hocbf_funcs)
-        new_barrier_funcs.extend([barrier.barrier for barrier in barriers])
-        new_hocbf_funcs.extend([barrier.hocbf for barrier in barriers])
-        new_barriers.extend([barrier.barriers for barrier in barriers])
-
-        # If multidim=True, mark these new barriers as multi-dimensional
-        if multidim:
-            for i in range(len(barriers)):
-                new_multidim_indices.append(base_idx + i)
-
-        return self._create_updated_instance(
-            dynamics=dynamics,
-            barrier_funcs=tuple(new_barrier_funcs),
-            hocbf_funcs=tuple(new_hocbf_funcs),
-            barriers=tuple(new_barriers),
-            multidim_indices=tuple(new_multidim_indices)
-        )
-
-    def assign_dynamics(self, dynamics) -> 'MultiBarriers':
-        """
-        Assign dynamics to MultiBarriers.
-
-        Args:
-            dynamics: System dynamics object
-
-        Returns:
-            New MultiBarriers with assigned dynamics
-        """
-        if self._dynamics is not None and hasattr(self._dynamics, 'f'):
-            import warnings
-            warnings.warn('The assigned dynamics is overridden by the dynamics of the'
-                         ' first barrier on the barriers list')
-
-        return self._create_updated_instance(dynamics=dynamics)
 
     def barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """
@@ -209,7 +117,7 @@ class MultiBarriers(Barrier):
             Array of barrier values (num_barriers,). Batch with jax.vmap(self.barrier).
         """
         if not self._barrier_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
+            raise ValueError("No barriers added. Construct with a barriers list.")
 
         return jnp.array([barrier_func(x) for barrier_func in self._barrier_funcs])
 
@@ -224,7 +132,7 @@ class MultiBarriers(Barrier):
             Array of HOCBF values (num_barriers,). Batch with jax.vmap(self.hocbf).
         """
         if not self._hocbf_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
+            raise ValueError("No barriers added. Construct with a barriers list.")
 
         return jnp.concatenate([jnp.atleast_1d(hocbf_func(x)) for hocbf_func in self._hocbf_funcs])
 
@@ -240,9 +148,9 @@ class MultiBarriers(Barrier):
             ((M,), (M,), (M, action_dim)) for all barriers
         """
         if not self._hocbf_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
+            raise ValueError("No barriers added. Construct with a barriers list.")
         if self._dynamics is None:
-            raise ValueError("Dynamics not assigned. Use assign_dynamics() first.")
+            raise ValueError("Dynamics not assigned. Construct with dynamics.")
 
         f_val = self._dynamics.f(x)
         g_val = self._dynamics.g(x)

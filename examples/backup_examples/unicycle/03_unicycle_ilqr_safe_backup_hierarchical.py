@@ -26,8 +26,6 @@ from immutabledict import immutabledict
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics import UnicycleReducedOrderDynamics
-from cbfjax.barriers import Barrier, BackupBarrier
-from cbfjax.safe_controls import MinIntervBackupSafeControl
 from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
 from cbfjax.utils.make_map import Map
 
@@ -105,12 +103,11 @@ timestep = 0.01
 sim_time = 20.0
 
 # ============================================================================
-# Setup Dynamics
+# Setup Dynamics (explicit: iLQR needs discretization params before filter exists)
 # ============================================================================
 
 print("Setting up dynamics...")
 
-# Dynamics for iLQR (needs discretization)
 ilqr_dynamics_params = {
     'd': dynamics_params['d'],
     'control_bounds': control_bounds,
@@ -125,91 +122,78 @@ nu = dynamics.action_dim  # 2: [accel, omega]
 print(f"  - Dynamics: UnicycleReducedOrderDynamics")
 
 # ============================================================================
-# Setup Barriers
+# Setup iLQR barrier (explicit: needed by QuadraticiLQRSafeControl before filter)
 # ============================================================================
 
 print("Setting up barriers...")
 
-# 1. Create map with state barriers (for backup system)
-map_ = Map(dynamics=dynamics, cfg=map_cfg, barriers_info=map_config).create_barriers()
-state_barrier = map_.barrier
-print(f"  - State barrier: {len(map_.barrier._barriers)} obstacle/boundary barriers")
-
-# 2. Create barrier for iLQR (separate instance, used as AL constraint)
-map_ilqr = Map(dynamics=dynamics, cfg=ilqr_barrier_cfg, barriers_info=map_config).create_barriers()
+map_ilqr = Map(dynamics=dynamics, cfg=ilqr_barrier_cfg, barriers_info=map_config)
 ilqr_barrier = map_ilqr.barrier
 print(f"  - iLQR barrier: as AL inequality constraint")
 
-# 3. Create backup policies
-backup_controls = UnicycleBackupControl(ub_gain, control_bounds)()
-print(f"  - Backup policies: {len(backup_controls)} policies")
-
-# 4. Create backup barriers
-def backup_barrier_func(x):
-    """Backup barrier: combine state safety with velocity constraint."""
-    h_state = state_barrier.hocbf(x)
-    velocity_penalty = (1.0 * jnp.pow(x[2:3], 2)) / control_bounds[1][0]
-    return h_state - velocity_penalty
-
-backup_barriers = [
-    Barrier().assign(
-        barrier_func=backup_barrier_func,
-        rel_deg=1,
-        alphas=[]).assign_dynamics(dynamics)]
-print(f"  - Backup barriers: {len(backup_barriers)} barriers")
-
-# 5. Create backup barrier system
-fwd_barrier = (BackupBarrier.create_empty(cfg=backup_cfg)
-               .assign_state_barrier([state_barrier])
-               .assign_backup_policies(backup_controls)
-               .assign_backup_barrier(backup_barriers)
-               .assign_dynamics(dynamics)
-               .make())
-print("  - Backup barrier system built")
-
 # ============================================================================
-# Setup iLQR Safe Controller (High-Level)
+# Setup iLQR Safe Controller (High-Level, stays explicit)
 # ============================================================================
 
 print("\nSetting up iLQR safe controller...")
 
-# Cost matrices for trajectory tracking
-Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))   # State cost
-R = jnp.diag(jnp.array([0.1, 0.1]))              # Control cost
-Q_e = 5.0 * Q                                    # Terminal cost
+Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))
+R = jnp.diag(jnp.array([0.1, 0.1]))
+Q_e = 5.0 * Q
 
-# Create iLQR controller WITH barrier as AL inequality constraint
-ilqr_controller = (
-    QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
-    .assign_dynamics(dynamics)
-    .assign_control_bounds(list(control_bounds[0]), list(control_bounds[1]))
-    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
-    .assign_state_barrier(ilqr_barrier)  # Barrier as AL constraint
+ilqr_controller = QuadraticiLQRSafeControl(
+    action_dim=nu,
+    params=ilqr_params,
+    dynamics=dynamics,
+    control_low=list(control_bounds[0]),
+    control_high=list(control_bounds[1]),
+    Q=Q, R=R, Q_e=Q_e, x_ref=x_ref,
+    barrier=ilqr_barrier,
 )
 
 print(f"  - Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 print(f"  - Barrier: handled as AL inequality constraint")
 
 # ============================================================================
-# Setup Backup Safety Filter (Low-Level)
+# Build backup barrier + safety filter via cbfjax.from_config
 # ============================================================================
 
-print("Setting up backup safety filter...")
+print("Setting up backup barriers and safety filter...")
 
-# Create backup safety filter with iLQR-safe as desired control
-safety_filter = (
-    MinIntervBackupSafeControl(
-        action_dim=nu,
-        alpha=lambda x: 1.0 * x,
-        slacked=False,
-        control_low=list(control_bounds[0]),
-        control_high=list(control_bounds[1])
-    )
-    .assign_dynamics(dynamics)
-    .assign_state_barrier(fwd_barrier)
-    .assign_desired_control(ilqr_controller)
-)
+backup_controls = UnicycleBackupControl(ub_gain, control_bounds)()
 
+parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barrier': {
+        'type': 'backup',
+        'state_barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': map_cfg},
+        'backup_policies': backup_controls,
+        'backup_barriers': [
+            {'type': 'state_margin',
+             'margin': lambda x: -(1.0 * jnp.pow(x[2:3], 2)) / control_bounds[1][0]},
+        ],
+        'cfg': backup_cfg,
+    },
+    'safety_filter': {
+        'type': 'min_interv_backup',
+        'action_dim': nu,
+        'alpha': lambda x: 1.0 * x,
+        'slacked': False,
+        'control_low': list(control_bounds[0]),
+        'control_high': list(control_bounds[1]),
+        'desired_control': ilqr_controller,
+    },
+})
+
+safety_filter = parts.safety_filter
+map_ = parts.map
+fwd_barrier = parts.barrier
+state_barrier = fwd_barrier.state_barrier
+
+print(f"  - State barrier: {len(map_.barrier._barriers)} obstacle/boundary barriers")
+print(f"  - Backup policies: {len(backup_controls)} policies")
+print(f"  - Backup barriers: 1 barriers")
+print("  - Backup barrier system built")
 print(f"  - Control bounds: low={control_bounds[0]}, high={control_bounds[1]}")
 
 # ============================================================================
@@ -218,12 +202,10 @@ print(f"  - Control bounds: low={control_bounds[0]}, high={control_bounds[1]}")
 
 print("\nTesting controllers...")
 
-# Test iLQR-safe alone
 print("  Testing iLQR-safe controller...")
 u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None], ilqr_controller.get_init_state())
 print(f"    iLQR-safe control: u = {np.array(u_ilqr_test[0])}")
 
-# Test backup safety filter
 print("  Testing backup safety filter...")
 u_safe_test, _ = safety_filter.optimal_control(x0[None], safety_filter.get_init_state())
 print(f"    Backup-safe control: u = {np.array(u_safe_test[0])}")

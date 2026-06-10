@@ -112,22 +112,9 @@ class BackupBarrier(Barrier):
             return self._backup_barrier_func(x)
         return super().barrier(x)
 
-    @classmethod
-    def create_empty(cls, cfg=None):
-        """Create an empty BackupBarrier instance."""
-        return cls(cfg=cfg)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New BackupBarrier instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
             'barrier_func': self._barrier_func,
             'dynamics': self._dynamics,
             'rel_deg': self._rel_deg,
@@ -139,108 +126,6 @@ class BackupBarrier(Barrier):
             'backup_barriers': self._backup_barriers,
             'backup_policies': self._backup_policies
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    # === Public Assignment Interface ===
-
-    def assign_state_barrier(self, state_barrier):
-        """
-        Assign state barrier - can be a single Barrier or list of Barriers.
-
-        Args:
-            state_barrier: Single Barrier or list of Barriers
-
-        Returns:
-            New BackupBarrier instance with assigned state barrier
-        """
-        if isinstance(state_barrier, list):
-            assigned_barrier = SoftCompositionBarrier.create_empty(self.cfg).assign_barriers_and_rule(
-                barriers=state_barrier,
-                rule='i',
-                infer_dynamics=True
-            )
-        elif isinstance(state_barrier, Barrier):
-            assigned_barrier = state_barrier
-        else:
-            raise TypeError(f"state_barrier must be Barrier or list of Barriers, got {type(state_barrier)}")
-
-        return self._create_updated_instance(state_barrier=assigned_barrier)
-
-    def assign_backup_barrier(self, backup_barriers):
-        """
-        Assign backup barrier(s) - can be a single Barrier or list of Barriers.
-
-        Args:
-            backup_barriers: Single Barrier or list of Barriers
-
-        Returns:
-            New BackupBarrier instance with assigned backup barriers
-        """
-        if isinstance(backup_barriers, list):
-            assert len(backup_barriers) > 0, 'backup_barriers list must have at least one item'
-            assert all(isinstance(f, Barrier) for f in backup_barriers), \
-                "all backup barriers must be Barrier instances"
-            barriers_tuple = tuple(backup_barriers)
-        elif isinstance(backup_barriers, Barrier):
-            barriers_tuple = (backup_barriers,)
-        else:
-            raise TypeError(f"backup_barriers must be Barrier or list of Barriers, got {type(backup_barriers)}")
-
-        return self._create_updated_instance(backup_barriers=barriers_tuple)
-
-    def assign_backup_policies(self, backup_policies):
-        """
-        Assign backup policies - must be a list of callable functions.
-
-        Args:
-            backup_policies: List of policy functions (state -> action)
-
-        Returns:
-            New BackupBarrier instance with assigned backup policies
-        """
-        if isinstance(backup_policies, list):
-            assert len(backup_policies) > 0, 'backup_policies list must have at least one item'
-            assert all(callable(f) for f in backup_policies), "all backup policies must be callable"
-            policies_tuple = tuple(backup_policies)
-        else:
-            raise TypeError(f"backup_policies must be a list of callables, got {type(backup_policies)}")
-
-        return self._create_updated_instance(backup_policies=policies_tuple)
-
-    def assign_dynamics(self, dynamics):
-        """
-        Assign dynamics.
-
-        Args:
-            dynamics: System dynamics object
-
-        Returns:
-            New BackupBarrier instance with assigned dynamics
-        """
-        return self._create_updated_instance(dynamics=dynamics)
-
-    # === Main Build Method ===
-
-    def make(self):
-        """Build the backup barrier system."""
-        self._validate_configuration()
-
-        # Create HOCBF series using parent method
-        hocbf_series = self._make_hocbf_series(
-            barrier=self._backup_barrier_func,
-            dynamics=self._dynamics,
-            rel_deg=self._rel_deg,
-            alphas=[]
-        )
-
-        # Create updated instance
-        return self._create_updated_instance(
-            barrier_func=self._backup_barrier_func,
-            alphas=[],
-            barriers=hocbf_series,
-            hocbf_func=hocbf_series[-1]
-        )
 
     # === Core Backup Barrier Computation ===
 
@@ -376,27 +261,6 @@ class BackupBarrier(Barrier):
         return self._backup_policies
 
     # === Private Implementation ===
-
-    def _validate_configuration(self):
-        """Validate that all required components are assigned."""
-        assert self._state_barrier is not None, \
-            "State barrier must be assigned using assign_state_barrier()"
-        assert len(self._backup_barriers) > 0, \
-            "Backup barriers must be assigned using assign_backup_barrier()"
-        assert len(self._backup_policies) > 0, \
-            "Backup policies must be assigned using assign_backup_policies()"
-        assert self._dynamics is not None, \
-            "Dynamics must be assigned using assign_dynamics()"
-        assert len(self._backup_policies) == len(self._backup_barriers), \
-            "Number of backup policies must match number of backup barriers"
-
-    def assign(self, barrier_func=None, rel_deg=1, alphas=None):
-        """Override to provide clear error message for proper usage."""
-        raise NotImplementedError(
-            "BackupBarrier uses specialized assignment methods. "
-            "Use assign_state_barrier(), assign_backup_barrier(), "
-            "assign_backup_policies(), and assign_dynamics() instead."
-        )
 
     def raise_rel_deg(self, x, raise_rel_deg_by=1, alphas=None):
         """Relative degree raising not implemented for BackupBarrier."""

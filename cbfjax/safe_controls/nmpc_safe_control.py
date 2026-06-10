@@ -28,7 +28,7 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
 
     Inherits from (cooperative multiple inheritance):
     - NMPCControl: NMPC solving with backend dispatch
-    - BaseSafeControl: barrier interface (assign_state_barrier, has_barrier, etc.)
+    - BaseSafeControl: barrier interface (barrier, has_barrier, etc.)
 
     Additional params for safe control:
         params = {
@@ -59,12 +59,8 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
 
         super().__init__(**kwargs)
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'NMPCSafeControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -78,8 +74,6 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
             'barrier': self._barrier,
             'terminal_barrier': self._terminal_barrier,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     # ==========================================
     # Hook Methods
@@ -196,12 +190,8 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
     def __init__(self, **kwargs):
         super().__init__(cost_running=None, cost_terminal=None, **kwargs)
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'QuadraticNMPCSafeControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -217,13 +207,11 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
             'barrier': self._barrier,
             'terminal_barrier': self._terminal_barrier,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def _validate_for_make(self):
         """Check quadratic cost is assigned, then parent (safe + base) checks."""
         assert self._Q is not None and self._R is not None, \
-            "Cost matrices must be assigned. Use assign_cost_matrices()."
+            "Cost matrices must be provided at construction (Q=..., R=...)."
         # Skip cost_running check — use quadratic cost instead
         assert self.has_barrier, "Barrier must be assigned before make() for NMPCSafeControl"
         assert self.has_dynamics, "Dynamics must be assigned before make()"

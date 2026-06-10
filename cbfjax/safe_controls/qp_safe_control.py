@@ -12,7 +12,7 @@ from typing import Callable, Optional, Any, Dict
 from immutabledict import immutabledict
 from functools import partial
 
-from qpax import solve_qp_primal
+from ..utils.qp import get_qp_solver
 
 from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
 from ..controls.control_types import QPInfo
@@ -33,6 +33,7 @@ class QPSafeControl(BaseCBFSafeControl):
     # Static parameters for JIT compatibility
     _slacked: bool = eqx.field(static=True)
     _slack_gain: float
+    _qp_solver: Callable = eqx.field(static=True)
 
     def __init__(
         self,
@@ -55,7 +56,7 @@ class QPSafeControl(BaseCBFSafeControl):
             slack_gain = params.get('slack_gain', slack_gain)
 
         # Ensure params contains QP-specific values
-        qp_params = {'slacked': slacked, 'slack_gain': slack_gain}
+        qp_params = {'slacked': slacked, 'slack_gain': slack_gain, 'qp_solver': 'qpax'}
         if params is not None:
             qp_params.update(params)
         kwargs['params'] = qp_params
@@ -66,34 +67,10 @@ class QPSafeControl(BaseCBFSafeControl):
         # Set static parameters
         self._slacked = slacked
         self._slack_gain = slack_gain
+        self._qp_solver = get_qp_solver(qp_params['qp_solver'])
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                     params: Optional[dict] = None) -> 'QPSafeControl':
-        """
-        Create empty QPSafeControl instance for assignment chain.
-
-        Args:
-            action_dim: Control input dimension
-            alpha: Class-K function for barrier constraint
-            params: Optional parameter dictionary
-
-        Returns:
-            Empty QPSafeControl instance ready for assignment
-        """
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New QPSafeControl instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -104,51 +81,6 @@ class QPSafeControl(BaseCBFSafeControl):
             'slacked': self._slacked,
             'slack_gain': self._slack_gain
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_state_barrier(self, barrier) -> 'QPSafeControl':
-        """
-        Assign state barrier to controller.
-
-        Args:
-            barrier: Barrier function object
-
-        Returns:
-            New QPSafeControl instance with assigned barrier
-        """
-        return self._create_updated_instance(barrier=barrier)
-
-    def assign_dynamics(self, dynamics) -> 'QPSafeControl':
-        """
-        Assign dynamics to controller.
-
-        Args:
-            dynamics: System dynamics object
-
-        Returns:
-            New QPSafeControl instance with assigned dynamics
-        """
-        return self._create_updated_instance(dynamics=dynamics)
-
-    def assign_cost(self, Q: Callable, c: Callable) -> 'QPSafeControl':
-        """
-        Assign quadratic cost function.
-
-        Wraps plain x -> value functions to stateful (x, state) -> (value, state).
-
-        Args:
-            Q: Function x -> Q_matrix
-            c: Function x -> c_vector
-
-        Returns:
-            New QPSafeControl instance with assigned cost
-        """
-        def stateful_Q(x, state):
-            return Q(x), state
-        def stateful_c(x, state):
-            return c(x), state
-        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
     @jax.jit
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
@@ -174,9 +106,8 @@ class QPSafeControl(BaseCBFSafeControl):
         # Make equality constraints (empty by default)
         A, b = self._make_eq_const_single(x, Q_matrix)
 
-        # Solve QP
-        # qpax expects: min 0.5 x^T Q x + c^T x s.t. Gx <= h, Ax = b
-        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        # Solve QP: min 0.5 u^T Q u + c^T u s.t. Gu <= h, Au = b
+        u, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         return u, state
 
@@ -197,7 +128,7 @@ class QPSafeControl(BaseCBFSafeControl):
         Q_matrix, c_vector, state = self._make_objective_single(x, state)
         G, h = self._make_ineq_const_single(x)
         A, b = self._make_eq_const_single(x, Q_matrix)
-        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        u, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         u_desired = -jnp.linalg.solve(Q_matrix, c_vector)
         constraint_at_u = jnp.dot(G, u) - h
@@ -227,7 +158,7 @@ class QPSafeControl(BaseCBFSafeControl):
         A, b = self._make_eq_const_single(x, Q_matrix)
 
         # Solve QP for augmented decision variable [u, slack]
-        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        res, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         # Extract control
         u = res[:self._action_dim]
@@ -249,7 +180,7 @@ class QPSafeControl(BaseCBFSafeControl):
         num_constraints = h.shape[0]
         Q_matrix, c_vector, state = self._make_objective_slacked_single(x, num_constraints, state)
         A, b = self._make_eq_const_single(x, Q_matrix)
-        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        res, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         u = res[:self._action_dim]
         slack_vars = res[self._action_dim:]
@@ -394,6 +325,9 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         """
         Initialize MinIntervQPSafeControl with cooperative inheritance.
 
+        When desired_control is given and no explicit cost is provided, the
+        minimum intervention cost min ||u - u_d||^2 is derived automatically.
+
         Args:
             **kwargs: All args passed via cooperative inheritance
                 - desired_control: Handled by BaseMinIntervSafeControl
@@ -402,18 +336,25 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
                 - dynamics, action_dim, params: Handled by BaseControl
         """
         super().__init__(**kwargs)
+        if self._desired_control is not None and self._Q is None and self._c is None:
+            self._Q, self._c = self._derive_min_interv_cost()
 
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
+    def _derive_min_interv_cost(self) -> tuple:
+        """Derive stateful Q/c for min ||u - u_d||^2 from the desired control."""
+        action_dim = self._action_dim
+        desired = self._desired_control
 
-        Args:
-            **kwargs: Fields to update
+        def Q_func(x, state):
+            return 2.0 * jnp.eye(action_dim), state
 
-        Returns:
-            New MinIntervQPSafeControl instance with updated fields
-        """
-        defaults = {
+        def c_func(x, state):
+            u_d, new_state = desired(x, state)
+            return -2.0 * u_d, new_state
+
+        return Q_func, c_func
+
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -426,93 +367,6 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
             'slacked': self._slacked,
             'slack_gain': self._slack_gain
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_desired_control(self, desired_control) -> 'MinIntervQPSafeControl':
-        """
-        Assign desired control and automatically set up stateful cost.
-
-        Accepts either:
-        - A controller object with _optimal_control_single and get_init_state methods
-        - A plain function f(x) -> u (wrapped to stateful form)
-
-        Args:
-            desired_control: Controller object or callable
-
-        Returns:
-            New MinIntervQPSafeControl instance with cost set up
-        """
-        action_dim = self._action_dim
-
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            # Controller object -> wrap to stateful Q/c
-            ctrl_obj = desired_control
-
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-
-            init_state_fn = ctrl_obj.get_init_state
-
-            def Q_func(x, state):
-                return 2.0 * jnp.eye(action_dim), state
-
-            def c_func(x, state):
-                u_d, new_state = ctrl_obj._optimal_control_single(x, state)
-                return -2.0 * u_d, new_state
-
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-                Q=Q_func,
-                c=c_func,
-            )
-        else:
-            # Plain function f(x) -> u
-            func = desired_control
-
-            def stateful_desired(x, state):
-                return func(x), state
-
-            def Q_func(x, state):
-                return 2.0 * jnp.eye(action_dim), state
-
-            def c_func(x, state):
-                return -2.0 * func(x), state
-
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=lambda: None,
-                Q=Q_func,
-                c=c_func,
-            )
-
-    def assign_cost(self, Q: Callable, c: Callable) -> 'MinIntervQPSafeControl':
-        """
-        Internal method to assign cost functions.
-
-        Wraps plain x -> value functions to stateful (x, state) -> (value, state).
-
-        Args:
-            Q: Function x -> Q_matrix
-            c: Function x -> c_vector
-
-        Returns:
-            New instance with assigned cost
-        """
-        def stateful_Q(x, state):
-            return Q(x), state
-        def stateful_c(x, state):
-            return c(x), state
-        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
-
-    def assign_state_barrier(self, barrier) -> 'MinIntervQPSafeControl':
-        """Assign state barrier."""
-        return self._create_updated_instance(barrier=barrier)
-
-    def assign_dynamics(self, dynamics) -> 'MinIntervQPSafeControl':
-        """Assign dynamics."""
-        return self._create_updated_instance(dynamics=dynamics)
 
 
 class InputConstQPSafeControl(QPSafeControl):
@@ -559,17 +413,8 @@ class InputConstQPSafeControl(QPSafeControl):
             self._control_high = tuple([0.0] * action_dim)
             self._has_control_bounds = False
 
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New InputConstQPSafeControl instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -582,24 +427,6 @@ class InputConstQPSafeControl(QPSafeControl):
             'slacked': self._slacked,
             'slack_gain': self._slack_gain
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_control_bounds(self, low: list, high: list) :
-        """
-        Assign control input bounds.
-
-        Args:
-            low: Lower bounds for control inputs
-            high: Upper bounds for control inputs
-
-        Returns:
-            New InputConstQPSafeControl with bounds assigned
-        """
-        assert len(low) == len(high), 'low and high should have the same length'
-        assert len(low) == self._action_dim, 'bounds length should match action dimension'
-
-        return self._create_updated_instance(control_low=low, control_high=high)
 
     @jax.jit
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
@@ -647,7 +474,7 @@ class InputConstQPSafeControl(QPSafeControl):
         A, b = self._make_eq_const_single(x, Q_matrix)
 
         # Solve QP
-        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        u, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         return u, state
 
@@ -685,7 +512,7 @@ class InputConstQPSafeControl(QPSafeControl):
             G, h = G_cbf, h_cbf
 
         A, b = self._make_eq_const_single(x, Q_matrix)
-        u = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        u, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         u_desired = -jnp.linalg.solve(Q_matrix, c_vector)
         constraint_at_u = jnp.dot(G, u) - h
@@ -732,7 +559,7 @@ class InputConstQPSafeControl(QPSafeControl):
         A, b = self._make_eq_const_single(x, Q_matrix)
 
         # Solve QP for augmented decision variable [u, slack]
-        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        res, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         # Extract control
         u = res[:self._action_dim]
@@ -766,7 +593,7 @@ class InputConstQPSafeControl(QPSafeControl):
             G, h = G_cbf, h_cbf
 
         A, b = self._make_eq_const_single(x, Q_matrix)
-        res = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        res, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         u = res[:self._action_dim]
         slack_vars = res[self._action_dim:]
@@ -779,47 +606,18 @@ class InputConstQPSafeControl(QPSafeControl):
         info = QPInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_desired)
         return u, state, info
 
-    def assign_state_barrier(self, barrier) -> 'InputConstQPSafeControl':
-        """Assign state barrier."""
-        return self._create_updated_instance(barrier=barrier)
-
-    def assign_dynamics(self, dynamics) -> 'InputConstQPSafeControl':
-        """Assign dynamics."""
-        return self._create_updated_instance(dynamics=dynamics)
-
 
 class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeControl):
     """
     Minimum Intervention Input-Constrained QP-based Safe Control.
 
-    Combines minimum intervention with input constraints using cooperative inheritance.
+    Combines minimum intervention with input constraints using cooperative
+    inheritance. Desired control normalization and automatic cost derivation
+    are inherited from MinIntervQPSafeControl.
     """
 
-    def __init__(self, **kwargs):
-        """
-        Initialize MinIntervInputConstQPSafeControl with cooperative inheritance.
-
-        Args:
-            **kwargs: All args passed via cooperative inheritance
-                - control_low, control_high: Handled by InputConstQPSafeControl
-                - desired_control: Handled by MinIntervQPSafeControl
-                - slacked, slack_gain: Handled by QPSafeControl
-                - alpha, Q, c, barrier: Handled by BaseCBFSafeControl
-                - dynamics, action_dim, params: Handled by BaseControl
-        """
-        super().__init__(**kwargs)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New MinIntervInputConstQPSafeControl instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -834,55 +632,3 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
             'slacked': self._slacked,
             'slack_gain': self._slack_gain
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_desired_control(self, desired_control) -> 'MinIntervInputConstQPSafeControl':
-        """
-        Assign desired control and set up stateful cost.
-
-        Accepts either:
-        - A controller object with _optimal_control_single and get_init_state methods
-        - A plain function f(x) -> u (wrapped to stateful form)
-        """
-        action_dim = self._action_dim
-
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            ctrl_obj = desired_control
-
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-
-            init_state_fn = ctrl_obj.get_init_state
-
-            def Q_func(x, state):
-                return 2.0 * jnp.eye(action_dim), state
-
-            def c_func(x, state):
-                u_d, new_state = ctrl_obj._optimal_control_single(x, state)
-                return -2.0 * u_d, new_state
-
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-                Q=Q_func,
-                c=c_func,
-            )
-        else:
-            func = desired_control
-
-            def stateful_desired(x, state):
-                return func(x), state
-
-            def Q_func(x, state):
-                return 2.0 * jnp.eye(action_dim), state
-
-            def c_func(x, state):
-                return -2.0 * func(x), state
-
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=lambda: None,
-                Q=Q_func,
-                c=c_func,
-            )

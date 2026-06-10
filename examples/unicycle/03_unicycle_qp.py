@@ -2,6 +2,7 @@
 Minimum intervention QP-based safe control for unicycle dynamics.
 
 Demonstrates:
+- One-call construction of the whole pipeline via cbfjax.from_config
 - MultiBarriers creation via Map
 - MinIntervQPSafeControl for safety filtering
 - QP-based CBF solution with slack variables
@@ -20,10 +21,6 @@ from immutabledict import immutabledict
 # CBFJAX imports
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
-from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.utils.make_map import Map
-from cbfjax.barriers.multi_barrier import MultiBarriers
-from cbfjax.safe_controls.qp_safe_control import MinIntervQPSafeControl
 from map_config import map_config
 from unicycle_desired_control import desired_control
 
@@ -71,50 +68,33 @@ sim_time = 20.0
 dt_sim = 0.01
 
 # ============================================
-# Setup Dynamics
+# Build the full pipeline with cbfjax.from_config
 # ============================================
 
-print("Setting up dynamics...")
+print("Building safety filter via cbfjax.from_config...")
 
-dynamics = UnicycleDynamics()
+parts = cbfjax.from_config({
+    'dynamics': 'unicycle',
+    'barrier': {'type': 'map', **map_config, 'composition': 'multi', 'cfg': cfg},
+    'safety_filter': {
+        'type': 'min_interv_qp',
+        'action_dim': 2,
+        'alpha': lambda x: 0.5 * x,
+        'params': qp_params,
+        'desired_control': lambda x: desired_control(x, goal_pos),
+    },
+})
+
+safety_filter = parts.safety_filter
+dynamics = parts.dynamics
+barrier = parts.barrier
+map_ = parts.map
+
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 print(f"  State dim: {nx}, Action dim: {nu}")
-
-# ============================================
-# Setup Barriers
-# ============================================
-
-print("Setting up barriers...")
-
-# Create barrier map and get individual barriers
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-pos_barriers, vel_barriers = map_.get_barriers()
-
-# Create MultiBarriers and add all barriers
-barrier = MultiBarriers.create_empty(cfg=cfg)
-barrier = barrier.add_barriers([*pos_barriers, *vel_barriers], infer_dynamics=True)
-
-print(f"  MultiBarriers with {len(pos_barriers)} position and {len(vel_barriers)} velocity barriers")
-
-# ============================================
-# Setup QP Safety Filter
-# ============================================
-
-print("Setting up QP safety filter...")
-
-safety_filter = (
-    MinIntervQPSafeControl(
-        action_dim=nu,
-        alpha=lambda x: 0.5 * x,
-        params=qp_params,
-    )
-    .assign_dynamics(dynamics)
-    .assign_state_barrier(barrier)
-    .assign_desired_control(lambda x: desired_control(x, goal_pos))
-)
-
+print(f"  MultiBarriers with {len(map_.pos_barriers)} position and {len(map_.vel_barriers)} velocity barriers")
 print(f"  Alpha: 0.5 * h")
 
 # ============================================

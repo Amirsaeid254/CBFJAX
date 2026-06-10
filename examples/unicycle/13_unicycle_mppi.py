@@ -34,10 +34,9 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 import numpy as np
 
+import cbfjax
 from cbfjax.dynamics.unicycle import UnicycleDynamics
 from cbfjax.controls.mppi_control import MPPIControl
-from cbfjax.utils.make_map import Map
-from cbfjax.barriers.composite_barrier import SoftCompositionBarrier
 from immutabledict import immutabledict
 
 from map_config import map_config
@@ -54,7 +53,7 @@ mpl.rcParams['font.family'] = 'serif'
 # MPPI parameters
 mppi_params = {
     'num_samples': 1000,
-    'horizon':     1.0,     # seconds  → N = 20 steps
+    'horizon':     4.0,     # seconds  → N = 20 steps
     'time_steps':  0.1,     # dt (must match dynamics discretization_dt)
     'temperature': 0.5,     # lambda: lower = more peaked weights
     'init_seed':   0,
@@ -121,16 +120,11 @@ print(f"  state_dim={nx}, action_dim={nu}")
 
 print("Setting up barriers...")
 
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-pos_barriers, vel_barriers = map_.get_barriers()
-
-barrier = (
-    SoftCompositionBarrier(cfg={'softmin_rho': cfg['softmin_rho'],
-                                'softmax_rho': cfg['softmax_rho']})
-    .assign_dynamics(dynamics)
-    .assign_barriers_and_rule(barriers=[*pos_barriers, *vel_barriers], rule='i')
+barrier = cbfjax.build_barrier(
+    {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
+    dynamics=dynamics,
 )
-print(f"  SoftCompositionBarrier: {len(pos_barriers)} position + {len(vel_barriers)} velocity barriers")
+print(f"  SoftCompositionBarrier built via cbfjax.build_barrier")
 
 # ============================================================
 # MPPI Cost Functions
@@ -162,13 +156,15 @@ def terminal_cost(x):
 
 print("Setting up MPPI controller...")
 
-ctrl = (
-    MPPIControl.create_empty(action_dim=nu, params=mppi_params)
-    .assign_dynamics(dynamics)
-    .assign_cost_func(running_cost)
-    .assign_terminal_cost_func(terminal_cost)
-    .assign_noise_sigma(noise_sigma)
-    .assign_control_bounds(ctrl_low, ctrl_high)
+ctrl = MPPIControl(
+    action_dim=nu,
+    params=mppi_params,
+    dynamics=dynamics,
+    cost_func=running_cost,
+    terminal_cost_func=terminal_cost,
+    noise_sigma=noise_sigma,
+    control_low=ctrl_low,
+    control_high=ctrl_high,
 )
 
 print(f"  K={ctrl.num_samples} samples, N={ctrl.N_horizon} steps, dt={dt_ctrl}s")

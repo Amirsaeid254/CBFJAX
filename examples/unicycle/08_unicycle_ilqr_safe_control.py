@@ -23,9 +23,6 @@ import os
 # CBFJAX imports
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
-from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.utils.make_map import Map
-from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
 from immutabledict import immutabledict
 
 # Local imports
@@ -66,10 +63,8 @@ ilqr_params = {
 }
 
 # ============================================
-# Setup Dynamics and Barriers
+# Setup Dynamics, Barriers, and Controller
 # ============================================
-
-
 
 print("Setting up dynamics and barriers...")
 
@@ -77,23 +72,6 @@ dynamics_params = {
     'discretization_dt': ilqr_params['time_steps'],
     'discretization_method': 'rk4',
 }
-dynamics = UnicycleDynamics(params=dynamics_params)
-
-# Create barrier map
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-barrier = map_.barrier
-
-print(f"  Barrier setup complete")
-
-# ============================================
-# Setup iLQR Controller
-# ============================================
-
-print("Setting up iLQR controller...")
-
-# State dimensions: [q_x, q_y, v, theta]
-nx = dynamics.state_dim  # 4
-nu = dynamics.action_dim  # 2
 
 # Cost matrices for tracking (as Callable for JIT compatibility)
 Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))  # State cost
@@ -111,15 +89,31 @@ x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 # Initial state
 x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
-# Create iLQR controller (cost matrices wrapped as Callable)
-controller = (
-    QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
-    .assign_dynamics(dynamics)
-    .assign_control_bounds(control_low, control_high)
-    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
-    .assign_state_barrier(barrier)
-)
+print("Setting up iLQR controller...")
 
+parts = cbfjax.from_config({
+    'dynamics': {'type': 'unicycle', 'params': dynamics_params},
+    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
+    'safety_filter': {
+        'type': 'quadratic_ilqr',
+        'action_dim': 2,
+        'params': ilqr_params,
+        'control_low': control_low,
+        'control_high': control_high,
+        'Q': Q, 'R': R, 'Q_e': Q_e, 'x_ref': x_ref,
+    },
+})
+
+controller = parts.safety_filter
+dynamics = parts.dynamics
+barrier = parts.barrier
+map_ = parts.map  # kept for plotting
+
+# State dimensions: [q_x, q_y, v, theta]
+nx = dynamics.state_dim  # 4
+nu = dynamics.action_dim  # 2
+
+print(f"  Barrier setup complete")
 print(f"  Horizon: {controller.horizon}s, N={controller.N_horizon}")
 
 # ============================================
@@ -164,8 +158,8 @@ _, (u_hist, info_hist) = jax.lax.scan(scan_step, init_state, x_hist)
 # Compute min barrier along each predicted trajectory
 print("Computing barrier values along predicted trajectories...")
 pred_trajs = info_hist.x_traj  # (n_steps+1, N+1, state_dim)
-h_pred = jax.vmap(barrier.hocbf)(pred_trajs)  # (n_steps+1, N+1, num_barriers)
-h_pred_min = jnp.min(h_pred, axis=1)  # (n_steps+1, num_barriers)
+h_pred = jax.vmap(jax.vmap(barrier.hocbf))(pred_trajs)[..., None]  # (n_steps+1, N+1, 1)
+h_pred_min = jnp.min(h_pred, axis=1)  # (n_steps+1, 1)
 
 # ============================================
 # Statistics

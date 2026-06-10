@@ -82,49 +82,19 @@ class BaseControl(eqx.Module):
         # Initialize components with dummy objects instead of None
         self._dynamics = dynamics if dynamics is not None else DummyDynamics()
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None):
-        """
-        Create an empty controller instance.
-
-        Args:
-            action_dim: Dimension of control input
-            params: Optional configuration parameters
-
-        Returns:
-            Empty controller instance ready for component assignment
-        """
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New instance of the same class with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
         }
+
+    def _replace(self, **kwargs):
+        """Rebuild instance through its constructor with updated fields."""
+        defaults = self._ctor_defaults()
         defaults.update(kwargs)
         return self.__class__(**defaults)
-
-    def assign_dynamics(self, dynamics):
-        """
-        Assign dynamics to controller.
-
-        Args:
-            dynamics: System dynamics object
-
-        Returns:
-            New controller instance with assigned dynamics
-        """
-        return self._create_updated_instance(dynamics=dynamics)
 
     def get_init_state(self):
         """
@@ -379,54 +349,27 @@ class QuadraticCostMixin:
         Initialize QuadraticCostMixin.
 
         Args:
-            Q: Callable returning state cost matrix (nx, nx)
-            R: Callable returning control cost matrix (nu, nu)
-            Q_e: Callable returning terminal cost matrix (nx, nx)
-            x_ref: Callable returning reference state (nx,)
+            Q: Callable returning state cost matrix (nx, nx), or the matrix itself
+            R: Callable returning control cost matrix (nu, nu), or the matrix itself
+            Q_e: Callable returning terminal cost matrix (nx, nx), or the matrix itself
+            x_ref: Callable returning reference state (nx,), or the vector itself
             **kwargs: Passed to next class in MRO
         """
         super().__init__(**kwargs)
-        self._Q = Q
-        self._R = R
-        self._Q_e = Q_e
-        self._x_ref = x_ref
+        self._Q = self._as_cost_callable(Q)
+        self._R = self._as_cost_callable(R)
+        self._Q_e = self._as_cost_callable(Q_e)
+        self._x_ref = self._as_cost_callable(x_ref)
 
-    def assign_cost_matrices(
-        self,
-        Q: Callable,
-        R: Callable,
-        Q_e: Optional[Callable] = None,
-        x_ref: Optional[Callable] = None
-    ):
-        """
-        Assign quadratic cost matrices as Callable functions.
-
-        Cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
-
-        Args:
-            Q: Callable returning state cost matrix (nx, nx)
-            R: Callable returning control cost matrix (nu, nu)
-            Q_e: Callable returning terminal cost matrix (nx, nx), defaults to Q
-            x_ref: Callable returning reference state (nx,)
-
-        Returns:
-            New instance with cost matrices assigned
-        """
-        if Q_e is None:
-            Q_e = Q
-        return self._create_updated_instance(Q=Q, R=R, Q_e=Q_e, x_ref=x_ref)
-
-    def assign_reference(self, x_ref: Callable):
-        """
-        Assign reference state as Callable.
-
-        Args:
-            x_ref: Callable returning reference state (nx,)
-
-        Returns:
-            New instance with reference assigned
-        """
-        return self._create_updated_instance(x_ref=x_ref)
+    @staticmethod
+    def _as_cost_callable(value):
+        """Pass callables through; wrap arrays/matrices into zero-arg callables."""
+        if value is None or callable(value):
+            return value
+        arr = jnp.asarray(value)
+        def const_func():
+            return arr
+        return const_func
 
     def _get_quadratic_cost_func(self) -> Callable:
         """

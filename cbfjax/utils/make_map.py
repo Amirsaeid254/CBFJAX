@@ -158,7 +158,7 @@ class Map(eqx.Module):
                  image_path=None, synthesis_cfg=None,
                  pos_barriers=None, vel_barriers=None, barrier=None, map_barrier=None):
         """
-        Initialize Map with geometry provider and optional pre-computed barriers.
+        Initialize Map; barriers are built from the geometry in the constructor.
 
         Args:
             dynamics: System dynamics object
@@ -167,7 +167,7 @@ class Map(eqx.Module):
             barriers_info: Dictionary with geometry information
             image_path: Path to image file for image-based barriers
             synthesis_cfg: Configuration for image synthesis
-            pos_barriers: Pre-computed position barriers
+            pos_barriers: Pre-computed position barriers (skip building)
             vel_barriers: Pre-computed velocity barriers
             barrier: Pre-computed soft composition barrier
             map_barrier: Pre-computed hard composition barrier
@@ -179,6 +179,17 @@ class Map(eqx.Module):
         self.geometry_provider = self._create_geometry_provider(
             geometry_provider, barriers_info, image_path, synthesis_cfg
         )
+
+        if pos_barriers is None and barrier is None and \
+                not isinstance(self.geometry_provider, ImageGeometryProvider):
+            pos_barriers = self._create_geometric_barriers()
+            velocity_constraints = self.geometry_provider.get_velocity_constraints()
+            vel_barriers = (
+                self._create_velocity_barriers(velocity_constraints)
+                if velocity_constraints else []
+            )
+            barrier = self._create_soft_composition_barrier(pos_barriers + vel_barriers)
+            map_barrier = self._create_hard_composition_barrier(pos_barriers)
 
         # Initialize barriers as tuples for hashability
         self.pos_barriers = tuple(pos_barriers or [])
@@ -220,42 +231,6 @@ class Map(eqx.Module):
                 "Must provide one of: geometry_provider, barriers_info, or image_path"
             )
 
-    def create_barriers(self) -> 'Map':
-        """
-        Create position and velocity barriers from geometry provider.
-
-        Returns:
-            New Map instance with computed barriers
-        """
-        # Create position barriers from geometry
-        if isinstance(self.geometry_provider, ImageGeometryProvider):
-            pos_barriers = self._create_image_barriers()
-        else:
-            pos_barriers = self._create_geometric_barriers()
-
-        # Create velocity barriers if constraints exist
-        velocity_constraints = self.geometry_provider.get_velocity_constraints()
-        vel_barriers = (
-            self._create_velocity_barriers(velocity_constraints)
-            if velocity_constraints else []
-        )
-
-        # Create composed barriers
-        all_barriers = pos_barriers + vel_barriers
-        barrier = self._create_soft_composition_barrier(all_barriers)
-        map_barrier = self._create_hard_composition_barrier(pos_barriers)
-
-        # Return new instance with all barriers
-        return Map(
-            dynamics=self.dynamics,
-            cfg=self.cfg,
-            geometry_provider=self.geometry_provider,
-            pos_barriers=pos_barriers,
-            vel_barriers=vel_barriers,
-            barrier=barrier,
-            map_barrier=map_barrier
-        )
-
     def _create_geometric_barriers(self) -> List[Barrier]:
         """
         Create barriers from geometric primitives.
@@ -270,14 +245,12 @@ class Map(eqx.Module):
             barrier_func_factory, alpha_key = self._get_barrier_config(geom_type)
             alphas = tuple(self.cfg.get(alpha_key, (1.0,)))
 
-            barrier = (
-                Barrier.create_empty(cfg=self.cfg)
-                .assign(
-                    barrier_func=barrier_func_factory(**geom_info),
-                    rel_deg=self.cfg.get('pos_barrier_rel_deg', 1),
-                    alphas=alphas
-                )
-                .assign_dynamics(self.dynamics)
+            barrier = Barrier(
+                barrier_func=barrier_func_factory(**geom_info),
+                rel_deg=self.cfg.get('pos_barrier_rel_deg', 1),
+                alphas=alphas,
+                dynamics=self.dynamics,
+                cfg=self.cfg,
             )
 
             barriers.append(barrier)
@@ -312,14 +285,12 @@ class Map(eqx.Module):
         vel_barrier_funcs = make_box_barrier_functionals(bounds=bounds, idx=idx)
 
         barriers = [
-            (
-                Barrier.create_empty(cfg=self.cfg)
-                .assign(
-                    barrier_func=vel_barrier,
-                    rel_deg=self.cfg.get('vel_barrier_rel_deg', 1),
-                    alphas=alphas
-                )
-                .assign_dynamics(self.dynamics)
+            Barrier(
+                barrier_func=vel_barrier,
+                rel_deg=self.cfg.get('vel_barrier_rel_deg', 1),
+                alphas=alphas,
+                dynamics=self.dynamics,
+                cfg=self.cfg,
             )
             for vel_barrier in vel_barrier_funcs
         ]
@@ -328,25 +299,11 @@ class Map(eqx.Module):
 
     def _create_soft_composition_barrier(self, barriers: List[Barrier]) -> SoftCompositionBarrier:
         """Create soft composition barrier from individual barriers."""
-        return (
-            SoftCompositionBarrier.create_empty(cfg=self.cfg)
-            .assign_barriers_and_rule(
-                barriers=barriers,
-                rule='intersection',
-                infer_dynamics=True
-            )
-        )
+        return SoftCompositionBarrier(barriers=barriers, rule='intersection', cfg=self.cfg)
 
     def _create_hard_composition_barrier(self, barriers: List[Barrier]) -> NonSmoothCompositionBarrier:
         """Create hard composition barrier from position barriers only."""
-        return (
-            NonSmoothCompositionBarrier.create_empty(cfg=self.cfg)
-            .assign_barriers_and_rule(
-                barriers=barriers,
-                rule='intersection',
-                infer_dynamics=True
-            )
-        )
+        return NonSmoothCompositionBarrier(barriers=barriers, rule='intersection', cfg=self.cfg)
 
     def _get_barrier_config(self, geom_type: str) -> Tuple[callable, str]:
         """
@@ -419,7 +376,7 @@ def make_map_from_geoms(geoms: List[Tuple[str, Dict]], dynamics, cfg,
     if velocity_constraints:
         barriers_info['velocity'] = velocity_constraints
 
-    return Map(dynamics=dynamics, cfg=cfg, barriers_info=barriers_info).create_barriers()
+    return Map(dynamics=dynamics, cfg=cfg, barriers_info=barriers_info)
 
 
 def make_map_from_image(image_path: str, dynamics, cfg, synthesis_cfg=None) -> Map:
@@ -442,7 +399,7 @@ def make_map_from_image(image_path: str, dynamics, cfg, synthesis_cfg=None) -> M
         cfg=cfg,
         image_path=image_path,
         synthesis_cfg=synthesis_cfg or cfg.get('synthesis_cfg')
-    ).create_barriers()
+    )
 
 
 def create_simple_obstacle_map(dynamics, obstacles: List[Dict], cfg=None) -> Map:
@@ -503,4 +460,4 @@ def create_map_from_config(barriers_info, dynamics, cfg) -> Map:
     Returns:
         Map instance with barriers created from configuration
     """
-    return Map(dynamics=dynamics, cfg=cfg, barriers_info=barriers_info).create_barriers()
+    return Map(dynamics=dynamics, cfg=cfg, barriers_info=barriers_info)

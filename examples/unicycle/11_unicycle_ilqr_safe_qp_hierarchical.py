@@ -26,10 +26,7 @@ import os
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.utils.make_map import Map
 from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
-from cbfjax.safe_controls.qp_safe_control import MinIntervInputConstQPSafeControl
-from cbfjax.barriers.multi_barrier import MultiBarriers
 from immutabledict import immutabledict
 
 # Local imports
@@ -91,7 +88,7 @@ control_low = [-2.0, -1.0]   # [min accel, min omega]
 control_high = [2.0, 1.0]    # [max accel, max omega]
 
 # ============================================
-# Setup Dynamics
+# Setup Dynamics (explicit: iLQR needs it before the filter exists)
 # ============================================
 
 print("Setting up dynamics...")
@@ -108,23 +105,20 @@ nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup Barriers
+# Build iLQR barrier (explicit: needed before ilqr_controller is constructed)
 # ============================================
 
 print("Setting up barriers...")
 
-# Create barrier for iLQR (uses simple barrier for cost penalty)
-map_ilqr = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg_ilqr).create_barriers()
-barrier_ilqr = map_ilqr.barrier
-
-# Create barrier for QP (needs HOCBF with Lie derivatives)
-map_qp = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg_qp).create_barriers()
-barrier_qp = map_qp.barrier
+barrier_ilqr = cbfjax.build_barrier(
+    {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg_ilqr},
+    dynamics=dynamics,
+)
 
 print(f"  iLQR barrier: composite barrier as AL inequality constraint")
 
 # ============================================
-# Setup iLQR Safe Controller (High-Level)
+# Setup iLQR Safe Controller (High-Level, stays explicit)
 # ============================================
 
 print("Setting up iLQR safe controller...")
@@ -140,36 +134,41 @@ goal_pos = jnp.array([7.5, 7.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
 # Create iLQR controller WITH barrier as AL inequality constraint
-ilqr_controller = (
-    QuadraticiLQRSafeControl.create_empty(action_dim=nu, params=ilqr_params)
-    .assign_dynamics(dynamics)
-    .assign_control_bounds(control_low, control_high)
-    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
-    .assign_state_barrier(barrier_ilqr)  # Barrier as AL constraint
+ilqr_controller = QuadraticiLQRSafeControl(
+    action_dim=nu,
+    params=ilqr_params,
+    dynamics=dynamics,
+    control_low=control_low,
+    control_high=control_high,
+    Q=Q, R=R, Q_e=Q_e, x_ref=x_ref,
+    barrier=barrier_ilqr,  # Barrier as AL constraint
 )
 
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 print(f"  Barrier: handled as AL inequality constraint")
 
 # ============================================
-# Setup QP Safety Filter (Low-Level)
+# Build QP safety filter pipeline via cbfjax.from_config
 # ============================================
 
 print("Setting up QP safety filter...")
 
-# Create QP safety filter with iLQR-safe as desired control
-safety_filter = (
-    MinIntervInputConstQPSafeControl(
-        action_dim=nu,
-        alpha=lambda h: 1.0 * h,
-        params=qp_params,
-        control_low=control_low,
-        control_high=control_high,
-    )
-    .assign_dynamics(dynamics)
-    .assign_state_barrier(barrier_qp)
-    .assign_desired_control(ilqr_controller)
-)
+parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg_qp},
+    'safety_filter': {
+        'type': 'min_interv_input_const_qp',
+        'action_dim': nu,
+        'alpha': lambda h: 1.0 * h,
+        'params': qp_params,
+        'control_low': control_low,
+        'control_high': control_high,
+        'desired_control': ilqr_controller,
+    },
+})
+
+safety_filter = parts.safety_filter
+barrier_qp = parts.barrier
 
 print(f"  Control bounds: low={control_low}, high={control_high}")
 
@@ -279,7 +278,8 @@ print(f"  Avg time per step: {simulation_time/n_steps*1000:.3f} ms")
 print(f"{'='*60}")
 print(f"Barrier statistics (HOCBF values):")
 print(f"  Min h(x): {np.min(h_vals_np):.6f}")
-print(f"  Violations (h < 0): {np.sum(np.min(h_vals_np, axis=1) < 0)}")
+h_vals_2d = h_vals_np if h_vals_np.ndim >= 2 else h_vals_np[:, None]
+print(f"  Violations (h < 0): {np.sum(np.min(h_vals_2d, axis=1) < 0)}")
 print(f"{'='*60}")
 print(f"Control statistics (QP-safe, actually applied):")
 print(f"  u1 (accel): min={u_safe_np[:, 0].min():.3f}, max={u_safe_np[:, 0].max():.3f}")
@@ -316,8 +316,8 @@ points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
 points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
-# Use map barrier for contour plot
-Z = jax.vmap(map_ilqr.barrier.min_barrier)(points_jax)
+# Use iLQR barrier for contour plot
+Z = jax.vmap(barrier_ilqr.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---
@@ -412,7 +412,7 @@ plt.show()
 # --- Barrier Values Plot ---
 fig, ax = plt.subplots(figsize=(8, 3))
 
-ax.plot(time_array, np.min(h_vals_np, axis=1), color='black',
+ax.plot(time_array, np.min(h_vals_2d, axis=1), color='black',
         label=r'$\min_i h_i(x)$')
 ax.axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='Constraint')
 ax.set_xlabel(r'$t~(\rm {s})$', fontsize=16)

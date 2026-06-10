@@ -28,9 +28,6 @@ class Barrier(eqx.Module):
 
     alphas may be numbers (linear class-K gains, stored as traced leaves) or
     callables (stored statically).
-
-    The legacy builder chain (create_empty().assign().assign_dynamics()) is
-    still supported.
     """
 
     _barrier_func: Callable = eqx.field(static=True)
@@ -72,12 +69,9 @@ class Barrier(eqx.Module):
             return jnp.array([])
         return dummy_barrier
 
-    @classmethod
-    def create_empty(cls, cfg=None):
-        return cls(cfg=cfg)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
             'barrier_func': self._barrier_func,
             'dynamics': self._dynamics,
             'rel_deg': self._rel_deg,
@@ -86,28 +80,12 @@ class Barrier(eqx.Module):
             'hocbf_func': self._explicit_hocbf_func,
             'cfg': self.cfg
         }
+
+    def _replace(self, **kwargs):
+        """Rebuild instance through its constructor with updated fields."""
+        defaults = self._ctor_defaults()
         defaults.update(kwargs)
         return self.__class__(**defaults)
-
-    def assign(self, barrier_func: Callable, rel_deg: int = 1,
-               alphas=None) -> 'Barrier':
-        assert callable(barrier_func), "barrier_func must be a callable function"
-        return self._create_updated_instance(
-            barrier_func=barrier_func,
-            rel_deg=rel_deg,
-            alphas=alphas,
-            barriers=None,
-            hocbf_func=None,
-        )
-
-    def assign_dynamics(self, dynamics) -> 'Barrier':
-        if self._is_dummy_barrier(self._barrier_func):
-            raise ValueError("Barrier function must be assigned first. Use assign() method.")
-        return self._create_updated_instance(
-            dynamics=dynamics,
-            barriers=None,
-            hocbf_func=None,
-        )
 
     @staticmethod
     def _is_dummy_barrier(func):
@@ -170,7 +148,7 @@ class Barrier(eqx.Module):
         if self._explicit_hocbf_func is not None:
             return self._explicit_hocbf_func(x)
         if not self._is_ready():
-            raise ValueError("HOCBF not computed. Use assign_dynamics() first.")
+            raise ValueError("HOCBF not computed. Construct with barrier_func and dynamics.")
         return self._series_value(self._rel_deg - 1, x)
 
     def get_hocbf_and_lie_derivs(self, x: jnp.ndarray):
@@ -199,7 +177,7 @@ class Barrier(eqx.Module):
     def compute_barriers_at(self, x: jnp.ndarray) -> List[jnp.ndarray]:
         """Compute all barrier values in the series at a single state."""
         if len(self.barriers) == 0:
-            raise ValueError("Barriers not computed. Use assign_dynamics() first.")
+            raise ValueError("Barrier series unavailable. Construct with barrier_func and dynamics.")
         return [barrier(x) for barrier in self.barriers_flatten]
 
     def get_min_barrier_at(self, x: jnp.ndarray) -> jnp.ndarray:

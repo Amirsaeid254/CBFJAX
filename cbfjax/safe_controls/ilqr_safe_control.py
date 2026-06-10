@@ -33,12 +33,8 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
     Supports optional terminal barrier applied only at t == T.
     """
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'iLQRSafeControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -51,8 +47,6 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
             'barrier': self._barrier,
             'terminal_barrier': self._terminal_barrier,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def _get_inequality_constraint(self) -> Callable:
         """
@@ -135,12 +129,8 @@ class QuadraticiLQRSafeControl(QuadraticCostMixin, iLQRSafeControl):
         """
         super().__init__(cost_func=None, **kwargs)
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'QuadraticiLQRSafeControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -156,8 +146,6 @@ class QuadraticiLQRSafeControl(QuadraticCostMixin, iLQRSafeControl):
             'barrier': self._barrier,
             'terminal_barrier': self._terminal_barrier,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def _get_cost(self) -> Callable:
         """Get quadratic cost function."""

@@ -23,10 +23,6 @@ from immutabledict import immutabledict
 # CBFJAX imports
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
-from cbfjax.dynamics import UnicycleReducedOrderDynamics
-from cbfjax.barriers import Barrier, BackupBarrier
-from cbfjax.safe_controls import MinIntervBackupSafeControl
-from cbfjax.utils.make_map import Map
 
 # Local imports
 from map_config import map_config
@@ -89,105 +85,64 @@ timestep = 0.01
 sim_time = 20.0
 
 # ============================================
-# Setup Dynamics
+# Build the full pipeline with cbfjax.from_config
 # ============================================
 
-print("Setting up dynamics...")
+print("Building backup safety filter via cbfjax.from_config...")
 
-dynamics = UnicycleReducedOrderDynamics(params=dynamics_params)
+backup_controls = UnicycleBackupControl(ub_gain, (control_low, control_high))()
+
+# Desired control toward goal
+def desired_control_func(x):
+    return desired_control(x, goal_pos[0], dynamics_params, **control_gains)
+
+parts = cbfjax.from_config({
+    'dynamics': {'type': 'unicycle_reduced_order', 'params': dynamics_params},
+    'barrier': {
+        'type': 'backup',
+        'state_barrier': {'type': 'map', **map_config,
+                          'composition': 'soft', 'cfg': map_cfg},
+        'backup_policies': backup_controls,
+        'backup_barriers': [
+            # terminal set: state barrier shrunk by the braking margin
+            {'type': 'state_margin',
+             'margin': lambda x: -(0.5 * jnp.pow(x[2], 2)) / control_high[0]},
+        ],
+        'cfg': backup_cfg,
+    },
+    'safety_filter': {
+        'type': 'min_interv_backup',
+        'action_dim': 2,
+        'alpha': lambda x: 1.0 * x,
+        'control_low': control_low,
+        'control_high': control_high,
+        'params': {'slacked': False, 'qp_solver': 'qpax'},
+        'desired_control': desired_control_func,
+    },
+})
+
+safety_filter = parts.safety_filter
+dynamics = parts.dynamics
+map_ = parts.map
+fwd_barrier = parts.barrier
+state_barrier = fwd_barrier.state_barrier
+
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 print(f"  State dim: {nx}, Action dim: {nu}")
-
-# ============================================
-# Setup State Barriers
-# ============================================
-
-print("Setting up state barriers...")
-
-map_ = Map(dynamics=dynamics, cfg=map_cfg, barriers_info=map_config).create_barriers()
-state_barrier = map_.barrier
-
 print(f"  State barrier: {len(map_.barrier._barriers)} obstacle/boundary barriers")
-
-# ============================================
-# Setup Backup Policies
-# ============================================
-
-print("Setting up backup policies...")
-
-backup_controls = UnicycleBackupControl(ub_gain, (control_low, control_high))()
-
 print(f"  Backup policies: {len(backup_controls)} policies")
-
-# ============================================
-# Setup Backup Barriers
-# ============================================
-
-print("Setting up backup barriers...")
-
-# Backup barrier = state barrier - velocity penalty
-def backup_barrier_func(x):
-    h_state = state_barrier.hocbf(x)
-    velocity_penalty = (0.5 * jnp.pow(x[2], 2)) / control_high[0]
-    return h_state - velocity_penalty
-
-backup_barriers = [
-    Barrier().assign(
-        barrier_func=backup_barrier_func,
-        rel_deg=1,
-        alphas=[]).assign_dynamics(dynamics)]
-
-print(f"  Backup barriers: {len(backup_barriers)} barriers")
-
-# ============================================
-# Setup Backup Barrier System
-# ============================================
-
-print("Setting up backup barrier system...")
-
-fwd_barrier = (BackupBarrier.create_empty(cfg=backup_cfg)
-               .assign_state_barrier([state_barrier])
-               .assign_backup_policies(backup_controls)
-               .assign_backup_barrier(backup_barriers)
-               .assign_dynamics(dynamics)
-               .make())
-
-print("  Backup barrier system built")
 
 # Test backup barrier
 h_test = jax.vmap(fwd_barrier.hocbf)(x0)
 print(f"  Backup barrier test value: {np.array(h_test)}")
 
 # ============================================
-# Setup Safety Filter
-# ============================================
-
-print("Setting up safety filter...")
-
-safety_filter = MinIntervBackupSafeControl(
-    action_dim=dynamics.action_dim,
-    alpha=lambda x: 1.0 * x,
-    slacked=False,
-    control_low=control_low,
-    control_high=control_high,
-).assign_dynamics(dynamics).assign_state_barrier(fwd_barrier)
-
-print("  Safety filter configured")
-
-# ============================================
 # Test Controller
 # ============================================
 
 print("\nTesting controller...")
-
-# Assign desired control based on goal positions
-def desired_control_func(x):
-    """Desired control toward goal."""
-    return desired_control(x, goal_pos[0], dynamics_params, **control_gains)
-
-safety_filter = safety_filter.assign_desired_control(desired_control_func)
 
 u_test, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
 print(f"  Test control: u = {np.array(u_test[0])}")
@@ -210,10 +165,6 @@ trajs = safety_filter.get_optimal_trajs_zoh(
 
 simulation_time = time.time() - start_time
 print(f"Simulation completed in {simulation_time:.2f} seconds")
-
-# Print profiling summary
-from cbfjax.utils import print_profile_summary
-print_profile_summary()
 
 # ============================================
 # Compute Control Actions and Barrier Values

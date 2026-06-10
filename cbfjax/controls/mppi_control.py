@@ -17,17 +17,17 @@ using the same dt as params['time_steps'] here.
 
 Usage::
 
-    ctrl = MPPIControl.create_empty(action_dim=2, params={
-        'num_samples': 1000,
-        'horizon':     2.0,
-        'time_steps':  0.1,
-        'temperature': 1.0,
-    })
-    ctrl = ctrl.assign_dynamics(dynamics)
-    ctrl = ctrl.assign_cost_func(lambda x, u, t: ...)          # running cost
-    ctrl = ctrl.assign_terminal_cost_func(lambda x: ...)       # optional
-    ctrl = ctrl.assign_noise_sigma([0.5, 0.5])
-    ctrl = ctrl.assign_control_bounds([-1., -1.], [1., 1.])    # optional
+    ctrl = MPPIControl(
+        action_dim=2,
+        params={'num_samples': 1000, 'horizon': 2.0,
+                'time_steps': 0.1, 'temperature': 1.0},
+        dynamics=dynamics,
+        cost_func=lambda x, u, t: ...,          # running cost
+        terminal_cost_func=lambda x: ...,       # optional
+        noise_sigma=[0.5, 0.5],
+        control_low=[-1., -1.],                 # optional
+        control_high=[1., 1.],
+    )
 
     state = ctrl.get_init_state()
     u, state = ctrl._optimal_control_single(x, state)
@@ -116,12 +116,8 @@ class MPPIControl(BaseControl):
     # Construction helpers
     # ------------------------------------------------------------------
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'MPPIControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs) -> 'MPPIControl':
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim':         self._action_dim,
             'params':             immutabledict(self._params) if self._params else None,
             'dynamics':           self._dynamics,
@@ -131,37 +127,6 @@ class MPPIControl(BaseControl):
             'control_low':        self._control_low  if self._has_control_bounds else None,
             'control_high':       self._control_high if self._has_control_bounds else None,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    # ------------------------------------------------------------------
-    # Assignment API
-    # ------------------------------------------------------------------
-
-    def assign_dynamics(self, dynamics) -> 'MPPIControl':
-        return self._create_updated_instance(dynamics=dynamics)
-
-    def assign_cost_func(self, cost_func: Callable) -> 'MPPIControl':
-        """Assign running cost  f(x, u, t: int) -> scalar."""
-        return self._create_updated_instance(cost_func=cost_func)
-
-    def assign_terminal_cost_func(self, terminal_cost_func: Callable) -> 'MPPIControl':
-        """Assign terminal cost  f(x) -> scalar.  Defaults to zero if not set."""
-        return self._create_updated_instance(terminal_cost_func=terminal_cost_func)
-
-    def assign_noise_sigma(self, noise_sigma) -> 'MPPIControl':
-        """Assign per-action-dim noise standard deviations (diagonal of Σ)."""
-        return self._create_updated_instance(
-            noise_sigma=tuple(float(s) for s in noise_sigma)
-        )
-
-    def assign_control_bounds(self, low, high) -> 'MPPIControl':
-        """Assign box constraints on u.  Applied both during rollout and to U_new."""
-        assert len(low) == len(high) == self._action_dim
-        return self._create_updated_instance(
-            control_low=tuple(float(v) for v in low),
-            control_high=tuple(float(v) for v in high),
-        )
 
     # ------------------------------------------------------------------
     # Properties

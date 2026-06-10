@@ -24,9 +24,7 @@ import os
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.utils.make_map import Map
 from cbfjax.controls.ilqr_control import QuadraticiLQRControl
-from cbfjax.safe_controls.closed_form_safe_control import MinIntervCFSafeControl
 from immutabledict import immutabledict
 
 # Local imports
@@ -70,76 +68,64 @@ cf_params = {
 }
 
 # ============================================
-# Setup Dynamics
+# Setup Dynamics (explicit: iLQR needs it before the filter exists)
 # ============================================
 
 print("Setting up dynamics...")
 
-# Dynamics for iLQR (needs discretization)
 dynamics_params = {
     'discretization_dt': ilqr_params['time_steps'],
     'discretization_method': 'rk4',
 }
 dynamics = UnicycleDynamics(params=dynamics_params)
 
-# State/action dimensions
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup Barriers
-# ============================================
-
-print("Setting up barriers...")
-
-# Create barrier map for CF safety filter (uses composite barrier)
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-barrier = map_.barrier
-
-print(f"  Barrier setup complete")
-
-# ============================================
-# Setup iLQR Controller (High-Level)
+# Setup iLQR Controller (High-Level, stays explicit)
 # ============================================
 
 print("Setting up iLQR controller...")
 
-# Cost matrices for trajectory tracking
 Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))   # State cost
 R = jnp.diag(jnp.array([10.0, 10.0]))              # Control cost
 Q_e = 100.0 * Q                                    # Terminal cost
 
-# Goal position
 goal_pos = jnp.array([3.0, 4.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
-# Create unconstrained iLQR controller
-ilqr_controller = (
-    QuadraticiLQRControl.create_empty(action_dim=nu, params=ilqr_params)
-    .assign_dynamics(dynamics)
-    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
+ilqr_controller = QuadraticiLQRControl(
+    action_dim=nu,
+    params=ilqr_params,
+    dynamics=dynamics,
+    Q=Q, R=R, Q_e=Q_e, x_ref=x_ref,
 )
 
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 
 # ============================================
-# Setup CF Safety Filter (Low-Level)
+# Build safety filter pipeline via cbfjax.from_config
 # ============================================
 
-print("Setting up CF safety filter...")
+print("Setting up barriers and CF safety filter...")
 
-# Create CF safety filter with iLQR as desired control
-safety_filter = (
-    MinIntervCFSafeControl(
-        action_dim=nu,
-        alpha=lambda h: 0.5 * h,
-        params=cf_params,
-    )
-    .assign_dynamics(dynamics)
-    .assign_state_barrier(barrier)
-    .assign_desired_control(ilqr_controller)
-)
+parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
+    'safety_filter': {
+        'type': 'min_interv_cf',
+        'action_dim': nu,
+        'alpha': lambda h: 0.5 * h,
+        'params': cf_params,
+        'desired_control': ilqr_controller,
+    },
+})
 
+safety_filter = parts.safety_filter
+barrier = parts.barrier
+
+print(f"  Barrier setup complete")
 print(f"  Alpha: 0.5 * h")
 print(f"  Slack gain: {cf_params['slack_gain']}")
 

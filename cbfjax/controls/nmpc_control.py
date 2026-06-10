@@ -731,12 +731,13 @@ class NMPCControl(BaseControl):
         self._backend = None
         self._dynamics_casadi = None
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'NMPCControl':
-        return cls(action_dim=action_dim, params=params)
+        # Eager validation when fully configured (backend build stays in make())
+        if (type(self) is NMPCControl and self.has_dynamics
+                and self._has_control_bounds and self._cost_running is not None):
+            self._validate_for_make()
 
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -748,32 +749,6 @@ class NMPCControl(BaseControl):
             'cost_running': self._cost_running,
             'cost_terminal': self._cost_terminal,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    # ==========================================
-    # Assignment Methods
-    # ==========================================
-
-    def assign_dynamics(self, dynamics) -> 'NMPCControl':
-        return self._create_updated_instance(dynamics=dynamics)
-
-    def assign_control_bounds(self, low: list, high: list) -> 'NMPCControl':
-        assert len(low) == len(high), 'low and high should have the same length'
-        assert len(low) == self._action_dim, 'bounds length should match action dimension'
-        return self._create_updated_instance(control_low=low, control_high=high)
-
-    def assign_state_bounds(self, idx: list, low: list, high: list) -> 'NMPCControl':
-        assert len(idx) == len(low) == len(high), 'idx, low, high should have same length'
-        return self._create_updated_instance(
-            state_bounds_idx=idx, state_low=low, state_high=high
-        )
-
-    def assign_cost_running(self, cost_func: Callable) -> 'NMPCControl':
-        return self._create_updated_instance(cost_running=cost_func)
-
-    def assign_cost_terminal(self, cost_func: Callable) -> 'NMPCControl':
-        return self._create_updated_instance(cost_terminal=cost_func)
 
     # ==========================================
     # Properties
@@ -878,7 +853,7 @@ class NMPCControl(BaseControl):
         assert self.has_dynamics, "Dynamics must be assigned before make()"
         assert self._has_control_bounds, "Control bounds must be assigned before make()"
         assert self._cost_running is not None, \
-            "Running cost must be assigned. Use assign_cost_running()."
+            "Running cost must be provided at construction (cost_running=...)."
 
         if self._params.get('dynamic_type', 'ct') != 'ct':
             assert self._dynamics._dt is not None, \
@@ -1158,13 +1133,14 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
 
     def __init__(self, **kwargs):
         super().__init__(cost_running=None, cost_terminal=None, **kwargs)
+        # Eager validation when fully configured (backend build stays in make())
+        if (type(self) is QuadraticNMPCControl and self.has_dynamics
+                and self._has_control_bounds
+                and self._Q is not None and self._R is not None):
+            self._validate_for_make()
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None) -> 'QuadraticNMPCControl':
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
@@ -1178,12 +1154,10 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
             'Q_e': self._Q_e,
             'x_ref': self._x_ref,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def _validate_for_make(self):
         assert self._Q is not None and self._R is not None, \
-            "Cost matrices must be assigned. Use assign_cost_matrices()."
+            "Cost matrices must be provided at construction (Q=..., R=...)."
         assert self.has_dynamics, "Dynamics must be assigned before make()"
         assert self._has_control_bounds, "Control bounds must be assigned before make()"
         if self._params.get('dynamic_type', 'ct') != 'ct':

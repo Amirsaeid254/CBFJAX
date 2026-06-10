@@ -72,35 +72,14 @@ class BaseSafeControl(BaseControl):
         self._barrier = barrier if barrier is not None else DummyBarrier()
         self._terminal_barrier = terminal_barrier
 
-    @classmethod
-    def create_empty(cls, action_dim: int, params: Optional[dict] = None):
-        return cls(action_dim=action_dim, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'params': dict(self._params) if self._params else None,
             'dynamics': self._dynamics,
             'barrier': self._barrier,
             'terminal_barrier': self._terminal_barrier,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_state_barrier(self, barrier):
-        return self._create_updated_instance(barrier=barrier)
-
-    def assign_terminal_barrier(self, terminal_barrier):
-        """
-        Assign terminal barrier constraint.
-
-        Args:
-            terminal_barrier: Barrier object for terminal constraint.
-
-        Returns:
-            New controller instance with terminal barrier assigned
-        """
-        return self._create_updated_instance(terminal_barrier=terminal_barrier)
 
     def _is_dummy_barrier(self, barrier) -> bool:
         """Check if barrier is a dummy object."""
@@ -156,6 +135,7 @@ class BaseCBFSafeControl(BaseSafeControl):
         alpha: Optional[Callable] = None,
         Q: Optional[Callable] = None,
         c: Optional[Callable] = None,
+        cost: Optional[tuple] = None,
         **kwargs
     ):
         """
@@ -167,20 +147,28 @@ class BaseCBFSafeControl(BaseSafeControl):
                or simple function x -> Q_matrix (auto-wrapped)
             c: Stateful function (x, state) -> (c_vector, new_state),
                or simple function x -> c_vector (auto-wrapped)
+            cost: Optional (Q, c) tuple of plain x -> value functions,
+                  wrapped to stateful form
             **kwargs: Passed to next class in MRO
         """
         super().__init__(**kwargs)
         self._alpha = alpha if alpha is not None else (lambda x: x)
+        if cost is not None and Q is None and c is None:
+            Q, c = self._wrap_plain_cost(*cost)
         self._Q = Q
         self._c = c
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                     params: Optional[dict] = None):
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
+    @staticmethod
+    def _wrap_plain_cost(Q: Callable, c: Callable) -> tuple:
+        """Wrap plain x -> value cost functions to stateful form."""
+        def stateful_Q(x, state):
+            return Q(x), state
+        def stateful_c(x, state):
+            return c(x), state
+        return stateful_Q, stateful_c
 
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params) if self._params else None,
@@ -190,27 +178,6 @@ class BaseCBFSafeControl(BaseSafeControl):
             'Q': self._Q,
             'c': self._c,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_cost(self, Q: Callable, c: Callable):
-        """
-        Assign quadratic cost function.
-
-        Wraps plain x -> value functions to stateful (x, state) -> (value, state).
-
-        Args:
-            Q: Function x -> Q_matrix
-            c: Function x -> c_vector
-
-        Returns:
-            New controller instance with assigned cost
-        """
-        def stateful_Q(x, state):
-            return Q(x), state
-        def stateful_c(x, state):
-            return c(x), state
-        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
 
 class BaseMinIntervSafeControl(BaseCBFSafeControl):
@@ -238,22 +205,40 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
         Initialize BaseMinIntervSafeControl.
 
         Args:
-            desired_control: Stateful desired control (x, state) -> (u, new_state),
-                           or simple function x -> u (auto-wrapped by assign_desired_control)
+            desired_control: Controller object with _optimal_control_single and
+                           get_init_state, or plain function x -> u (normalized to
+                           stateful form), or already-stateful function when
+                           desired_control_init_state is also given
             desired_control_init_state: Callable returning init state for desired control
             **kwargs: Passed to next class in MRO
         """
         super().__init__(**kwargs)
+        if desired_control is not None and desired_control_init_state is None:
+            desired_control, desired_control_init_state = \
+                self._normalize_desired_control(desired_control)
         self._desired_control = desired_control
         self._desired_control_init_state = desired_control_init_state
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                     params: Optional[dict] = None):
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
+    @staticmethod
+    def _normalize_desired_control(desired_control) -> tuple:
+        """
+        Normalize desired control to (stateful_fn, init_state_fn).
 
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+        Accepts a controller object (with _optimal_control_single and
+        get_init_state) or a plain function f(x) -> u.
+        """
+        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
+            ctrl_obj = desired_control
+            def stateful_desired(x, state):
+                return ctrl_obj._optimal_control_single(x, state)
+            return stateful_desired, ctrl_obj.get_init_state
+        func = desired_control
+        def stateful_desired(x, state):
+            return func(x), state
+        return stateful_desired, (lambda: None)
+
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params) if self._params else None,
@@ -265,45 +250,9 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
             'desired_control': self._desired_control,
             'desired_control_init_state': self._desired_control_init_state,
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
     def get_init_state(self):
         """Get initial controller state (from desired controller if present)."""
         if self._desired_control_init_state is not None:
             return self._desired_control_init_state()
         return None
-
-    def assign_desired_control(self, desired_control):
-        """
-        Assign desired control function.
-
-        Accepts either:
-        - A controller object with _optimal_control_single and get_init_state methods
-        - A plain function f(x) -> u (wrapped to stateful form)
-        - A stateful function f(x, state) -> (u, new_state)
-
-        Args:
-            desired_control: Controller object or callable
-
-        Returns:
-            New controller instance with assigned desired control
-        """
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            # Controller object -> wrap to stateful function
-            ctrl_obj = desired_control
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-            init_state_fn = ctrl_obj.get_init_state
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-            )
-        else:
-            func = desired_control
-            def stateful_desired(x, state):
-                return func(x), state
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=lambda: None,
-            )

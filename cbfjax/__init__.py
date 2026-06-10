@@ -52,6 +52,9 @@ from .safe_controls import (
     MinIntervBackupSafeControl,
 )
 
+# Config-driven construction
+from .factory import from_config, build_barrier
+
 # Configuration helpers
 from .config import (
     configure_jax,
@@ -100,6 +103,9 @@ __all__ = [
     "MinIntervInputConstQPSafeControl",
     "BackupSafeControl",
     "MinIntervBackupSafeControl",
+    # Config-driven construction
+    "from_config",
+    "build_barrier",
     # Configuration
     "configure_jax",
     "get_jax_config",

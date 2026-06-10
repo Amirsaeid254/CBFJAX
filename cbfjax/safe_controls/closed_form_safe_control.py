@@ -74,13 +74,8 @@ class CFSafeControl(BaseCBFSafeControl):
         self._softplus_gain = softplus_gain
         self._buffer = buffer
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                     params: Optional[dict] = None) -> 'CFSafeControl':
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'dynamics': self._dynamics,
@@ -90,23 +85,10 @@ class CFSafeControl(BaseCBFSafeControl):
             'slack_gain': self._slack_gain,
             'use_softplus': self._use_softplus,
             'softplus_gain': self._softplus_gain,
-            'buffer': self._buffer
+            'buffer': self._buffer,
+            'params': {k: v for k, v in self._params.items()
+                       if k not in ('slack_gain', 'use_softplus', 'softplus_gain', 'buffer')}
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_state_barrier(self, barrier) -> 'CFSafeControl':
-        return self._create_updated_instance(barrier=barrier)
-
-    def assign_dynamics(self, dynamics) -> 'CFSafeControl':
-        return self._create_updated_instance(dynamics=dynamics)
-
-    def assign_cost(self, Q: Callable, c: Callable) -> 'CFSafeControl':
-        def stateful_Q(x, state):
-            return Q(x), state
-        def stateful_c(x, state):
-            return c(x), state
-        return self._create_updated_instance(Q=stateful_Q, c=stateful_c)
 
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
         """
@@ -236,13 +218,8 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
         self._softplus_gain = softplus_gain
         self._buffer = buffer
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                     params: Optional[dict] = None) -> 'MinIntervCFSafeControl':
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
-
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'dynamics': self._dynamics,
@@ -252,40 +229,10 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             'slack_gain': self._slack_gain,
             'use_softplus': self._use_softplus,
             'softplus_gain': self._softplus_gain,
-            'buffer': self._buffer
+            'buffer': self._buffer,
+            'params': {k: v for k, v in self._params.items()
+                       if k not in ('slack_gain', 'use_softplus', 'softplus_gain', 'buffer')}
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_state_barrier(self, barrier) -> 'MinIntervCFSafeControl':
-        return self._create_updated_instance(barrier=barrier)
-
-    def assign_dynamics(self, dynamics) -> 'MinIntervCFSafeControl':
-        return self._create_updated_instance(dynamics=dynamics)
-
-    def assign_desired_control(self, desired_control) -> 'MinIntervCFSafeControl':
-        """
-        Assign desired control function.
-
-        Accepts controller objects, plain functions, or stateful functions.
-        """
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            ctrl_obj = desired_control
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-            init_state_fn = ctrl_obj.get_init_state
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-            )
-        else:
-            func = desired_control
-            def stateful_desired(x, state):
-                return func(x), state
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=lambda: None,
-            )
 
     @jax.jit
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
@@ -361,6 +308,10 @@ class InputConstCFSafeControl(CFSafeControl):
 
     This class handles systems with input constraints by using augmented dynamics
     that combine state dynamics with action dynamics.
+
+    The augmented dynamics and composed barrier are built in the constructor as
+    soon as the required components are available; the auxiliary desired action
+    is derived on demand.
     """
 
     # Static fields for JIT compatibility
@@ -375,7 +326,7 @@ class InputConstCFSafeControl(CFSafeControl):
     _state_barrier: tuple
     _ac_barrier: tuple
     _ac_rel_deg: int = eqx.field(static=True)
-    aux_desired_action: Optional[Callable] = eqx.field(static=True)
+    _aux_desired_action: Optional[Callable] = eqx.field(static=True)
     _desired_control: Optional[Callable] = eqx.field(static=True)
 
     @staticmethod
@@ -435,11 +386,18 @@ class InputConstCFSafeControl(CFSafeControl):
         self._state_barrier = tuple(state_barrier) if state_barrier is not None else ()
         self._ac_barrier = tuple(ac_barrier) if ac_barrier is not None else ()
         self._ac_rel_deg = ac_rel_deg if ac_rel_deg is not None else 1
-        self.aux_desired_action = aux_desired_action
+        self._aux_desired_action = aux_desired_action
         self._desired_control = desired_control
 
-    def _create_updated_instance(self, **kwargs):
-        defaults = {
+        # Complete construction: build augmented dynamics and composed barrier
+        # as soon as the components are available.
+        if self._state_dyn is not None and self._ac_dyn is not None:
+            self._dynamics = self._build_augmented_dynamics()
+            if self._state_barrier or self._ac_barrier:
+                self._barrier = self._build_composed_barrier()
+
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -453,7 +411,7 @@ class InputConstCFSafeControl(CFSafeControl):
             'state_barrier': self._state_barrier,
             'ac_barrier': self._ac_barrier,
             'ac_rel_deg': self._ac_rel_deg,
-            'aux_desired_action': self.aux_desired_action,
+            'aux_desired_action': self._aux_desired_action,
             'softmin_rho': self._softmin_rho,
             'softmax_rho': self._softmax_rho,
             'sigma': self._sigma,
@@ -463,44 +421,13 @@ class InputConstCFSafeControl(CFSafeControl):
             'softplus_gain': self._softplus_gain,
             'desired_control': self._desired_control
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                    params: Optional[dict] = None):
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
-
-    def assign_dynamics(self, dynamics):
-        """Override to prevent direct dynamics assignment."""
-        raise ValueError("Use 'assign_state_action_dynamics' method to assign state and action dynamics")
-
-    def assign_state_action_dynamics(self, state_dynamics, action_dynamics,
-                                     action_output_function: Optional[Callable] = None) -> 'InputConstCFSafeControl':
-        if action_output_function is None:
-            action_output_function = self._create_identity_func()
-
-        return self._create_updated_instance(
-            state_dyn=state_dynamics,
-            ac_dyn=action_dynamics,
-            ac_out_func=action_output_function
-        )
-
-    def assign_state_barrier(self, barrier) -> 'InputConstCFSafeControl':
-        return self._create_updated_instance(state_barrier=barrier)
-
-    def assign_action_barrier(self, action_barrier, rel_deg: int) -> 'InputConstCFSafeControl':
-        return self._create_updated_instance(
-            ac_barrier=action_barrier,
-            ac_rel_deg=rel_deg
-        )
-
-    def make(self) -> 'InputConstCFSafeControl':
-        """Build the complete input-constrained controller."""
-        updated_ctrl = self._make_augmented_dynamics()
-        updated_ctrl = updated_ctrl._make_composed_barrier()
-        updated_ctrl = updated_ctrl._make_aux_desired_action()
-        return updated_ctrl
+    @property
+    def aux_desired_action(self) -> Callable:
+        """Auxiliary desired action: explicit if assigned, derived otherwise."""
+        if self._aux_desired_action is not None:
+            return self._aux_desired_action
+        return self._derive_aux_desired_action()
 
     @jax.jit
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
@@ -561,60 +488,59 @@ class InputConstCFSafeControl(CFSafeControl):
         info = CFInfo(slack_vars=slack_vars, constraint_at_u=constraint_at_u, u_desired=u_d)
         return u, state, info
 
-    def _make_composed_barrier(self) -> 'InputConstCFSafeControl':
-        """Create composed barrier from state and action barriers."""
-        state_barriers = [barrier.assign_dynamics(self._dynamics) for barrier in self._state_barrier]
-        action_barriers = [barrier.assign_dynamics(self._dynamics) for barrier in self._ac_barrier]
+    def _build_composed_barrier(self):
+        """Compose state and action barriers over the augmented dynamics."""
+        rebind = lambda b: b._replace(dynamics=self._dynamics, barriers=None, hocbf_func=None)
+        state_barriers = [rebind(barrier) for barrier in self._state_barrier]
+        action_barriers = [rebind(barrier) for barrier in self._ac_barrier]
 
-        barrier = SoftCompositionBarrier(
-            cfg={'softmin_rho': self._softmin_rho,
-                 'softmax_rho': self._softmax_rho}
-        ).assign_dynamics(self._dynamics).assign_barriers_and_rule(
+        return SoftCompositionBarrier(
             barriers=[*state_barriers, *action_barriers],
-            rule='i'
+            rule='i',
+            dynamics=self._dynamics,
+            cfg={'softmin_rho': self._softmin_rho,
+                 'softmax_rho': self._softmax_rho},
         )
 
-        return self._create_updated_instance(barrier=barrier)
-
-    def _make_aux_desired_action(self) -> 'InputConstCFSafeControl':
-        """Create auxiliary desired action function."""
+    def _derive_aux_desired_action(self) -> Callable:
+        """Derive the auxiliary desired action function on demand."""
         assert len(self._sigma) == self._ac_rel_deg + 1, \
             "sigma must be of length 1 + action relative degree"
 
-        updated_ctrl = self._make_desired_control()
-
         def aux_desired_action_func(x):
-            ac_out_func = lambda state: updated_ctrl._ac_out_func(state[updated_ctrl._state_dyn.state_dim:])
+            ac_out_func = lambda state: self._ac_out_func(state[self._state_dyn.state_dim:])
 
             desired_control_lie_derivs = make_higher_order_lie_deriv_series(
-                func=updated_ctrl._desired_control,
-                field=updated_ctrl._dynamics.f,
-                deg=updated_ctrl._ac_rel_deg
+                func=self._desired_control_for_aux(),
+                field=self._dynamics.f,
+                deg=self._ac_rel_deg
             )
 
             ac_out_func_lie_derivs = make_higher_order_lie_deriv_series(
                 func=ac_out_func,
-                field=updated_ctrl._dynamics.f,
-                deg=updated_ctrl._ac_rel_deg
+                field=self._dynamics.f,
+                deg=self._ac_rel_deg
             )
 
             ac_out_Lg = jnp.linalg.inv(
-                lie_deriv(ac_out_func_lie_derivs[-2], updated_ctrl._dynamics.g, x)
+                lie_deriv(ac_out_func_lie_derivs[-2], self._dynamics.g, x)
             )
 
             weighted_differences = jnp.stack([
                 sigma * (dc(x) - of(x))
                 for dc, of, sigma in zip(desired_control_lie_derivs,
                                          ac_out_func_lie_derivs,
-                                         updated_ctrl._sigma)
+                                         self._sigma)
             ])
 
             return ac_out_Lg @ jnp.sum(weighted_differences, axis=0)
 
-        return updated_ctrl._create_updated_instance(aux_desired_action=aux_desired_action_func)
+        return aux_desired_action_func
 
-    def _make_desired_control(self) -> 'InputConstCFSafeControl':
-        """Create desired control function for state part."""
+    def _desired_control_for_aux(self) -> Callable:
+        """Plain x -> u desired control used in the aux derivation."""
+        if self._desired_control is not None:
+            return self._desired_control
 
         def desired_control_func(x):
             state_part = x[:self._state_dyn.state_dim]
@@ -622,9 +548,9 @@ class InputConstCFSafeControl(CFSafeControl):
             c, _ = self._c(state_part, None)
             return -jnp.linalg.inv(Q) @ c
 
-        return self
+        return desired_control_func
 
-    def _make_augmented_dynamics(self) -> 'InputConstCFSafeControl':
+    def _build_augmented_dynamics(self):
         """Create augmented dynamics combining state and action dynamics."""
         assert self._state_dyn.action_dim == self._ac_dyn.action_dim, \
             'Dimension mismatch between state and action dynamics'
@@ -650,7 +576,7 @@ class InputConstCFSafeControl(CFSafeControl):
             action_g = ac_dyn.g(action_part)
             return jnp.concatenate([state_g, action_g], axis=0)
 
-        dynamics = CustomDynamics(
+        return CustomDynamics(
             state_dim=aug_state_dim,
             action_dim=aug_action_dim,
             f_func=aug_f,
@@ -658,68 +584,41 @@ class InputConstCFSafeControl(CFSafeControl):
             params=None
         )
 
-        return self._create_updated_instance(dynamics=dynamics)
-
 
 class MinIntervInputConstCFSafeControl(InputConstCFSafeControl, BaseMinIntervSafeControl):
     """Minimum intervention input-constrained safe control."""
 
-    def assign_desired_control(self, desired_control) -> 'MinIntervInputConstCFSafeControl':
-        """Assign desired control and build controller."""
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            ctrl_obj = desired_control
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-            init_state_fn = ctrl_obj.get_init_state
-            updated_ctrl = self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-            )
-        else:
-            func = desired_control
-            def stateful_desired(x, state):
-                return func(x), state
-            updated_ctrl = self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=lambda: None,
-            )
-        return updated_ctrl.make()
+    def __init__(self, **kwargs):
+        desired_control = kwargs.pop('desired_control', None)
+        init_state_fn = kwargs.get('desired_control_init_state', None)
+        if desired_control is not None and init_state_fn is None:
+            desired_control, init_state_fn = \
+                BaseMinIntervSafeControl._normalize_desired_control(desired_control)
+            kwargs['desired_control_init_state'] = init_state_fn
+        super().__init__(desired_control=desired_control, **kwargs)
 
-    def _make_desired_control(self) -> 'MinIntervInputConstCFSafeControl':
-        """Override to skip making desired control since it's directly assigned."""
-        return self
+    def _ctor_defaults(self) -> dict:
+        return {
+            **super()._ctor_defaults(),
+            'desired_control_init_state': self._desired_control_init_state,
+        }
+
+    def _desired_control_for_aux(self) -> Callable:
+        """Wrap the stateful desired control into a plain x -> u function."""
+        desired = self._desired_control
+        init_state = self.get_init_state()
+
+        def desired_control_func(x):
+            u, _ = desired(x, init_state)
+            return u
+
+        return desired_control_func
 
 
 class MinIntervInputConstCFSafeControlRaw(InputConstCFSafeControl):
     """
     Raw minimum intervention input-constrained safe control.
 
-    Uses desired control directly as auxiliary desired action.
+    The desired control doubles as the auxiliary desired action
+    (pass both aux_desired_action and desired_control at construction).
     """
-
-    def assign_desired_control(self, desired_control) -> 'MinIntervInputConstCFSafeControlRaw':
-        """Assign desired control as auxiliary desired action."""
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            ctrl_obj = desired_control
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-            init_state_fn = ctrl_obj.get_init_state
-            updated_ctrl = self._create_updated_instance(
-                aux_desired_action=desired_control,
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-            )
-        else:
-            updated_ctrl = self._create_updated_instance(
-                aux_desired_action=desired_control,
-                desired_control=desired_control
-            )
-        return updated_ctrl.make()
-
-    def _make_desired_control(self) -> 'MinIntervInputConstCFSafeControlRaw':
-        """Override to skip making desired control."""
-        return self
-
-    def _make_aux_desired_action(self) -> 'MinIntervInputConstCFSafeControlRaw':
-        """Override to skip making auxiliary desired action."""
-        return self

@@ -11,10 +11,10 @@ import equinox as eqx
 from typing import Callable, Optional, Any
 from functools import partial
 from mpax import create_lp, raPDHG
-from qpax import solve_qp_primal
-from cbfjax.utils import profile_jax
+from immutabledict import immutabledict
 
 
+from cbfjax.barriers.backup_barrier import BackupBarrier
 from cbfjax.safe_controls.qp_safe_control import InputConstQPSafeControl, MinIntervQPSafeControl
 from cbfjax.safe_controls.base_safe_control import BaseMinIntervSafeControl
 from cbfjax.controls.control_types import BackupInfo
@@ -35,24 +35,30 @@ class BackupSafeControl(InputConstQPSafeControl):
         """
         Initialize BackupSafeControl with cooperative inheritance.
 
+        If barrier_cfg is not given, it is taken from the assigned barrier's
+        cfg attribute (when present).
+
         Args:
             barrier_cfg: Barrier configuration dictionary
             **kwargs: Passed via cooperative inheritance (control_low, control_high, slacked, slack_gain, alpha, Q, c, barrier, dynamics, action_dim, params)
         """
         super().__init__(**kwargs)
+        if self._barrier is not None and not isinstance(self._barrier, BackupBarrier):
+            raise TypeError(
+                f"{type(self).__name__} requires a BackupBarrier, got "
+                f"{type(self._barrier).__name__}. Build one with "
+                "BackupBarrier(state_barrier=..., backup_barriers=..., "
+                "backup_policies=..., dynamics=..., cfg=...) or a "
+                "{'type': 'backup', ...} barrier spec."
+            )
+        if barrier_cfg is None:
+            barrier_cfg = getattr(self._barrier, 'cfg', None)
+        if isinstance(barrier_cfg, dict):
+            barrier_cfg = immutabledict(barrier_cfg)
         self.barrier_cfg = barrier_cfg
 
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New BackupSafeControl instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -66,16 +72,6 @@ class BackupSafeControl(InputConstQPSafeControl):
             'slack_gain': self._slack_gain,
             'barrier_cfg': self.barrier_cfg
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_state_barrier(self, barrier):
-        """Assign state barrier and store its configuration."""
-        return self._create_updated_instance(barrier=barrier, barrier_cfg=barrier.cfg)
-
-    def assign_dynamics(self, dynamics):
-        """Assign dynamics."""
-        return self._create_updated_instance(dynamics=dynamics)
 
     def optimal_control(self, x: jnp.ndarray, state=None):
         """
@@ -116,7 +112,6 @@ class BackupSafeControl(InputConstQPSafeControl):
 
         return u, new_state, info
 
-    @profile_jax("_safe_optimal_control_single")
     def _optimal_control_single(self, x: jnp.ndarray, state=None):
         """
         Compute backup safe optimal control for SINGLE state.
@@ -190,7 +185,7 @@ class BackupSafeControl(InputConstQPSafeControl):
         A, b = self._make_eq_const_single(x, Q_matrix)
 
         # Solve QP
-        u_qp = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        u_qp, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         u_star = jnp.where(gamma >= 0, u_qp, ub_select)
 
@@ -257,7 +252,7 @@ class BackupSafeControl(InputConstQPSafeControl):
         h = jnp.concatenate([h_cbf, h_low, h_high])
 
         A, b = self._make_eq_const_single(x, Q_matrix)
-        u_qp = solve_qp_primal(Q_matrix, c_vector, A, b, G, h)
+        u_qp, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
 
         u_star = jnp.where(gamma >= 0, u_qp, ub_select)
 
@@ -355,32 +350,8 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
     using cooperative multiple inheritance.
     """
 
-    def __init__(self, **kwargs):
-        """
-        Initialize MinIntervBackupSafeControl with cooperative inheritance.
-
-        Args:
-            **kwargs: All args passed via cooperative inheritance
-                - barrier_cfg: Handled by BackupSafeControl
-                - desired_control: Handled by BaseMinIntervSafeControl
-                - control_low, control_high: Handled by InputConstQPSafeControl
-                - slacked, slack_gain: Handled by QPSafeControl
-                - alpha, Q, c, barrier: Handled by BaseCBFSafeControl
-                - dynamics, action_dim, params: Handled by BaseControl
-        """
-        super().__init__(**kwargs)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New MinIntervBackupSafeControl instance with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        return {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
             'params': dict(self._params),
@@ -396,34 +367,6 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
             'slack_gain': self._slack_gain,
             'barrier_cfg': self.barrier_cfg
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign_desired_control(self, desired_control) -> 'MinIntervBackupSafeControl':
-        """
-        Assign desired control function.
-
-        Accepts either:
-        - A controller object with _optimal_control_single and get_init_state methods
-        - A plain function f(x) -> u (wrapped to stateful form)
-        """
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
-            ctrl_obj = desired_control
-            def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
-            init_state_fn = ctrl_obj.get_init_state
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=init_state_fn,
-            )
-        else:
-            func = desired_control
-            def stateful_desired(x, state):
-                return func(x), state
-            return self._create_updated_instance(
-                desired_control=stateful_desired,
-                desired_control_init_state=lambda: None,
-            )
 
     @property
     def desired_control(self):

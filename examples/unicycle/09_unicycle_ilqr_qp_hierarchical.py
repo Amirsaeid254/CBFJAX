@@ -24,10 +24,6 @@ import os
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.utils.make_map import Map
-from cbfjax.controls.ilqr_control import QuadraticiLQRControl
-from cbfjax.safe_controls.qp_safe_control import MinIntervInputConstQPSafeControl
-from cbfjax.barriers.multi_barrier import MultiBarriers
 from immutabledict import immutabledict
 
 # Local imports
@@ -74,82 +70,76 @@ control_low = [-2.0, -1.0]   # [min accel, min omega]
 control_high = [2.0, 1.0]    # [max accel, max omega]
 
 # ============================================
-# Setup Dynamics
+# Setup Dynamics (explicit: iLQR needs it before the filter exists)
 # ============================================
 
 print("Setting up dynamics...")
 
-# Dynamics for iLQR (needs discretization)
 dynamics_params = {
     'discretization_dt': ilqr_params['time_steps'],
     'discretization_method': 'rk4',
 }
 dynamics = UnicycleDynamics(params=dynamics_params)
 
-# State/action dimensions
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup Barriers
-# ============================================
-
-print("Setting up barriers...")
-
-# Create barrier map for QP safety filter
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg).create_barriers()
-pos_barriers, vel_barriers = map_.get_barriers()
-
-# Create MultiBarriers for QP (needs HOCBF + Lie derivatives)
-barrier = MultiBarriers.create_empty(cfg=cfg)
-barrier = barrier.add_barriers([*pos_barriers, *vel_barriers], infer_dynamics=True)
-
-print(f"  Number of barriers: {len(pos_barriers) + len(vel_barriers)}")
-
-# ============================================
-# Setup iLQR Controller (High-Level)
+# Setup iLQR Controller (High-Level, stays explicit)
 # ============================================
 
 print("Setting up iLQR controller...")
 
-# Cost matrices for trajectory tracking
 Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))   # State cost
 R = jnp.diag(jnp.array([10.0, 10.0]))               # Control cost
 Q_e = 100.0 * Q                                    # Terminal cost
 
-# Goal position
 goal_pos = jnp.array([3.0, 4.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
-# Create unconstrained iLQR controller
-ilqr_controller = (
-    QuadraticiLQRControl.create_empty(action_dim=nu, params=ilqr_params)
-    .assign_dynamics(dynamics)
-    .assign_cost_matrices(lambda: Q, lambda: R, lambda: Q_e, lambda: x_ref)
-)
+# ============================================
+# Config 1: iLQR planner
+# ============================================
+
+print("Setting up iLQR planner...")
+
+ilqr_controller = cbfjax.from_config({
+    'dynamics': dynamics,
+    'control': {
+        'type': 'quadratic_ilqr',
+        'action_dim': nu,
+        'params': ilqr_params,
+        'Q': Q, 'R': R, 'Q_e': Q_e, 'x_ref': x_ref,
+    },
+}).control
 
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 
 # ============================================
-# Setup QP Safety Filter (Low-Level)
+# Config 2: barriers + QP safety filter (planner as desired control)
 # ============================================
 
-print("Setting up QP safety filter...")
+print("Setting up barriers and QP safety filter...")
 
-# Create QP safety filter with iLQR as desired control
-safety_filter = (
-    MinIntervInputConstQPSafeControl(
-        action_dim=nu,
-        alpha=lambda h: 1.0 * h,
-        params=qp_params,
-        control_low=control_low,
-        control_high=control_high,
-    )
-    .assign_dynamics(dynamics)
-    .assign_state_barrier(barrier)
-    .assign_desired_control(ilqr_controller)
-)
+parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barrier': {'type': 'map', **map_config, 'composition': 'multi', 'cfg': cfg},
+    'safety_filter': {
+        'type': 'min_interv_input_const_qp',
+        'action_dim': nu,
+        'alpha': lambda h: 1.0 * h,
+        'params': qp_params,
+        'control_low': control_low,
+        'control_high': control_high,
+        'desired_control': ilqr_controller,
+    },
+})
 
+safety_filter = parts.safety_filter
+barrier = parts.barrier
+map_ = parts.map
+
+print(f"  Number of barriers: {len(map_.pos_barriers) + len(map_.vel_barriers)}")
 print(f"  Control bounds: low={control_low}, high={control_high}")
 print(f"  Slacked: {qp_params['slacked']}, slack_gain: {qp_params['slack_gain']}")
 
@@ -297,8 +287,7 @@ points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
 # Use map barrier for contour plot
-map_composite = map_.create_barriers()
-Z = jax.vmap(map_composite.barrier.min_barrier)(points_jax)
+Z = jax.vmap(map_.barrier.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---

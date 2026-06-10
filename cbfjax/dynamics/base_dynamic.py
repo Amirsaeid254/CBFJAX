@@ -96,7 +96,8 @@ class AffineInControlDynamics(eqx.Module):
         action: (action_dim,) - single action vector
         output: (state_dim,) - derivative
         """
-        assert action.shape == (self.action_dim,), f"Expected action shape {(self.action_dim,)}, got {action.shape}"
+        if action.shape != (self.action_dim,):
+            raise ValueError(f"Expected action shape {(self.action_dim,)}, got {action.shape}")
         return self.f(x) + self.g(x) @ action
 
     def disturbed_rhs(self, x, action):

@@ -99,32 +99,9 @@ class CompositionBarrier(Barrier):
             return jnp.array([])
         return dummy_barrier
 
-    @classmethod
-    def create_empty(cls, cfg=None):
-        """
-        Create an empty composition barrier instance.
-
-        Args:
-            cfg: Optional configuration dictionary
-
-        Returns:
-            Empty CompositionBarrier instance ready for barrier assignment
-        """
-        return cls(cfg=cfg)
-
-    def _create_updated_instance(self, **kwargs):
-        """
-        Create new instance with updated fields.
-
-        This helper method extends Barrier by adding composition-specific fields.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New instance of the same class with updated fields
-        """
-        defaults = {
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
             'barrier_func': self._barrier_func,
             'dynamics': self._dynamics,
             'rel_deg': self._rel_deg,
@@ -137,98 +114,6 @@ class CompositionBarrier(Barrier):
             'barriers_raw': self._barriers_raw,
             'composed_barrier_func': self._composed_barrier_func
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
-
-    def assign(self, barrier_func: Callable, rel_deg: int = 1,
-               alphas: Optional[List[Callable]] = None) -> 'CompositionBarrier':
-        """
-        Override parent assign method to prevent direct barrier assignment.
-
-        CompositionBarrier requires barriers to be assigned through the
-        assign_barriers_and_rule method for proper composition setup.
-
-        Raises:
-            ValueError: Always raised to direct users to proper assignment method
-        """
-        raise ValueError(
-            'CompositionBarrier assignment must be done through assign_barriers_and_rule method'
-        )
-
-    def assign_dynamics(self, dynamics) -> 'CompositionBarrier':
-        """
-        Assign dynamics and update composition if barriers already configured.
-
-        Args:
-            dynamics: System dynamics object
-
-        Returns:
-            New CompositionBarrier instance with updated dynamics
-        """
-        # If composition already exists, recreate with new dynamics
-        if self._composition_rule and self._barriers_raw:
-            return self.assign_barriers_and_rule(
-                barriers=list(self._barriers_raw),
-                rule=self._composition_rule,
-                infer_dynamics=False,
-                dynamics_override=dynamics
-            )
-
-        # Otherwise update dynamics only
-        return self._create_updated_instance(dynamics=dynamics)
-
-    def assign_barriers_and_rule(self, barriers: List[Barrier], rule: str,
-                                infer_dynamics: bool = False,
-                                dynamics_override=None) -> 'CompositionBarrier':
-        """
-        Assign multiple barriers and composition rule to create composed barrier.
-
-        Args:
-            barriers: List of Barrier objects to compose
-            rule: Composition rule ('intersection', 'union', 'i', 'u')
-            infer_dynamics: Whether to infer dynamics from first barrier
-            dynamics_override: Optional dynamics object to override inference
-
-        Returns:
-            New CompositionBarrier instance with barriers composed
-
-        Raises:
-            ValueError: If rule is invalid or dynamics cannot be determined
-        """
-        dynamics = self._resolve_dynamics(barriers, infer_dynamics, dynamics_override)
-        return self.__class__(
-            barriers=list(barriers),
-            rule=rule,
-            dynamics=dynamics,
-            cfg=self.cfg,
-        )
-
-    def _resolve_dynamics(self, barriers: List[Barrier], infer_dynamics: bool,
-                         dynamics_override) -> Any:
-        """
-        Resolve which dynamics object to use for the composition.
-
-        Args:
-            barriers: List of barrier objects
-            infer_dynamics: Whether to infer from first barrier
-            dynamics_override: Optional explicit dynamics override
-
-        Returns:
-            Resolved dynamics object
-
-        Raises:
-            ValueError: If dynamics cannot be determined
-        """
-        if dynamics_override is not None:
-            return dynamics_override
-        elif infer_dynamics:
-            return barriers[0].dynamics
-        elif hasattr(self._dynamics, 'f'):
-            return self._dynamics
-        else:
-            raise ValueError(
-                'Dynamics must be assigned. Use infer_dynamics=True or provide dynamics_override'
-            )
 
     def _create_barrier_composition_func(self, barriers: List[Barrier]) -> Callable:
         """
@@ -306,7 +191,7 @@ class CompositionBarrier(Barrier):
             ValueError: If barriers not assigned
         """
         if not self._barriers_raw:
-            raise ValueError("Barriers not assigned. Use assign_barriers_and_rule first.")
+            raise ValueError("Barriers not assigned. Construct with barriers and rule.")
         return self._composed_barrier_func(x)
 
     def compose(self, rule_key: str) -> Callable:
