@@ -40,7 +40,7 @@ class BackupSafeControl(InputConstQPSafeControl):
 
         Args:
             barrier_cfg: Barrier configuration dictionary
-            **kwargs: Passed via cooperative inheritance (control_low, control_high, slacked, slack_gain, alpha, Q, c, barrier, dynamics, action_dim, params)
+            **kwargs: Passed via cooperative inheritance (control_low, control_high, alpha, Q, c, barrier, dynamics, action_dim, params; slacked/slack_gain read from params)
         """
         super().__init__(**kwargs)
         if self._barrier is not None and not isinstance(self._barrier, BackupBarrier):
@@ -68,8 +68,6 @@ class BackupSafeControl(InputConstQPSafeControl):
             'c': self._c,
             'control_low': self._control_low if self._has_control_bounds else None,
             'control_high': self._control_high if self._has_control_bounds else None,
-            'slacked': self._slacked,
-            'slack_gain': self._slack_gain,
             'barrier_cfg': self.barrier_cfg
         }
 
@@ -363,8 +361,6 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
             'c': self._c,
             'control_low': self._control_low if self._has_control_bounds else None,
             'control_high': self._control_high if self._has_control_bounds else None,
-            'slacked': self._slacked,
-            'slack_gain': self._slack_gain,
             'barrier_cfg': self.barrier_cfg
         }
 

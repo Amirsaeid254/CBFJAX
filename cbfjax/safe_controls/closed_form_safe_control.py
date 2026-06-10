@@ -42,33 +42,20 @@ class CFSafeControl(BaseCBFSafeControl):
     _softplus_gain: float
     _buffer: float
 
-    def __init__(
-        self,
-        slack_gain: float = 1e24,
-        use_softplus: bool = False,
-        softplus_gain: float = 2.0,
-        buffer: float = 0.0,
-        **kwargs
-    ):
-        # Handle legacy params dict extraction
-        params = kwargs.get('params', None)
-        if params is not None:
-            slack_gain = params.get('slack_gain', slack_gain)
-            use_softplus = params.get('use_softplus', use_softplus)
-            softplus_gain = params.get('softplus_gain', softplus_gain)
-            buffer = params.get('buffer', buffer)
+    def __init__(self, **kwargs):
+        params = dict(kwargs.pop('params', None) or {})
+        slack_gain = params.get('slack_gain', 1e24)
+        use_softplus = params.get('use_softplus', False)
+        softplus_gain = params.get('softplus_gain', 2.0)
+        buffer = params.get('buffer', 0.0)
+        params.setdefault('slack_gain', slack_gain)
+        params.setdefault('use_softplus', use_softplus)
+        params.setdefault('softplus_gain', softplus_gain)
+        params.setdefault('buffer', buffer)
+        kwargs['params'] = params
 
-        # Ensure buffer is in params for parent
-        if params is None:
-            kwargs['params'] = {'buffer': buffer}
-        else:
-            params['buffer'] = buffer
-            kwargs['params'] = params
-
-        # Initialize via cooperative inheritance
         super().__init__(**kwargs)
 
-        # Set static parameters
         self._slack_gain = slack_gain
         self._use_softplus = use_softplus
         self._softplus_gain = softplus_gain
@@ -82,12 +69,7 @@ class CFSafeControl(BaseCBFSafeControl):
             'barrier': self._barrier,
             'Q': self._Q,
             'c': self._c,
-            'slack_gain': self._slack_gain,
-            'use_softplus': self._use_softplus,
-            'softplus_gain': self._softplus_gain,
-            'buffer': self._buffer,
-            'params': {k: v for k, v in self._params.items()
-                       if k not in ('slack_gain', 'use_softplus', 'softplus_gain', 'buffer')}
+            'params': dict(self._params),
         }
 
     def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
@@ -186,33 +168,20 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
     _softplus_gain: float
     _buffer: float
 
-    def __init__(
-        self,
-        slack_gain: float = 1e24,
-        use_softplus: bool = False,
-        softplus_gain: float = 2.0,
-        buffer: float = 0.0,
-        **kwargs
-    ):
-        # Handle legacy params dict extraction
-        params = kwargs.get('params', None)
-        if params is not None:
-            slack_gain = params.get('slack_gain', slack_gain)
-            use_softplus = params.get('use_softplus', use_softplus)
-            softplus_gain = params.get('softplus_gain', softplus_gain)
-            buffer = params.get('buffer', buffer)
+    def __init__(self, **kwargs):
+        params = dict(kwargs.pop('params', None) or {})
+        slack_gain = params.get('slack_gain', 1e24)
+        use_softplus = params.get('use_softplus', False)
+        softplus_gain = params.get('softplus_gain', 2.0)
+        buffer = params.get('buffer', 0.0)
+        params.setdefault('slack_gain', slack_gain)
+        params.setdefault('use_softplus', use_softplus)
+        params.setdefault('softplus_gain', softplus_gain)
+        params.setdefault('buffer', buffer)
+        kwargs['params'] = params
 
-        # Ensure buffer is in params for parent
-        if params is None:
-            kwargs['params'] = {'buffer': buffer}
-        else:
-            params['buffer'] = buffer
-            kwargs['params'] = params
-
-        # Initialize via cooperative inheritance
         super().__init__(**kwargs)
 
-        # Set static parameters
         self._slack_gain = slack_gain
         self._use_softplus = use_softplus
         self._softplus_gain = softplus_gain
@@ -226,12 +195,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             'barrier': self._barrier,
             'desired_control': self._desired_control,
             'desired_control_init_state': self._desired_control_init_state,
-            'slack_gain': self._slack_gain,
-            'use_softplus': self._use_softplus,
-            'softplus_gain': self._softplus_gain,
-            'buffer': self._buffer,
-            'params': {k: v for k, v in self._params.items()
-                       if k not in ('slack_gain', 'use_softplus', 'softplus_gain', 'buffer')}
+            'params': dict(self._params),
         }
 
     @jax.jit
@@ -415,10 +379,6 @@ class InputConstCFSafeControl(CFSafeControl):
             'softmin_rho': self._softmin_rho,
             'softmax_rho': self._softmax_rho,
             'sigma': self._sigma,
-            'buffer': self._buffer,
-            'slack_gain': self._slack_gain,
-            'use_softplus': self._use_softplus,
-            'softplus_gain': self._softplus_gain,
             'desired_control': self._desired_control
         }
 

@@ -178,9 +178,9 @@ parts = cbfjax.from_config({
         'type': 'min_interv_backup',
         'action_dim': nu,
         'alpha': lambda x: 1.0 * x,
-        'slacked': False,
         'control_low': list(control_bounds[0]),
         'control_high': list(control_bounds[1]),
+        'params': {'slacked': False},
         'desired_control': ilqr_controller,
     },
 })

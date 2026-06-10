@@ -35,39 +35,27 @@ class QPSafeControl(BaseCBFSafeControl):
     _slack_gain: float
     _qp_solver: Callable = eqx.field(static=True)
 
-    def __init__(
-        self,
-        slacked: bool = False,
-        slack_gain: float = 100.0,
-        **kwargs
-    ):
+    def __init__(self, **kwargs):
         """
         Initialize QPSafeControl with cooperative inheritance.
 
         Args:
-            slacked: Whether to use slack variables
-            slack_gain: Gain for slack variables
             **kwargs: Passed via cooperative inheritance (alpha, Q, c, barrier, dynamics, action_dim, params)
+                      Options slacked, slack_gain, qp_solver are read from params.
         """
-        # Handle legacy params dict
-        params = kwargs.get('params', None)
-        if params is not None:
-            slacked = params.get('slacked', slacked)
-            slack_gain = params.get('slack_gain', slack_gain)
+        params = dict(kwargs.pop('params', None) or {})
+        slacked = params.get('slacked', False)
+        slack_gain = params.get('slack_gain', 100.0)
+        params.setdefault('slacked', slacked)
+        params.setdefault('slack_gain', slack_gain)
+        params.setdefault('qp_solver', 'qpax')
+        kwargs['params'] = params
 
-        # Ensure params contains QP-specific values
-        qp_params = {'slacked': slacked, 'slack_gain': slack_gain, 'qp_solver': 'qpax'}
-        if params is not None:
-            qp_params.update(params)
-        kwargs['params'] = qp_params
-
-        # Initialize via cooperative inheritance
         super().__init__(**kwargs)
 
-        # Set static parameters
         self._slacked = slacked
         self._slack_gain = slack_gain
-        self._qp_solver = get_qp_solver(qp_params['qp_solver'])
+        self._qp_solver = get_qp_solver(params['qp_solver'])
 
     def _ctor_defaults(self) -> dict:
         return {
@@ -78,8 +66,6 @@ class QPSafeControl(BaseCBFSafeControl):
             'barrier': self._barrier,
             'Q': self._Q,
             'c': self._c,
-            'slacked': self._slacked,
-            'slack_gain': self._slack_gain
         }
 
     @jax.jit
@@ -331,9 +317,9 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
         Args:
             **kwargs: All args passed via cooperative inheritance
                 - desired_control: Handled by BaseMinIntervSafeControl
-                - slacked, slack_gain: Handled by QPSafeControl
                 - alpha, Q, c, barrier: Handled by BaseCBFSafeControl
                 - dynamics, action_dim, params: Handled by BaseControl
+                  (slacked, slack_gain read from params)
         """
         super().__init__(**kwargs)
         if self._desired_control is not None and self._Q is None and self._c is None:
@@ -364,8 +350,6 @@ class MinIntervQPSafeControl(QPSafeControl, BaseMinIntervSafeControl):
             'desired_control_init_state': self._desired_control_init_state,
             'Q': self._Q,
             'c': self._c,
-            'slacked': self._slacked,
-            'slack_gain': self._slack_gain
         }
 
 
@@ -394,7 +378,7 @@ class InputConstQPSafeControl(QPSafeControl):
         Args:
             control_low: Lower bounds for control inputs
             control_high: Upper bounds for control inputs
-            **kwargs: Passed via cooperative inheritance (slacked, slack_gain, alpha, Q, c, barrier, dynamics, action_dim, params)
+            **kwargs: Passed via cooperative inheritance (alpha, Q, c, barrier, dynamics, action_dim, params; slacked/slack_gain read from params)
         """
         # Get action_dim for default bounds
         action_dim = kwargs.get('action_dim', 1)
@@ -424,8 +408,6 @@ class InputConstQPSafeControl(QPSafeControl):
             'c': self._c,
             'control_low': self._control_low if self._has_control_bounds else None,
             'control_high': self._control_high if self._has_control_bounds else None,
-            'slacked': self._slacked,
-            'slack_gain': self._slack_gain
         }
 
     @jax.jit
@@ -629,6 +611,4 @@ class MinIntervInputConstQPSafeControl(InputConstQPSafeControl, MinIntervQPSafeC
             'c': self._c,
             'control_low': self._control_low if self._has_control_bounds else None,
             'control_high': self._control_high if self._has_control_bounds else None,
-            'slacked': self._slacked,
-            'slack_gain': self._slack_gain
         }
