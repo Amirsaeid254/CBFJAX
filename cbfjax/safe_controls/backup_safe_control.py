@@ -132,7 +132,7 @@ class BackupSafeControl(InputConstQPSafeControl):
             Tuple (u, new_state)
         """
         # Get HOCBF and Lie derivatives for single state
-        hocbf, Lf_hocbf, Lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, Lf_hocbf, Lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Compute feasibility factor using LP
         feas_fact = self._get_feasibility_factor(x, Lf_hocbf, Lg_hocbf, hocbf)
@@ -216,7 +216,7 @@ class BackupSafeControl(InputConstQPSafeControl):
             Tuple (u, new_state, info)
         """
         # Get HOCBF and Lie derivatives for single state
-        hocbf, Lf_hocbf, Lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, Lf_hocbf, Lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Compute feasibility factor using LP
         feas_fact = self._get_feasibility_factor(x, Lf_hocbf, Lg_hocbf, hocbf)

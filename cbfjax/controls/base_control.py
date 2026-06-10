@@ -25,7 +25,6 @@ from ..utils.integration import (
     get_trajs_from_state_action_func_zoh,
     get_trajs_from_state_action_func_zoh_no_vmap,
 )
-from ..utils.utils import ensure_batch_dim
 from ..dynamics.base_dynamic import DummyDynamics
 
 
@@ -48,7 +47,7 @@ class BaseControl(eqx.Module):
     """
 
     # Assigned components
-    _dynamics: Any = eqx.field(static=True)
+    _dynamics: Any
 
     # Core configuration
     _action_dim: int = eqx.field(static=True)
@@ -173,32 +172,29 @@ class BaseControl(eqx.Module):
 
     def optimal_control(self, x: jnp.ndarray, state) -> tuple:
         """
-        Compute optimal control with automatic batch support.
+        Compute optimal control for a batch of states (batched convenience layer).
 
         Args:
-            x: State(s) (state_dim,) or (batch, state_dim)
+            x: Batched states (batch, state_dim)
             state: Controller state
 
         Returns:
-            Tuple (u, new_state) with control(s)
+            Tuple (u, new_state) with controls (batch, action_dim)
         """
-
-        x_batched = ensure_batch_dim(x)
-        return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x_batched, state)
+        return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
 
     def optimal_control_with_info(self, x: jnp.ndarray, state) -> tuple:
         """
-        Compute optimal control with diagnostic info.
+        Compute optimal control with diagnostic info for a batch of states.
 
         Args:
-            x: State(s) (state_dim,) or (batch, state_dim)
+            x: Batched states (batch, state_dim)
             state: Controller state (from get_init_state())
 
         Returns:
             Tuple (u, new_state, info)
         """
-        x_batched = ensure_batch_dim(x)
-        return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x_batched, state)
+        return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
 
     def _optimal_control_for_ode(self) -> Callable:
         """

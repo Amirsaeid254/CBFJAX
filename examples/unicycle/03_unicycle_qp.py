@@ -161,9 +161,9 @@ time_array = np.linspace(0, sim_time, n_steps + 1)
 u_hist, _, info_hist = safety_filter.optimal_control_with_info(x_hist, safety_filter.get_init_state())
 
 # Compute barrier values
-h_vals = map_.barrier.hocbf(x_hist)
-min_barrier_at = barrier.get_min_barrier_at(x_hist)
-min_barrier_vals = barrier.min_barrier(x_hist)
+h_vals = jax.vmap(map_.barrier.hocbf)(x_hist)
+min_barrier_at = jax.vmap(barrier.get_min_barrier_at)(x_hist)
+min_barrier_vals = jax.vmap(barrier.min_barrier)(x_hist)
 
 # Convert to numpy
 x_hist_np = np.array(x_hist)
@@ -212,7 +212,7 @@ points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
 points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
-Z = map_.barrier.min_barrier(points_jax)
+Z = jax.vmap(map_.barrier.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---

@@ -177,7 +177,7 @@ for i in range(n_steps):
     pred_trajs.append(x_traj_pred)
 
     # Compute barrier along predicted trajectory and take min over time
-    h_along_pred = barrier.hocbf(jnp.array(x_traj_pred))  # (N+1, num_barriers)
+    h_along_pred = jax.vmap(barrier.hocbf)(jnp.array(x_traj_pred))  # (N+1, num_barriers)
     h_min = jnp.min(h_along_pred, axis=0)  # min over time -> (num_barriers,)
     h_pred_min.append(np.array(h_min))
 
@@ -226,7 +226,7 @@ points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
 # Use map barrier for contour plot
-Z = map_.barrier.min_barrier(points_jax)
+Z = jax.vmap(map_.barrier.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---

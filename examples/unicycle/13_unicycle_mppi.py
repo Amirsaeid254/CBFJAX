@@ -140,7 +140,7 @@ _goal = goal_pos   # captured in closures below
 
 def running_cost(x, u, t):
     pos_err = x[:2] - _goal
-    h_val   = barrier._hocbf_single(x)
+    h_val   = barrier.hocbf(x)
     # softmin with rho=20 overflows fp32 when any h_i < -4.4 → inf → NaN weights
     h_val   = jnp.where(jnp.isfinite(h_val), h_val, -100.0)
     obs_pen = jnp.maximum(0.0, -h_val) ** 2
@@ -151,7 +151,7 @@ def running_cost(x, u, t):
 
 def terminal_cost(x):
     pos_err = x[:2] - _goal
-    h_val   = barrier._hocbf_single(x)
+    h_val   = barrier.hocbf(x)
     h_val   = jnp.where(jnp.isfinite(h_val), h_val, -100.0)
     obs_pen = jnp.maximum(0.0, -h_val) ** 2
     return w_terminal * jnp.sum(pos_err ** 2) + w_barrier * obs_pen
@@ -245,8 +245,8 @@ u_hist = np.array(u_hist_list)   # (n_steps, nu)
 avg_step_ms     = sim_elapsed / n_steps * 1000.0
 goal_dist_final = float(jnp.linalg.norm(x_hist[-1, :2] - np.array(goal_pos)))
 
-h_vals_hist = np.array(barrier.hocbf(jnp.array(x_hist)))   # (T, 1) — composed value
-min_h_hist  = h_vals_hist.squeeze(-1)                        # (T,)
+h_vals_hist = np.array(jax.vmap(barrier.hocbf)(jnp.array(x_hist)))   # (T,) — composed value
+min_h_hist  = h_vals_hist                                             # (T,)
 
 print(f"\n{'='*60}")
 print(f"Simulation statistics ({n_steps} steps):")
@@ -267,7 +267,7 @@ x_grid  = np.linspace(-10.5, 10.5, 400)
 y_grid  = np.linspace(-10.5, 10.5, 400)
 Xg, Yg  = np.meshgrid(x_grid, y_grid)
 pts     = np.column_stack([Xg.ravel(), Yg.ravel(), np.zeros((Xg.size, 2))])
-Z       = np.array(barrier.hocbf(jnp.array(pts, dtype=jnp.float32)))
+Z       = np.array(jax.vmap(barrier.hocbf)(jnp.array(pts, dtype=jnp.float32)))
 Z       = Z.reshape(Xg.shape)
 
 goal_np = np.array(goal_pos)

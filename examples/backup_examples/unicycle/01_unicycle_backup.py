@@ -129,7 +129,7 @@ print("Setting up backup barriers...")
 
 # Backup barrier = state barrier - velocity penalty
 def backup_barrier_func(x):
-    h_state = state_barrier._hocbf_single(x)
+    h_state = state_barrier.hocbf(x)
     velocity_penalty = (0.5 * jnp.pow(x[2], 2)) / control_high[0]
     return h_state - velocity_penalty
 
@@ -157,7 +157,7 @@ fwd_barrier = (BackupBarrier.create_empty(cfg=backup_cfg)
 print("  Backup barrier system built")
 
 # Test backup barrier
-h_test = fwd_barrier.hocbf(x0)
+h_test = jax.vmap(fwd_barrier.hocbf)(x0)
 print(f"  Backup barrier test value: {np.array(h_test)}")
 
 # ============================================
@@ -232,8 +232,8 @@ u_vals, _, info = safety_filter.optimal_control_with_info(traj, safety_filter.ge
 des_ctrls = jax.vmap(desired_control_func)(traj)
 
 # Extract barrier values
-h_vals = fwd_barrier.hocbf(traj)
-h_s = state_barrier.hocbf(traj)
+h_vals = jax.vmap(fwd_barrier.hocbf)(traj)
+h_s = jax.vmap(state_barrier.hocbf)(traj)
 
 # Convert to numpy
 traj_np = np.array(traj)
@@ -280,7 +280,7 @@ X_grid, Y_grid = np.meshgrid(x_grid, y_grid)
 points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
 points_jax = jnp.array(points)
 points_with_zeros = jnp.concatenate([points_jax, jnp.zeros((points_jax.shape[0], 1))], axis=-1)
-Z = map_.barrier.min_barrier(points_with_zeros)
+Z = jax.vmap(map_.barrier.min_barrier)(points_with_zeros)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # Create figs directory
@@ -357,20 +357,20 @@ plt.show()
 fig, axs = plt.subplots(3, 1, figsize=(8, 8))
 
 # Barrier values
-axs[0].plot(time_array, h_vals_np[:, 0], label=r'$h$', color='blue')
-axs[0].plot(time_array, h_s_np[:, 0], label=r'$h_s$', color='red', linestyle='--')
+axs[0].plot(time_array, h_vals_np, label=r'$h$', color='blue')
+axs[0].plot(time_array, h_s_np, label=r'$h_s$', color='red', linestyle='--')
 axs[0].axhline(y=0, color='green', linestyle='dotted')
 axs[0].set_ylabel(r'$h$', fontsize=14)
 axs[0].legend(fontsize=14, loc='best', frameon=False)
 axs[0].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=False)
 axs[0].set_xlim(0, sim_time)
 axs[0].set_yscale('log')
-h_min = np.min(np.concatenate([h_vals_np[:, 0], h_s_np[:, 0]]))
-h_max = np.max(np.concatenate([h_vals_np[:, 0], h_s_np[:, 0]]))
+h_min = np.min(np.concatenate([h_vals_np, h_s_np]))
+h_max = np.max(np.concatenate([h_vals_np, h_s_np]))
 axs[0].set_ylim(bottom=h_min * 0.5, top=h_max * 2.0)
 
 # Normalized factors
-h_normalized = (h_vals_np[:, 0] - backup_cfg['epsilon']) / backup_cfg['h_scale']
+h_normalized = (h_vals_np - backup_cfg['epsilon']) / backup_cfg['h_scale']
 feas_normalized = np.array(info.feas_fact[:]) / backup_cfg['feas_scale']
 axs[1].plot(time_array, h_normalized, label=r'$\frac{h - \epsilon}{\kappa_h}$', color='blue')
 axs[1].plot(time_array, feas_normalized, label=r'$\frac{\beta}{\kappa_\beta}$', color='red')

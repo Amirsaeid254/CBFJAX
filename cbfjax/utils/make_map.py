@@ -145,8 +145,8 @@ class Map(eqx.Module):
     dynamics: Any
 
     # Computed barriers
-    pos_barriers: tuple = eqx.field(static=True)
-    vel_barriers: tuple = eqx.field(static=True)
+    pos_barriers: tuple
+    vel_barriers: tuple
     barrier: Optional[SoftCompositionBarrier]
     map_barrier: Optional[NonSmoothCompositionBarrier]
 
@@ -268,9 +268,7 @@ class Map(eqx.Module):
 
         for geom_type, geom_info in geoms:
             barrier_func_factory, alpha_key = self._get_barrier_config(geom_type)
-            alphas = make_linear_alpha_function_form_list_of_coef(
-                self.cfg.get(alpha_key, (1.0,))
-            )
+            alphas = tuple(self.cfg.get(alpha_key, (1.0,)))
 
             barrier = (
                 Barrier.create_empty(cfg=self.cfg)
@@ -309,9 +307,7 @@ class Map(eqx.Module):
             List of Barrier objects for velocity constraints
         """
         idx, bounds = velocity_constraints
-        alphas = make_linear_alpha_function_form_list_of_coef(
-            self.cfg.get('velocity_alpha', (1.0,))
-        )
+        alphas = tuple(self.cfg.get('velocity_alpha', (1.0,)))
 
         vel_barrier_funcs = make_box_barrier_functionals(bounds=bounds, idx=idx)
 

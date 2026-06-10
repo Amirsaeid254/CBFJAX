@@ -250,8 +250,8 @@ _, (_, ilqr_info_hist) = jax.lax.scan(ilqr_scan_step, ilqr_init_state, x_hist)
 pred_trajs_np = np.array(ilqr_info_hist.x_traj)
 
 # Compute barrier values along trajectory
-h_vals = barrier_cf.hocbf(x_hist)
-min_barrier_vals = barrier_cf.min_barrier(x_hist)
+h_vals = jax.vmap(barrier_cf.hocbf)(x_hist)
+min_barrier_vals = jax.vmap(barrier_cf.min_barrier)(x_hist)
 
 # Compute intervention magnitude
 intervention = u_safe_hist - u_ilqr_hist
@@ -316,7 +316,7 @@ points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
 # Use map barrier for contour plot
-Z = barrier_cf.min_barrier(points_jax)
+Z = jax.vmap(barrier_cf.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---

@@ -15,7 +15,6 @@ from typing import Callable, Optional, Any
 
 from ..controls.base_control import BaseControl
 from ..utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh
-from ..utils.utils import ensure_batch_dim
 
 
 class DummyBarrier:
@@ -27,17 +26,13 @@ class DummyBarrier:
     """
 
     def hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Zero barrier function."""
-        batch_size = x.shape[0] if x.ndim > 1 else 1
-        return jnp.zeros((batch_size, 1))
+        """Zero barrier function (single state)."""
+        return jnp.zeros(())
 
     def get_hocbf_and_lie_derivs(self, x: jnp.ndarray):
-        """Zero barrier and derivatives."""
-        batch_size = x.shape[0] if x.ndim > 1 else 1
+        """Zero barrier and derivatives (single state)."""
         action_dim = 1  # Default action dimension
-        return (jnp.zeros((batch_size, 1)),
-                jnp.zeros((batch_size, 1)),
-                jnp.zeros((batch_size, action_dim)))
+        return jnp.zeros(()), jnp.zeros(()), jnp.zeros(action_dim)
 
 
 class BaseSafeControl(BaseControl):
@@ -55,8 +50,8 @@ class BaseSafeControl(BaseControl):
     """
 
     # Safety-specific fields
-    _barrier: Any = eqx.field(static=True)
-    _terminal_barrier: Any = eqx.field(static=True)
+    _barrier: Any
+    _terminal_barrier: Any
 
     def __init__(self, barrier=None, terminal_barrier=None, **kwargs):
         """

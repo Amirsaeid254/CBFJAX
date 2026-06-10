@@ -159,7 +159,7 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
         assert self.has_barrier, "No barrier assigned"
 
         x_traj, _ = self.get_predicted_trajectory(x)
-        barrier_values = self._barrier.hocbf(jnp.array(x_traj))
+        barrier_values = jax.vmap(self._barrier.hocbf)(jnp.array(x_traj))
         return jnp.min(barrier_values, axis=0)
 
     def get_barrier_values_full(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -176,7 +176,7 @@ class NMPCSafeControl(NMPCControl, BaseSafeControl):
         assert self.has_barrier, "No barrier assigned"
 
         x_traj, _ = self.get_predicted_trajectory(x)
-        return self._barrier.hocbf(jnp.array(x_traj))
+        return jax.vmap(self._barrier.hocbf)(jnp.array(x_traj))
 
 
 class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):

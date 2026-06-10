@@ -78,14 +78,14 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
 
             # Path barrier: -h(x) <= 0 at all timesteps
             if barrier is not None:
-                h_values = barrier._hocbf_single(x)
+                h_values = barrier.hocbf(x)
                 parts.append(jnp.atleast_1d(-h_values).flatten())
 
             # Terminal barrier: only evaluated at t == T
             if terminal_barrier is not None:
                 terminal_constraint = jax.lax.cond(
                     t == T,
-                    lambda: jnp.atleast_1d(-terminal_barrier._hocbf_single(x)).flatten(),
+                    lambda: jnp.atleast_1d(-terminal_barrier.hocbf(x)).flatten(),
                     lambda: jnp.zeros(1),
                 )
                 parts.append(terminal_constraint)
@@ -98,13 +98,13 @@ class iLQRSafeControl(ConstrainediLQRControl, BaseSafeControl):
         """Return min barrier values along predicted trajectory."""
         assert self.has_barrier, "No barrier assigned"
         X, _ = self.get_predicted_trajectory(x)
-        return jnp.min(self._barrier.hocbf(X), axis=0)
+        return jnp.min(jax.vmap(self._barrier.hocbf)(X), axis=0)
 
     def get_barrier_values_full(self, x: jnp.ndarray) -> jnp.ndarray:
         """Return all barrier values along predicted trajectory."""
         assert self.has_barrier, "No barrier assigned"
         X, _ = self.get_predicted_trajectory(x)
-        return self._barrier.hocbf(X)
+        return jax.vmap(self._barrier.hocbf)(X)
 
 
 class QuadraticiLQRSafeControl(QuadraticCostMixin, iLQRSafeControl):

@@ -112,42 +112,6 @@ def make_higher_order_lie_deriv_series(func: Callable, field: Callable, deg: int
     return derivatives
 
 
-def match_dim(res: jnp.ndarray, x: jnp.ndarray, ) -> jnp.ndarray:
-    """
-    Match dimensions exactly.
-
-    Args:
-        x: Original input array
-        res: Result array to match dimensions
-
-    Returns:
-        Result with dimension matching applied
-    """
-    if x.ndim == 1 and res.ndim == 1:
-        return res
-    # Check if dimensions need to be matched
-    if x.ndim == 1 and res.ndim == 2:
-        return jnp.squeeze(res, axis=0)  # Remove first dimension
-    if x.ndim == 2 and res.ndim == 1:
-        return res.reshape(-1, 1)  # Add dimension at end
-
-    return res
-
-def apply_and_match_dim(func: Callable, x: jnp.ndarray) -> jnp.ndarray:
-    """
-    Apply function and match dimensions.
-
-    Args:
-        func: Function to apply
-        x: Input array
-
-    Returns:
-        Result with dimension matching applied
-    """
-    # Apply the function to the input tensor
-    res = func(x)
-    return match_dim(res, x)
-
 def ensure_batch_dim(x: jnp.ndarray, target_ndim: int = 2) -> jnp.ndarray:
     """
     Ensure array has at least target number of dimensions.
@@ -163,23 +127,6 @@ def ensure_batch_dim(x: jnp.ndarray, target_ndim: int = 2) -> jnp.ndarray:
         x = jnp.expand_dims(x, 0)
     return x
 
-
-
-def apply_and_batchize(func: Callable, x: jnp.ndarray):
-    """ALWAYS use vmap for consistent behavior"""
-    x_batched = jnp.atleast_2d(x)  # Ensure batch dim
-    batched_func = jax.vmap(func)    # Always vmap
-    return apply_and_match_dim(batched_func, x_batched)
-
-
-def apply_and_batchize_tuple(func: Callable, x: jnp.ndarray):
-    x_batched = ensure_batch_dim(x)  # Ensure batch dim
-    batched_func = jax.vmap(func)  # Always vmap
-    result = batched_func(x_batched)  # Apply function - should return tuple
-
-    # Apply dimension matching to each element of the tuple
-
-    return tuple(match_dim(item, x_batched) for item in result)
 
 def higher_order_lie_deriv(func: Callable, field: Callable, order: int) -> Callable:
     """

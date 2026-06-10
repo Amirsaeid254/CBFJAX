@@ -10,7 +10,6 @@ import equinox as eqx
 from typing import List, Optional, Tuple
 
 from .barrier import Barrier
-from cbfjax.utils.utils import apply_and_batchize, apply_and_batchize_tuple, ensure_batch_dim
 from cbfjax.dynamics.base_dynamic import DummyDynamics
 
 class MultiBarriers(Barrier):
@@ -22,29 +21,48 @@ class MultiBarriers(Barrier):
     """
 
     # Additional fields for multi-barriers
-    _barrier_funcs: tuple = eqx.field(static=True)
-    _hocbf_funcs: tuple = eqx.field(static=True)
-    _barriers: tuple = eqx.field(static=True)  # Override parent's _barriers to store list of barrier series
+    _mb_barrier_funcs: tuple = eqx.field(static=True)
+    _mb_hocbf_funcs: tuple = eqx.field(static=True)
+    _mb_barriers: tuple = eqx.field(static=True)
     _multidim_indices: tuple = eqx.field(static=True)  # Indices of multi-dimensional barriers
 
     def __init__(self, barrier_func=None, dynamics=None, rel_deg=1, alphas=None,
                  barriers=None, hocbf_func=None, cfg=None,
-                 barrier_funcs=None, hocbf_funcs=None, multidim_indices=None):
+                 barrier_funcs=None, hocbf_funcs=None, multidim_indices=None,
+                 multidim=False):
         """
         Initialize MultiBarriers.
+
+        Complete construction from Barrier objects:
+
+            mb = MultiBarriers(barriers=[b1, b2], dynamics=dyn)
+
+        If dynamics is None it is inferred from the first barrier.
 
         Args:
             barrier_func: Not used in MultiBarriers
             dynamics: System dynamics object
             rel_deg: Not used in MultiBarriers
             alphas: Not used in MultiBarriers
-            barriers: Tuple of barrier series from added barriers
+            barriers: List of Barrier objects, or tuple of barrier series
+                (internal use by _create_updated_instance)
             hocbf_func: Not used in MultiBarriers
             cfg: Configuration dictionary
             barrier_funcs: Tuple of barrier functions from added barriers
             hocbf_funcs: Tuple of HOCBF functions from added barriers
             multidim_indices: Tuple of indices for multi-dimensional barriers
+            multidim: If True, mark constructor-provided barriers as multi-dimensional
         """
+        # Complete-constructor path: barriers given as Barrier objects
+        if barriers and all(isinstance(b, Barrier) for b in barriers):
+            barrier_objs = list(barriers)
+            if dynamics is None or isinstance(dynamics, DummyDynamics):
+                dynamics = barrier_objs[0]._dynamics
+            barrier_funcs = tuple(b.barrier for b in barrier_objs)
+            hocbf_funcs = tuple(b.hocbf for b in barrier_objs)
+            barriers = tuple(b.barriers for b in barrier_objs)
+            multidim_indices = tuple(range(len(barrier_objs))) if multidim else ()
+
         # Initialize parent with minimal fields
         super().__init__(
             barrier_func=barrier_func,
@@ -57,10 +75,22 @@ class MultiBarriers(Barrier):
         )
 
         # Initialize multi-barrier specific fields
-        self._barrier_funcs = tuple(barrier_funcs or ())
-        self._hocbf_funcs = tuple(hocbf_funcs or ())
-        self._barriers = tuple(barriers or ())
+        self._mb_barrier_funcs = tuple(barrier_funcs or ())
+        self._mb_hocbf_funcs = tuple(hocbf_funcs or ())
+        self._mb_barriers = tuple(barriers or ())
         self._multidim_indices = tuple(multidim_indices or ())
+
+    @property
+    def _barrier_funcs(self) -> tuple:
+        return self._mb_barrier_funcs
+
+    @property
+    def _hocbf_funcs(self) -> tuple:
+        return self._mb_hocbf_funcs
+
+    @property
+    def _barriers(self) -> tuple:
+        return self._mb_barriers
 
     @classmethod
     def create_empty(cls, cfg=None):
@@ -131,8 +161,8 @@ class MultiBarriers(Barrier):
 
         # Add new barriers - store the _single methods to match CBFJAX structure
         base_idx = len(self._hocbf_funcs)
-        new_barrier_funcs.extend([barrier._barrier_single for barrier in barriers])
-        new_hocbf_funcs.extend([barrier._hocbf_single for barrier in barriers])
+        new_barrier_funcs.extend([barrier.barrier for barrier in barriers])
+        new_hocbf_funcs.extend([barrier.hocbf for barrier in barriers])
         new_barriers.extend([barrier.barriers for barrier in barriers])
 
         # If multidim=True, mark these new barriers as multi-dimensional
@@ -165,85 +195,49 @@ class MultiBarriers(Barrier):
 
         return self._create_updated_instance(dynamics=dynamics)
 
-    def _barrier_single(self, x: jnp.ndarray) -> jnp.ndarray:
-        """
-        Compute barrier values for single state vector.
-
-        Args:
-            x: Single state vector (n,)
-
-        Returns:
-            Array of barrier values (num_barriers,)
-        """
-        if not self._barrier_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
-
-        # Compute all barrier values for single state
-        return jnp.array([barrier_func(x) for barrier_func in self._barrier_funcs])
-
     def barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """
-        Compute main barrier value at x.
+        Compute main barrier values at a single state.
 
         Main barrier value is the barrier which defines all the higher order cbfs
         involved in the composite barrier function expression.
-        This method returns a horizontally concatenated array of the value of barriers at x.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: Single state vector (n,)
 
         Returns:
-            Barrier values with shape (batch, total_barriers, 1)
+            Array of barrier values (num_barriers,). Batch with jax.vmap(self.barrier).
         """
         if not self._barrier_funcs:
             raise ValueError("No barriers added. Use add_barriers() first.")
 
-        # Concatenate along barrier dimension
-        return jnp.concatenate([apply_and_batchize(barrier_func, x) for barrier_func in self._barrier_funcs], axis=1)
-
-    def _hocbf_single(self, x: jnp.ndarray) -> jnp.ndarray:
-        """
-        Compute HOCBF values for single state vector.
-
-        Args:
-            x: Single state vector (n,)
-
-        Returns:
-            Array of HOCBF values (num_barriers,)
-        """
-        if not self._hocbf_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
-
-        # Compute all HOCBF values for single state
-        return jnp.concatenate([jnp.atleast_1d(hocbf_func(x)) for hocbf_func in self._hocbf_funcs])
+        return jnp.array([barrier_func(x) for barrier_func in self._barrier_funcs])
 
     def hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
         """
-        Compute the highest-order barrier function hocbf(x) of self._hocbf_funcs.
-
-        This method returns a horizontally stacked array of the value of barriers at x.
-
-        Args:
-            x: State vector (n,) or batch (batch, n)
-
-        Returns:
-            HOCBF values with shape (batch, total_barriers)
-        """
-        if not self._hocbf_funcs:
-            raise ValueError("No barriers added. Use add_barriers() first.")
-
-        # Concatenate along barrier dimension
-        return jnp.concatenate([apply_and_batchize(hocbf_func, x) for hocbf_func in self._hocbf_funcs], axis=1)
-
-    def _get_hocbf_and_lie_derivs_single(self, x: jnp.ndarray) -> tuple:
-        """
-        Compute HOCBF and Lie derivatives.
+        Compute HOCBF values at a single state.
 
         Args:
             x: Single state vector (n,)
 
         Returns:
-            Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf) for all barriers
+            Array of HOCBF values (num_barriers,). Batch with jax.vmap(self.hocbf).
+        """
+        if not self._hocbf_funcs:
+            raise ValueError("No barriers added. Use add_barriers() first.")
+
+        return jnp.concatenate([jnp.atleast_1d(hocbf_func(x)) for hocbf_func in self._hocbf_funcs])
+
+    def get_hocbf_and_lie_derivs(self, x: jnp.ndarray) -> tuple:
+        """
+        Compute HOCBF and Lie derivatives at a single state.
+
+        Args:
+            x: Single state vector (n,)
+
+        Returns:
+            Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf) with shapes
+            ((M,), (M,), (M, action_dim)) for all barriers
         """
         if not self._hocbf_funcs:
             raise ValueError("No barriers added. Use add_barriers() first.")
@@ -290,27 +284,15 @@ class MultiBarriers(Barrier):
 
         return hocbf_vals, lf_hocbf, lg_hocbf
 
-    def get_hocbf_and_lie_derivs(self, x: jnp.ndarray) -> tuple:
-        """
-        Compute HOCBF and Lie derivatives with batching support.
-
-        Args:
-            x: State vector (n,) or batch (batch, n)
-
-        Returns:
-            Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf) with proper batch dimensions
-        """
-        return apply_and_batchize_tuple(self._get_hocbf_and_lie_derivs_single, x)
-
     def Lf_hocbf(self, x: jnp.ndarray) -> jnp.ndarray:
         """
         Compute Lie derivative of highest-order barrier function w.r.t. f.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: Single state vector (n,)
 
         Returns:
-            Lie derivatives with shape (batch, total_barriers)
+            Lie derivatives with shape (total_barriers,)
         """
         _, lf_hocbf, _ = self.get_hocbf_and_lie_derivs(x)
         return lf_hocbf
@@ -320,26 +302,25 @@ class MultiBarriers(Barrier):
         Compute Lie derivative of highest-order barrier function w.r.t. g.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: Single state vector (n,)
 
         Returns:
-            Lie derivatives with shape (batch, total_barriers, action_dim)
+            Lie derivatives with shape (total_barriers, action_dim)
         """
         _, _, lg_hocbf = self.get_hocbf_and_lie_derivs(x)
         return lg_hocbf
 
     def min_barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """
-        Calculate the minimum value among all the barrier values computed at point x.
+        Calculate the minimum value among all the barrier values at a single state.
 
         Args:
-            x: State vector (n,) or batch (n,)
+            x: Single state vector (n,)
 
         Returns:
-            Minimum barrier value with shape (1,)
+            Minimum barrier value, scalar
         """
-        barrier_vals = self.barrier(x)  # (num_barriers, 1)
-        return jnp.min(barrier_vals, axis=-1)  # Min across barriers dimension
+        return jnp.min(self.barrier(x))
 
 
     @property

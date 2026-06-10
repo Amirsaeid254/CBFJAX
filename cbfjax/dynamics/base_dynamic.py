@@ -18,8 +18,8 @@ class AffineInControlDynamics(eqx.Module):
         - 'discretization_dt': Timestep for discrete dynamics
         - 'discretization_method': 'euler' or 'rk4'
     """
-    _state_dim: int
-    _action_dim: int
+    _state_dim: int = eqx.field(static=True)
+    _action_dim: int = eqx.field(static=True)
     _params: Optional[Dict[str, Any]] = eqx.field(static=True)
     _dt: Optional[float] = eqx.field(static=True)
     _discretization_method: Optional[str] = eqx.field(static=True)
@@ -58,10 +58,9 @@ class AffineInControlDynamics(eqx.Module):
         x: (state_dim,) - single state vector
         output: (state_dim,) - drift vector
         """
-        assert x.shape == (self.state_dim,), f"Expected shape {(self.state_dim,)}, got {x.shape}"
-        out = self._f(x)
-        assert out.shape == x.shape, f"Output shape {out.shape} doesn't match input {x.shape}"
-        return out
+        if x.shape != (self._state_dim,):
+            raise ValueError(f"Expected state shape {(self._state_dim,)}, got {x.shape}")
+        return self._f(x)
 
     def g(self, x):
         """
@@ -69,11 +68,9 @@ class AffineInControlDynamics(eqx.Module):
         x: (state_dim,) - single state vector
         output: (state_dim, action_dim) - control matrix
         """
-        assert x.shape == (self.state_dim,), f"Expected shape {(self.state_dim,)}, got {x.shape}"
-        out = self._g(x)
-        expected_shape = (self.state_dim, self.action_dim)
-        assert out.shape == expected_shape, f"Expected shape {expected_shape}, got {out.shape}"
-        return out
+        if x.shape != (self._state_dim,):
+            raise ValueError(f"Expected state shape {(self._state_dim,)}, got {x.shape}")
+        return self._g(x)
 
 
     def _f(self, x):

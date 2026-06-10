@@ -213,7 +213,7 @@ points_with_vel = np.column_stack((points, np.zeros((points.shape[0], 2))))
 points_jax = jnp.array(points_with_vel, dtype=jnp.float32)
 
 # Use map barrier for contour plot
-Z = map_.barrier.min_barrier(points_jax)
+Z = jax.vmap(map_.barrier.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Trajectory Plot ---

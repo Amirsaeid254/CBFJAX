@@ -14,7 +14,7 @@ from functools import partial
 from cbfjax.barriers.barrier import Barrier
 from cbfjax.barriers.composite_barrier import SoftCompositionBarrier
 from cbfjax.dynamics.base_dynamic import AffineInControlDynamics
-from cbfjax.utils.utils import softmin, softmax, apply_and_batchize
+from cbfjax.utils.utils import softmin, softmax
 from cbfjax.utils.integration import get_trajs_from_state_action_func
 
 
@@ -34,8 +34,8 @@ class BackupBarrier(Barrier):
     _rel_deg: int = eqx.field(static=True)
 
     # User-assigned components
-    _state_barrier: Any = eqx.field(static=True)
-    _backup_barriers: tuple = eqx.field(static=True)
+    _state_barrier: Any
+    _backup_barriers: tuple
     _backup_policies: tuple = eqx.field(static=True)
 
     def __init__(
@@ -52,7 +52,17 @@ class BackupBarrier(Barrier):
             backup_barriers=None,
             backup_policies=None
     ):
-        """Initialize BackupBarrier with all parameters."""
+        """
+        Initialize BackupBarrier with all parameters.
+
+        Complete construction:
+
+            barrier = BackupBarrier(state_barrier=sb, backup_barriers=[bb],
+                                    backup_policies=[pi], dynamics=dyn, cfg=cfg)
+
+        When state barrier, backup barriers, backup policies and dynamics are
+        all provided, the backup barrier is built immediately (no make() needed).
+        """
         # Initialize parent Barrier
         super().__init__(
             barrier_func=barrier_func,
@@ -67,9 +77,40 @@ class BackupBarrier(Barrier):
         # BackupBarrier specific fields
         self._rel_deg = int(rel_deg)
 
+        if isinstance(state_barrier, list):
+            state_barrier = SoftCompositionBarrier(
+                barriers=state_barrier, rule='i', cfg=cfg
+            )
         self._state_barrier = state_barrier or tuple()
+        if isinstance(backup_barriers, Barrier):
+            backup_barriers = (backup_barriers,)
         self._backup_barriers = tuple(backup_barriers) if backup_barriers else tuple()
         self._backup_policies = tuple(backup_policies) if backup_policies else tuple()
+
+    # === Complete-constructor readiness ===
+    # When all components are provided at construction, barrier/hocbf derive
+    # from _backup_barrier_func on demand (no make() needed).
+
+    def _backup_ready(self):
+        return (len(self._backup_policies) > 0
+                and len(self._backup_policies) == len(self._backup_barriers)
+                and isinstance(self._state_barrier, Barrier)
+                and self._has_real_dynamics())
+
+    def _is_ready(self):
+        if self._explicit_hocbf_func is not None:
+            return True
+        return self._backup_ready() or super()._is_ready()
+
+    def _series_value(self, i, x):
+        if i == 0 and self._is_dummy_barrier(self._barrier_func) and self._backup_ready():
+            return self._backup_barrier_func(x)
+        return super()._series_value(i, x)
+
+    def barrier(self, x):
+        if self._is_dummy_barrier(self._barrier_func) and self._backup_ready():
+            return self._backup_barrier_func(x)
+        return super().barrier(x)
 
     @classmethod
     def create_empty(cls, cfg=None):
@@ -225,10 +266,10 @@ class BackupBarrier(Barrier):
             backup_barrier = self._backup_barriers[i]
 
             # Evaluate state barrier along trajectory (excluding terminal state)
-            h_traj = self._state_barrier.hocbf(traj[:-1, :]).squeeze(-1)  # (time_steps-1,)
+            h_traj = jax.vmap(self._state_barrier.hocbf)(traj[:-1, :])  # (time_steps-1,)
 
             # Evaluate backup barrier at terminal state
-            h_terminal = (backup_barrier._hocbf_single(traj[-1]))          # scalar
+            h_terminal = (backup_barrier.hocbf(traj[-1]))          # scalar
             h_terminal = jnp.atleast_1d(h_terminal)
             # Concatenate and compute softmin
             h_combined = jnp.concatenate([h_traj, h_terminal])
@@ -244,8 +285,8 @@ class BackupBarrier(Barrier):
         else:
             h_stars = jnp.stack([
                 jnp.min(jnp.concatenate([
-                    self._state_barrier.hocbf(trajs[i][:-1]).flatten(),
-                    jnp.atleast_1d(self._backup_barriers[i]._hocbf_single(trajs[i][-1]))
+                    jax.vmap(self._state_barrier.hocbf)(trajs[i][:-1]).flatten(),
+                    jnp.atleast_1d(self._backup_barriers[i].hocbf(trajs[i][-1]))
                 ]))
                 for i in range(action_num)
             ])

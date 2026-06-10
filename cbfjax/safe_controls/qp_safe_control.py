@@ -16,7 +16,6 @@ from qpax import solve_qp_primal
 
 from .base_safe_control import BaseCBFSafeControl, BaseMinIntervSafeControl
 from ..controls.control_types import QPInfo
-from ..utils.utils import ensure_batch_dim
 
 
 class QPSafeControl(BaseCBFSafeControl):
@@ -33,7 +32,7 @@ class QPSafeControl(BaseCBFSafeControl):
 
     # Static parameters for JIT compatibility
     _slacked: bool = eqx.field(static=True)
-    _slack_gain: float = eqx.field(static=True)
+    _slack_gain: float
 
     def __init__(
         self,
@@ -320,7 +319,7 @@ class QPSafeControl(BaseCBFSafeControl):
             Tuple (G, h) for inequality Gu <= h
         """
         # Get barrier values and Lie derivatives for single state
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Ensure proper shapes (handles both scalar and array barriers)
         hocbf = jnp.atleast_1d(hocbf)
@@ -347,7 +346,7 @@ class QPSafeControl(BaseCBFSafeControl):
             Tuple (G, h) for inequality G[u; slack] <= h
         """
         # Get barrier values and Lie derivatives for single state
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Ensure proper shapes (handles both scalar and array barriers)
         hocbf = jnp.atleast_1d(hocbf)
@@ -621,7 +620,7 @@ class InputConstQPSafeControl(QPSafeControl):
         Q_matrix, c_vector, state = self._make_objective_single(x, state)
 
         # Get CBF constraints
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Ensure proper shapes (handles both scalar and array barriers)
         hocbf = jnp.atleast_1d(hocbf)
@@ -667,7 +666,7 @@ class InputConstQPSafeControl(QPSafeControl):
             return self._optimal_control_single_slacked_with_info(x, state)
 
         Q_matrix, c_vector, state = self._make_objective_single(x, state)
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = jnp.atleast_1d(hocbf)
         lf_hocbf = jnp.atleast_1d(lf_hocbf)
         lg_hocbf = jnp.atleast_2d(lg_hocbf)

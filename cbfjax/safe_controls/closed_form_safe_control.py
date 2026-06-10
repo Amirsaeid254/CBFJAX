@@ -37,10 +37,10 @@ class CFSafeControl(BaseCBFSafeControl):
     """
 
     # Static parameters for JIT compatibility
-    _slack_gain: float = eqx.field(static=True)
+    _slack_gain: float
     _use_softplus: bool = eqx.field(static=True)
-    _softplus_gain: float = eqx.field(static=True)
-    _buffer: float = eqx.field(static=True)
+    _softplus_gain: float
+    _buffer: float
 
     def __init__(
         self,
@@ -125,7 +125,7 @@ class CFSafeControl(BaseCBFSafeControl):
         Q_inv = jnp.linalg.inv(Q_matrix)
 
         # Get barrier values and Lie derivatives (single state version for efficiency)
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Apply buffer
         hocbf = hocbf - self._buffer
@@ -155,7 +155,7 @@ class CFSafeControl(BaseCBFSafeControl):
         c_vector, state = self._c(x, state)
         Q_inv = jnp.linalg.inv(Q_matrix)
 
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = hocbf - self._buffer
 
         omega = lf_hocbf - jnp.dot(lg_hocbf, Q_inv @ c_vector) + self._alpha(hocbf)
@@ -199,10 +199,10 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
     """
 
     # Static parameters for JIT compatibility
-    _slack_gain: float = eqx.field(static=True)
+    _slack_gain: float
     _use_softplus: bool = eqx.field(static=True)
-    _softplus_gain: float = eqx.field(static=True)
-    _buffer: float = eqx.field(static=True)
+    _softplus_gain: float
+    _buffer: float
 
     def __init__(
         self,
@@ -300,7 +300,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             Tuple (u, new_state)
         """
         # Get barrier values and Lie derivatives (single state version for efficiency)
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
 
         # Apply buffer
         hocbf = hocbf - self._buffer
@@ -329,7 +329,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
 
     def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
         """Compute minimum intervention safe control with diagnostic info."""
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = hocbf - self._buffer
 
         u_d, new_state = self._desired_control(x, state)
@@ -372,8 +372,8 @@ class InputConstCFSafeControl(CFSafeControl):
     _state_dyn: Optional[Any] = eqx.field(static=True)
     _ac_dyn: Optional[Any] = eqx.field(static=True)
     _ac_out_func: Optional[Callable] = eqx.field(static=True)
-    _state_barrier: tuple = eqx.field(static=True)
-    _ac_barrier: tuple = eqx.field(static=True)
+    _state_barrier: tuple
+    _ac_barrier: tuple
     _ac_rel_deg: int = eqx.field(static=True)
     aux_desired_action: Optional[Callable] = eqx.field(static=True)
     _desired_control: Optional[Callable] = eqx.field(static=True)
@@ -514,7 +514,7 @@ class InputConstCFSafeControl(CFSafeControl):
         Returns:
             Tuple (u, new_state)
         """
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = hocbf - self._buffer
 
         u_d = self.aux_desired_action(x)
@@ -536,7 +536,7 @@ class InputConstCFSafeControl(CFSafeControl):
 
     def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
         """Compute safe optimal control with diagnostic info."""
-        hocbf, lf_hocbf, lg_hocbf = self._barrier._get_hocbf_and_lie_derivs_single(x)
+        hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = hocbf - self._buffer
 
         u_d = self.aux_desired_action(x)

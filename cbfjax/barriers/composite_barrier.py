@@ -12,7 +12,8 @@ from typing import List, Callable, Optional, Dict, Any, Tuple
 from abc import abstractmethod
 
 from .barrier import Barrier
-from cbfjax.utils.utils import apply_and_batchize, softmin, softmax
+from cbfjax.utils.utils import softmin, softmax
+from cbfjax.dynamics.base_dynamic import DummyDynamics
 
 
 class CompositionBarrier(Barrier):
@@ -32,30 +33,59 @@ class CompositionBarrier(Barrier):
     """
 
     # Additional fields for composition
-    _barrier_list: tuple = eqx.field(static=True)
+    _barrier_list: tuple
     _composition_rule: str = eqx.field(static=True)
-    _barriers_raw: tuple = eqx.field(static=True)
+    _barriers_raw: tuple
     _composed_barrier_func: Callable = eqx.field(static=True)
 
     def __init__(self, barrier_func=None, dynamics=None, rel_deg=1, alphas=None,
                  barriers=None, hocbf_func=None, cfg=None,
-                 barrier_list=None, composition_rule="", barriers_raw=None, composed_barrier_func=None):
+                 barrier_list=None, composition_rule="", barriers_raw=None,
+                 composed_barrier_func=None, rule=None):
         """
         Initialize CompositionBarrier with all parameters.
+
+        Complete construction from Barrier objects:
+
+            barrier = SoftCompositionBarrier(barriers=[b1, b2], rule='intersection', cfg=cfg)
+
+        If dynamics is None (or dummy) it is inferred from the first barrier.
 
         Args:
             barrier_func: Composed barrier function
             dynamics: System dynamics object
             rel_deg: Relative degree for higher-order barriers
             alphas: Tuple of class-K functions
-            barriers: Tuple of barrier function series
+            barriers: List of Barrier objects (when rule is given), or tuple of
+                barrier function series (internal use)
             hocbf_func: Highest-order composed barrier function
             cfg: Configuration dictionary
             barrier_list: Tuple of individual Barrier objects
             composition_rule: Composition rule identifier
             barriers_raw: Tuple of raw barrier objects
             composed_barrier_func: Function for computing individual barrier values
+            rule: Composition rule ('intersection', 'union', 'i', 'u'); triggers
+                complete construction from the barriers list
         """
+        if rule is not None:
+            valid_rules = ['intersection', 'union', 'i', 'u']
+            if rule not in valid_rules:
+                raise ValueError(f"Rule must be one of {valid_rules}, got '{rule}'")
+            barrier_objs = list(barriers or [])
+            assert barrier_objs and all(isinstance(b, Barrier) for b in barrier_objs), \
+                "barriers must be a non-empty list of Barrier objects when rule is given"
+            if dynamics is None or isinstance(dynamics, DummyDynamics):
+                dynamics = barrier_objs[0].dynamics
+            composed_barrier_func = self._create_barrier_composition_func(barrier_objs)
+            hocbf_func = self._create_hocbf_composition_func(barrier_objs, rule)
+            barriers = self._build_composed_barrier_series(barrier_objs, hocbf_func)
+            barrier_func = composed_barrier_func
+            rel_deg = 1
+            alphas = ()
+            barrier_list = tuple(barrier_objs)
+            composition_rule = rule
+            barriers_raw = tuple(barrier_objs)
+
         super().__init__(barrier_func, dynamics, rel_deg, alphas, barriers, hocbf_func, cfg)
         self._barrier_list = tuple(barrier_list or [])
         self._composition_rule = composition_rule
@@ -165,33 +195,12 @@ class CompositionBarrier(Barrier):
         Raises:
             ValueError: If rule is invalid or dynamics cannot be determined
         """
-        # Validate composition rule
-        valid_rules = ['intersection', 'union', 'i', 'u']
-        if rule not in valid_rules:
-            raise ValueError(f"Rule must be one of {valid_rules}, got '{rule}'")
-
-        # Determine dynamics source
         dynamics = self._resolve_dynamics(barriers, infer_dynamics, dynamics_override)
-
-        # Create composition functions
-        composed_barrier_func = self._create_barrier_composition_func(barriers)
-        hocbf_func = self._create_hocbf_composition_func(barriers, rule)
-
-        # Build composed barrier series
-        barriers_series = self._build_composed_barrier_series(barriers, hocbf_func)
-
-        # Create new composed instance
-        return self._create_updated_instance(
-            barrier_func=composed_barrier_func,
+        return self.__class__(
+            barriers=list(barriers),
+            rule=rule,
             dynamics=dynamics,
-            rel_deg=1,
-            alphas=(),
-            barriers=barriers_series,
-            hocbf_func=hocbf_func,
-            barrier_list=tuple(barriers),
-            composition_rule=rule,
-            barriers_raw=tuple(barriers),
-            composed_barrier_func=composed_barrier_func
+            cfg=self.cfg,
         )
 
     def _resolve_dynamics(self, barriers: List[Barrier], infer_dynamics: bool,
@@ -232,7 +241,7 @@ class CompositionBarrier(Barrier):
             Function that returns array of all barrier values
         """
         def barrier_composition_func(x):
-            barrier_values = [barrier._barrier_single(x) for barrier in barriers]
+            barrier_values = [barrier.barrier(x) for barrier in barriers]
             return jnp.array(barrier_values)
         return barrier_composition_func
 
@@ -248,7 +257,7 @@ class CompositionBarrier(Barrier):
             Function that returns composed HOCBF value
         """
         def hocbf_composition_func(x):
-            hocbf_values = jnp.array([barrier._hocbf_single(x) for barrier in barriers])
+            hocbf_values = jnp.array([barrier.hocbf(x) for barrier in barriers])
 
             # Apply composition rule
             if rule in ['union', 'u']:
@@ -284,20 +293,21 @@ class CompositionBarrier(Barrier):
 
     def barrier(self, x: jnp.ndarray) -> jnp.ndarray:
         """
-        Compute composed barrier values at given state(s).
+        Compute composed barrier values at a single state.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: Single state vector (n,)
 
         Returns:
-            Array of all individual barrier values with shape (batch, num_barriers)
+            Array of all individual barrier values with shape (num_barriers,).
+            Batch with jax.vmap(self.barrier).
 
         Raises:
             ValueError: If barriers not assigned
         """
         if not self._barriers_raw:
             raise ValueError("Barriers not assigned. Use assign_barriers_and_rule first.")
-        return apply_and_batchize(self._composed_barrier_func, x)
+        return self._composed_barrier_func(x)
 
     def compose(self, rule_key: str) -> Callable:
         """

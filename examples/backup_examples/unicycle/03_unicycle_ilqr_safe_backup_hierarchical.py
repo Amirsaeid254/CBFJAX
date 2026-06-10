@@ -147,7 +147,7 @@ print(f"  - Backup policies: {len(backup_controls)} policies")
 # 4. Create backup barriers
 def backup_barrier_func(x):
     """Backup barrier: combine state safety with velocity constraint."""
-    h_state = state_barrier._hocbf_single(x)
+    h_state = state_barrier.hocbf(x)
     velocity_penalty = (1.0 * jnp.pow(x[2:3], 2)) / control_bounds[1][0]
     return h_state - velocity_penalty
 
@@ -284,8 +284,8 @@ intervention = u_safe - u_ilqr
 intervention_norm = np.array(jnp.linalg.norm(intervention, axis=1))
 
 # Barrier values
-h_vals = fwd_barrier.hocbf(traj)
-h_s = state_barrier.hocbf(traj)
+h_vals = jax.vmap(fwd_barrier.hocbf)(traj)
+h_s = jax.vmap(state_barrier.hocbf)(traj)
 
 # Convert to numpy
 traj_np = np.array(traj)
@@ -341,7 +341,7 @@ X, Y = np.meshgrid(x_grid, y_grid)
 points = np.column_stack((X.flatten(), Y.flatten()))
 points_jax = jnp.array(points)
 points_with_zeros = jnp.concatenate([points_jax, jnp.zeros((points_jax.shape[0], 2))], axis=-1)
-Z = map_.barrier.min_barrier(points_with_zeros)
+Z = jax.vmap(map_.barrier.min_barrier)(points_with_zeros)
 Z = np.array(Z).reshape(X.shape)
 
 # Plot 1: Trajectory
@@ -403,8 +403,8 @@ plt.savefig(f'figs/03_iLQR_Safe_Backup_States_{current_time}.png', dpi=300)
 # Plot 3: Barriers and blending
 fig, axs = plt.subplots(3, 1, figsize=(8, 6))
 
-axs[0].plot(time_array, h_vals_np[:, 0], label=r'$h$', color='blue')
-axs[0].plot(time_array, h_s_np[:, 0], label=r'$h_s$', color='red', linestyle='--')
+axs[0].plot(time_array, h_vals_np, label=r'$h$', color='blue')
+axs[0].plot(time_array, h_s_np, label=r'$h_s$', color='red', linestyle='--')
 axs[0].axhline(y=0, color='green', linestyle=':')
 axs[0].set_ylabel(r'$h$', fontsize=14)
 axs[0].legend(fontsize=12, frameon=False)
