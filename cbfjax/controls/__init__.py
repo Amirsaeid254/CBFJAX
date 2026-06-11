@@ -9,7 +9,6 @@ All controllers follow the stateful interface:
 """
 
 from .base_control import BaseControl
-from .goal_control import GoalControl
 from .mppi_control import MPPIControl
 from .control_types import (
     ILQRState,
@@ -57,7 +56,6 @@ def __getattr__(name):
 
 __all__ = [
     "BaseControl",
-    "GoalControl",
     "MPPIControl",
     "NMPCControl",
     "QuadraticNMPCControl",

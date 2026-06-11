@@ -1,4 +1,6 @@
+import jax
 import jax.numpy as jnp
+import equinox as eqx
 
 
 def desired_control(x, goal_pos, dyn_params, k1=0.8, k2=0.8):
@@ -40,3 +42,27 @@ def desired_control(x, goal_pos, dyn_params, k1=0.8, k2=0.8):
     ud2 = jnp.where(jnp.linalg.norm(dist_to_goal) > 0.1, max_ac_lim[1] * jnp.tanh(wd), 0.0)
 
     return jnp.array([ud1, ud2])
+
+class UnicycleReducedOrderGoalControl(eqx.Module):
+    """
+    Parametric form of ``desired_control`` above: goal, gains and bound/geometry
+    parameters are traced leaves, so the goal can be swapped via ``eqx.tree_at``
+    and controllers can be stacked for multi-robot ensembles.
+    """
+    goal: jax.Array          # (2,)
+    gains: jax.Array         # (k1, k2)
+    control_high: jax.Array  # (2,)
+    d: jax.Array             # scalar
+
+    def __call__(self, x):
+        k1, k2 = self.gains
+        s, c = jnp.sin(x[3]), jnp.cos(x[3])
+        rot_mat = jnp.array([[c, s], [-s, c]])
+        dist_to_goal = x[:2] - self.goal
+        e = rot_mat @ dist_to_goal
+        vd = -(k1 + k2) * x[2] - (1 + k1 * k2) * e[0] + jnp.pow(e[1] * k1, 2) / self.d
+        wd = -k1 / self.d * e[1]
+        ud1 = self.control_high[0] * jnp.tanh(vd)
+        ud2 = jnp.where(jnp.linalg.norm(dist_to_goal) > 0.1,
+                        self.control_high[1] * jnp.tanh(wd), 0.0)
+        return jnp.array([ud1, ud2])

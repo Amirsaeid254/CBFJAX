@@ -27,7 +27,7 @@ cbfjax.configure_jax(platform="cpu", enable_x64=True)
 # Local imports
 from map_config import map_config
 from backup_policies import UnicycleBackupControl
-from unicycle_desired_control import desired_control
+from unicycle_desired_control import UnicycleReducedOrderGoalControl
 
 # Get script directory for saving figures
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -92,9 +92,13 @@ print("Building backup safety filter via cbfjax.from_config...")
 
 backup_controls = UnicycleBackupControl(ub_gain, (control_low, control_high))()
 
-# Desired control toward goal
-def desired_control_func(x):
-    return desired_control(x, goal_pos[0], dynamics_params, **control_gains)
+# Desired control toward goal (goal/gains as traced leaves)
+desired_control_func = UnicycleReducedOrderGoalControl(
+    goal=goal_pos[0],
+    gains=jnp.array([control_gains['k1'], control_gains['k2']]),
+    control_high=jnp.array(control_high),
+    d=jnp.array(dynamics_params['d']),
+)
 
 parts = cbfjax.from_config({
     'dynamics': {'type': 'unicycle_reduced_order', 'params': dynamics_params},

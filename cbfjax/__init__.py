@@ -39,7 +39,7 @@ from .barriers import (
     BackupBarrier,
     StackedBarrier,
 )
-from .controls import BaseControl, GoalControl
+from .controls import BaseControl
 from .safe_controls import (
     CFSafeControl,
     MinIntervCFSafeControl,
@@ -97,7 +97,6 @@ __all__ = [
     "StackedBarrier",
     # Controls
     "BaseControl",
-    "GoalControl",
     # Safe controls (always available)
     "CFSafeControl",
     "MinIntervCFSafeControl",

@@ -4,7 +4,7 @@ Multi-robot ensemble: 8 unicycles with a single compiled rollout.
 Demonstrates:
 - stack_ensemble / unstack_ensemble from cbfjax.utils
 - StackedBarrier via from_config with composition='stacked'
-- GoalControl as a traced leaf — goal swap = no retrace
+- UnicycleGoalControl as a traced leaf — goal swap = no retrace
 - eqx.filter_jit + eqx.filter_vmap over lax.scan for N robots
 """
 
@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from map_config import map_config
 
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.controls.goal_control import GoalControl
+from unicycle_desired_control import UnicycleGoalControl
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 mpl.rcParams['text.usetex'] = True
@@ -100,7 +100,7 @@ parts = cbfjax.from_config({
         'action_dim': 2,
         'alpha': lambda h: 0.5 * h,
         'params': cf_params,
-        'desired_control': GoalControl(goal=goals[0], gains=control_gains),
+        'desired_control': UnicycleGoalControl(goal=goals[0], gains=control_gains),
     },
 })
 
