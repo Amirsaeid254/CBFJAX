@@ -148,7 +148,7 @@ time_array = np.linspace(0, sim_time, n_steps + 1)
 print("\nComputing control actions and predicted trajectories...")
 
 def scan_step(state, x):
-    u, new_state, info = controller._optimal_control_single_with_info(x, state)
+    u, new_state, info = controller.optimal_control_with_info(x, state)
     return new_state, (u, info)
 
 init_state = controller.get_init_state()

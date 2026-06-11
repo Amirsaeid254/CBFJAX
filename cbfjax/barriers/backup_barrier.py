@@ -141,7 +141,7 @@ class BackupBarrier(Barrier):
             Backup barrier value or info dict
         """
         # Get backup trajectories: (action_num, time_steps, state_dim)
-        trajs = self._get_backup_traj_single(x)
+        trajs = self.get_backup_traj(x)
         action_num = len(self._backup_policies)
 
         # Evaluate barriers for each backup policy
@@ -178,15 +178,16 @@ class BackupBarrier(Barrier):
             h_star = jnp.max(h_stars)
             return {'h_star': h_star, 'h_stars': h_stars, 'h': final_h_val, 'h_list': h_list}
 
-    def _get_backup_traj_single(self, x):
+    def get_backup_traj(self, x):
         """
-        Compute backup trajectories for all backup policies from single state.
+        Compute backup trajectories for all backup policies at a single state.
 
         Args:
             x: State vector (n,)
 
         Returns:
-            Trajectories array (action_num, time_steps, state_dim)
+            Trajectories array (action_num, time_steps, state_dim).
+            Batch with jax.vmap(self.get_backup_traj).
         """
         # Python for loop is necessary here since we're iterating over different policy functions,
         # not batched data. Cannot use vmap/lax.map over different functions.
@@ -199,24 +200,11 @@ class BackupBarrier(Barrier):
                 timestep=self.cfg['time_steps'],
                 sim_time=self.cfg['horizon'],
                 method=self.cfg['integration_method']
-            ).squeeze(1)  # Remove batch dim: (time_steps, state_dim)
+            )  # (time_steps, state_dim)
             trajs_list.append(traj)
 
         # Stack trajectories: (action_num, time_steps, state_dim)
         return jnp.stack(trajs_list, axis=0)
-
-    def get_backup_traj(self, x):
-        """
-        Compute backup trajectories for batched states.
-
-        Args:
-            x: State vectors (batch, state_dim)
-
-        Returns:
-            Trajectories array (batch, action_num, time_steps, state_dim)
-        """
-        x = jnp.atleast_2d(x)
-        return jax.vmap(self._get_backup_traj_single)(x)
 
     def get_h_stars(self, x):
         """

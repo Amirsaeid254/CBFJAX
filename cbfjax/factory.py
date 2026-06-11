@@ -43,7 +43,8 @@ Barrier specs are recursive: wherever a barrier is expected, either a built
 Barrier instance or a {'type': ...} spec dict is accepted.
 
     {'type': 'map', 'geoms': [...], 'velocity': (idx, bounds),
-     'composition': 'soft' | 'hard' | 'multi', 'cfg': {...}}
+     'composition': 'soft' | 'hard' | 'multi' | 'stacked', 'cfg': {...}}
+    # 'stacked' returns StackedBarrier.from_geoms (no Map built; parts.map=None)
 
     {'type': 'barrier', 'func': h, 'rel_deg': 2, 'alphas': (10.0,), 'cfg': {...}}
 
@@ -63,7 +64,9 @@ Barrier instance or a {'type': ...} spec dict is accepted.
     {'type': 'state_margin', 'margin': lambda x: ...,  # only inside 'backup':
      'rel_deg': 1, 'alphas': ..., 'cfg': {...}}        # terminal barrier =
                                                        # state_barrier.hocbf + margin
-    {'type': 'lidar', ...}   # reserved: built at runtime from sensor data
+    {'type': 'lidar', 'capacity': N, 'cfg': {...}}
+    # N cylinder placeholder slots (centers far away; inert until updated).
+    # Update at runtime via eqx.tree_at / _replace — zero recompiles.
 
 Wiring rule (the only one): the built barrier is passed to the filter
 constructor as barrier=; an explicit 'barrier' key inside 'safety_filter' wins.
@@ -98,6 +101,7 @@ from .barriers import (
     SoftCompositionBarrier,
     NonSmoothCompositionBarrier,
     BackupBarrier,
+    StackedBarrier,
 )
 from .utils.make_map import Map
 
@@ -150,7 +154,7 @@ BARRIER_TYPES = {}
 
 _TOP_LEVEL_KEYS = ('dynamics', 'barrier', 'control', 'safety_filter')
 
-COMPOSITIONS = ('soft', 'hard', 'multi')
+COMPOSITIONS = ('soft', 'hard', 'multi', 'stacked')
 
 
 def _barrier_type(name):
@@ -237,11 +241,29 @@ def _build_map_barrier(spec, dynamics, ctx):
 
     'soft'/'hard' return the compositions the Map already built; 'multi'
     delegates to the 'multi' combinator over the map's member barriers.
+
+    'stacked' builds a StackedBarrier directly via
+    StackedBarrier.from_geoms(geoms, velocity=..., dynamics=..., cfg=...).
+    It does NOT build a Map (no ctx.maps entry); parts.map stays None for
+    pure-stacked configs.  The hocbf/Lf/Lg values are numerically identical
+    to the 'soft' composition (both use softmin with conservative=False).
     """
     _check_keys(spec, ('geoms', 'velocity', 'composition', 'cfg'), 'map')
     composition = spec.get('composition', 'soft')
     if composition not in COMPOSITIONS:
         raise _unknown('composition', composition, COMPOSITIONS)
+
+    if composition == 'stacked':
+        if 'geoms' not in spec:
+            raise _requires('map', 'geoms')
+        if dynamics is None:
+            raise ValueError("barrier type 'map' requires a 'dynamics' entry")
+        return StackedBarrier.from_geoms(
+            geoms=spec['geoms'],
+            velocity=spec.get('velocity'),
+            dynamics=dynamics,
+            cfg=spec.get('cfg', {}),
+        )
 
     map_ = _make_map(spec, dynamics, ctx)
     if composition == 'soft':
@@ -382,10 +404,48 @@ def _build_backup_barrier(spec, dynamics, ctx):
 
 @_barrier_type('lidar')
 def _build_lidar(spec, dynamics, ctx):
-    raise NotImplementedError(
-        "barrier type 'lidar' is reserved: lidar barriers are built at runtime "
-        "from sensor data, not from a static config. Construct the barrier "
-        "instance yourself and pass it in place of the spec."
+    """Build a StackedBarrier with N cylinder placeholder slots.
+
+    Placeholders have centers at (1e6, 1e6) and radius 1e-3, making them
+    provably inert: the HOCBF for a far-away cylinder is enormous, so its
+    softmin contribution exp(-rho * h) underflows to zero.
+
+    Update slots at runtime (zero recompiles)::
+
+        lidar_barrier = eqx.tree_at(
+            lambda b: (b.cyl_centers, b.cyl_radii),
+            lidar_barrier,
+            (new_centers, new_radii),
+        )
+
+    Args:
+        spec: dict with required 'capacity' (int > 0) and optional 'cfg'.
+        dynamics: system dynamics (must have .f(x) and .g(x)).
+        ctx: build context (unused; no Map is created).
+
+    Returns:
+        StackedBarrier with 'capacity' cylinder placeholder leaves.
+    """
+    _check_keys(spec, ('capacity', 'cfg'), 'lidar')
+    if 'capacity' not in spec:
+        raise _requires('lidar', 'capacity')
+    capacity = spec['capacity']
+    if not isinstance(capacity, int) or capacity <= 0:
+        raise ValueError(
+            f"'lidar' spec 'capacity' must be a positive int, got {capacity!r}"
+        )
+    if dynamics is None:
+        raise ValueError("barrier type 'lidar' requires a 'dynamics' entry")
+
+    placeholder_geoms = tuple(
+        ('cylinder', {'center': (1e6, 1e6), 'radius': 1e-3})
+        for _ in range(capacity)
+    )
+    return StackedBarrier.from_geoms(
+        geoms=placeholder_geoms,
+        velocity=None,
+        dynamics=dynamics,
+        cfg=spec.get('cfg', {}),
     )
 
 

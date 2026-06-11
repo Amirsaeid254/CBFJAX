@@ -37,8 +37,9 @@ from .barriers import (
     SoftCompositionBarrier,
     NonSmoothCompositionBarrier,
     BackupBarrier,
+    StackedBarrier,
 )
-from .controls import BaseControl
+from .controls import BaseControl, GoalControl
 from .safe_controls import (
     CFSafeControl,
     MinIntervCFSafeControl,
@@ -54,6 +55,9 @@ from .safe_controls import (
 
 # Config-driven construction
 from .factory import from_config, build_barrier
+
+# Ensemble utilities
+from .utils.utils import stack_ensemble, unstack_ensemble
 
 # Configuration helpers
 from .config import (
@@ -90,8 +94,10 @@ __all__ = [
     "SoftCompositionBarrier",
     "NonSmoothCompositionBarrier",
     "BackupBarrier",
+    "StackedBarrier",
     # Controls
     "BaseControl",
+    "GoalControl",
     # Safe controls (always available)
     "CFSafeControl",
     "MinIntervCFSafeControl",
@@ -106,6 +112,9 @@ __all__ = [
     # Config-driven construction
     "from_config",
     "build_barrier",
+    # Ensemble utilities
+    "stack_ensemble",
+    "unstack_ensemble",
     # Configuration
     "configure_jax",
     "get_jax_config",

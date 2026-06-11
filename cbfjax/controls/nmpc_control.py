@@ -963,8 +963,12 @@ class NMPCControl(BaseControl):
     # Control Methods
     # ==========================================
 
-    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, Any]:
+    def optimal_control(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, Any]:
         assert self._is_built, "Must call make() before computing control"
+        if x.ndim != 1:
+            raise ValueError(f"optimal_control expects a single state (state_dim,); got ndim={x.ndim}")
+        if state is None:
+            state = self.get_init_state()
 
         x_np = np.array(x)
         u_opt = self._backend.solve(x_np)
@@ -972,8 +976,12 @@ class NMPCControl(BaseControl):
 
         return jnp.array(u_opt), state
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, Any, dict]:
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, Any, dict]:
         assert self._is_built, "Must call make() before computing control"
+        if x.ndim != 1:
+            raise ValueError(f"optimal_control_with_info expects a single state (state_dim,); got ndim={x.ndim}")
+        if state is None:
+            state = self.get_init_state()
 
         x_np = np.array(x)
         u_opt, status, cost, x_traj, u_traj = self._backend.solve_with_info(x_np)
@@ -996,44 +1004,10 @@ class NMPCControl(BaseControl):
         x_np = np.array(x)
         return self._backend.get_predicted_trajectory(x_np)
 
-    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
-        if state is None:
-            state = self.get_init_state()
-        if x.ndim == 1:
-            return self._optimal_control_single(x, state)
-        else:
-            u_list = []
-            for i in range(x.shape[0]):
-                u_i, state = self._optimal_control_single(x[i], state)
-                u_list.append(u_i)
-            u_batch = jnp.stack(u_list)
-            return u_batch, state
-
-    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
-        if state is None:
-            state = self.get_init_state()
-        if x.ndim == 1:
-            return self._optimal_control_single_with_info(x, state)
-        else:
-            u_list = []
-            info_list = []
-            for i in range(x.shape[0]):
-                u_i, state, info_i = self._optimal_control_single_with_info(x[i], state)
-                u_list.append(u_i)
-                info_list.append(info_i)
-            u_batch = jnp.stack(u_list)
-            info_batch = NMPCInfo(
-                status=jnp.array([info_i.status for info_i in info_list]),
-                cost=jnp.array([info_i.cost for info_i in info_list]),
-                x_traj=jnp.stack([info_i.x_traj for info_i in info_list]),
-                u_traj=jnp.stack([info_i.u_traj for info_i in info_list]),
-            )
-            return u_batch, state, info_batch
-
     def _optimal_control_for_ode(self) -> Callable:
         init_state = self.get_init_state()
         def control_for_ode(x):
-            u, _ = self._optimal_control_single(x, init_state)
+            u, _ = self.optimal_control(x, init_state)
             return u
         return control_for_ode
 
@@ -1098,7 +1072,7 @@ class NMPCControl(BaseControl):
             current_state = s0[i]
 
             for _ in range(num_steps - 1):
-                u_opt, _ = self._optimal_control_single(current_state, init_state)
+                u_opt, _ = self.optimal_control(current_state, init_state)
                 actions.append(u_opt)
                 next_state = integrate_with_fixed_control(current_state, u_opt)
                 traj.append(next_state)
@@ -1126,10 +1100,15 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
     Supports both acados (LINEAR_LS) and do-mpc (TVP quadratic) backends.
     """
 
-    _Q: Optional[Callable] = eqx.field(static=True)
-    _R: Optional[Callable] = eqx.field(static=True)
-    _Q_e: Optional[Callable] = eqx.field(static=True)
-    _x_ref: Optional[Callable] = eqx.field(static=True)
+    # Cost matrices: array inputs -> traced leaves, callables -> static (dual storage)
+    _Q_value: Optional[jax.Array]
+    _R_value: Optional[jax.Array]
+    _Q_e_value: Optional[jax.Array]
+    _x_ref_value: Optional[jax.Array]
+    _Q_func: Optional[Callable] = eqx.field(static=True)
+    _R_func: Optional[Callable] = eqx.field(static=True)
+    _Q_e_func: Optional[Callable] = eqx.field(static=True)
+    _x_ref_func: Optional[Callable] = eqx.field(static=True)
 
     def __init__(self, **kwargs):
         super().__init__(cost_running=None, cost_terminal=None, **kwargs)
@@ -1149,10 +1128,10 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
             'state_bounds_idx': list(self._state_bounds_idx) if self._has_state_bounds else None,
             'state_low': list(self._state_low) if self._has_state_bounds else None,
             'state_high': list(self._state_high) if self._has_state_bounds else None,
-            'Q': self._Q,
-            'R': self._R,
-            'Q_e': self._Q_e,
-            'x_ref': self._x_ref,
+            'Q': self._cost_emit(self._Q_value, self._Q_func),
+            'R': self._cost_emit(self._R_value, self._R_func),
+            'Q_e': self._cost_emit(self._Q_e_value, self._Q_e_func),
+            'x_ref': self._cost_emit(self._x_ref_value, self._x_ref_func),
         }
 
     def _validate_for_make(self):

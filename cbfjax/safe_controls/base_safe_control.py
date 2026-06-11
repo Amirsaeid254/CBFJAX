@@ -5,7 +5,7 @@ This module provides base classes for implementing safe control algorithms
 that guarantee system safety through barrier function constraints.
 
 All safe controllers follow the stateful interface:
-- _optimal_control_single(x, state) -> (u, new_state)
+- optimal_control(x, state) -> (u, new_state)
 - get_init_state() -> initial controller state
 """
 import jax
@@ -14,7 +14,6 @@ import equinox as eqx
 from typing import Callable, Optional, Any
 
 from ..controls.base_control import BaseControl
-from ..utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh
 
 
 class DummyBarrier:
@@ -191,12 +190,25 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
     Uses cooperative multiple inheritance pattern.
 
     Attributes:
-        _desired_control: Stateful desired control function
+        _desired_control: Stateful desired control function (property over dual storage)
+        _desired_control_module: eqx.Module desired control kept as a traced LEAF
+        _desired_control_static: stateful desired control for plain callables (static)
         _desired_control_init_state: Callable returning init state for desired control
+
+    Dual storage (mirrors Barrier._alpha_coefs): a plain callable / controller is
+    normalized to a stateful function and kept in the static field
+    ``_desired_control_static`` (it cannot be a leaf - subclasses jit on ``self``,
+    so a raw lambda leaf would crash jit). An ``eqx.Module`` desired control is
+    kept as a traced LEAF in ``_desired_control_module`` so its parameters (e.g.
+    a goal) stay traced and the controller can be vmapped/tree_at-ed without
+    recompiles. The ``_desired_control`` property reconstructs the stateful
+    ``(x, state) -> (u, new_state)`` interface from whichever is set.
     """
 
-    # Minimum intervention specific fields
-    _desired_control: Optional[Callable] = eqx.field(static=True)
+    # Minimum intervention specific fields (dual storage)
+    _desired_control_module: Optional[Any]
+    _desired_control_module_stateful: bool = eqx.field(static=True)
+    _desired_control_static: Optional[Callable] = eqx.field(static=True)
     _desired_control_init_state: Optional[Callable] = eqx.field(static=True)
 
     def __init__(self, desired_control: Optional[Callable] = None,
@@ -205,32 +217,70 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
         Initialize BaseMinIntervSafeControl.
 
         Args:
-            desired_control: Controller object with _optimal_control_single and
-                           get_init_state, or plain function x -> u (normalized to
+            desired_control: Controller object with optimal_control and
+                           get_init_state, an eqx.Module mapping x -> u (kept as a
+                           traced leaf), or plain function x -> u (normalized to
                            stateful form), or already-stateful function when
                            desired_control_init_state is also given
             desired_control_init_state: Callable returning init state for desired control
             **kwargs: Passed to next class in MRO
         """
         super().__init__(**kwargs)
-        if desired_control is not None and desired_control_init_state is None:
-            desired_control, desired_control_init_state = \
+        module, module_stateful, static = None, False, None
+        if desired_control is None:
+            pass
+        elif isinstance(desired_control, eqx.Module):
+            # ANY eqx.Module (plain x -> u callable OR stateful controller
+            # object) is kept as a traced LEAF so its parameter arrays stay
+            # traced (no array-as-static warning) and the controller can be
+            # vmapped/tree_at-ed. A static bool records the calling convention.
+            module = desired_control
+            module_stateful = (hasattr(desired_control, 'optimal_control')
+                               and hasattr(desired_control, 'get_init_state'))
+            if module_stateful:
+                # init state is produced from the leaf module in get_init_state,
+                # so the module is NOT captured by a static closure here.
+                pass
+            elif desired_control_init_state is None:
+                desired_control_init_state = (lambda: None)
+        elif desired_control_init_state is not None:
+            # Already-stateful plain function supplied with its init state.
+            static = desired_control
+        else:
+            # Plain function / lambda x -> u: must stay static (jit constraint).
+            static, desired_control_init_state = \
                 self._normalize_desired_control(desired_control)
-        self._desired_control = desired_control
+        self._desired_control_module = module
+        self._desired_control_module_stateful = module_stateful
+        self._desired_control_static = static
         self._desired_control_init_state = desired_control_init_state
+
+    @property
+    def _desired_control(self) -> Optional[Callable]:
+        """Stateful (x, state) -> (u, new_state) over the dual storage."""
+        if self._desired_control_module is not None:
+            module = self._desired_control_module
+            if self._desired_control_module_stateful:
+                def stateful_desired(x, state):
+                    return module.optimal_control(x, state)
+                return stateful_desired
+            def stateful_desired(x, state):
+                return module(x), state
+            return stateful_desired
+        return self._desired_control_static
 
     @staticmethod
     def _normalize_desired_control(desired_control) -> tuple:
         """
         Normalize desired control to (stateful_fn, init_state_fn).
 
-        Accepts a controller object (with _optimal_control_single and
+        Accepts a controller object (with optimal_control and
         get_init_state) or a plain function f(x) -> u.
         """
-        if hasattr(desired_control, '_optimal_control_single') and hasattr(desired_control, 'get_init_state'):
+        if hasattr(desired_control, 'optimal_control') and hasattr(desired_control, 'get_init_state'):
             ctrl_obj = desired_control
             def stateful_desired(x, state):
-                return ctrl_obj._optimal_control_single(x, state)
+                return ctrl_obj.optimal_control(x, state)
             return stateful_desired, ctrl_obj.get_init_state
         func = desired_control
         def stateful_desired(x, state):
@@ -247,12 +297,21 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
             'terminal_barrier': self._terminal_barrier,
             'Q': self._Q,
             'c': self._c,
-            'desired_control': self._desired_control,
+            'desired_control': self._emit_desired_control(),
             'desired_control_init_state': self._desired_control_init_state,
         }
 
+    def _emit_desired_control(self):
+        """Round-trip: the raw module (leaf) or the static stateful function."""
+        if self._desired_control_module is not None:
+            return self._desired_control_module
+        return self._desired_control_static
+
     def get_init_state(self):
         """Get initial controller state (from desired controller if present)."""
+        if (self._desired_control_module is not None
+                and self._desired_control_module_stateful):
+            return self._desired_control_module.get_init_state()
         if self._desired_control_init_state is not None:
             return self._desired_control_init_state()
         return None

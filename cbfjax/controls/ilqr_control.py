@@ -9,7 +9,7 @@ Uses cooperative multiple inheritance pattern where all classes:
 - Extract only the parameters they need
 
 All controllers follow the stateful interface:
-- _optimal_control_single(x, state) -> (u, new_state)
+- optimal_control(x, state) -> (u, new_state)
 - get_init_state() -> ILQRState or ConstrainedILQRState
 - State contains warm-start U trajectory
 
@@ -143,7 +143,8 @@ class iLQRControl(BaseControl):
         """Get cost function. Override in subclass to modify cost."""
         return self._cost_func
 
-    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState]:
+    @jax.jit
+    def optimal_control(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState]:
         """Compute optimal control for single state. Returns (u, new_state)."""
         if state is None:
             state = self.get_init_state()
@@ -169,7 +170,8 @@ class iLQRControl(BaseControl):
 
         return U[0], ILQRState(U=U)
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState, ILQRInfo]:
+    @jax.jit
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState, ILQRInfo]:
         """Compute optimal control with diagnostic info. Returns (u, new_state, info)."""
         if state is None:
             state = self.get_init_state()
@@ -197,34 +199,11 @@ class iLQRControl(BaseControl):
         return U[0], ILQRState(U=U), info
 
     @jax.jit
-    def optimal_control(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ILQRState]:
-        """
-        Compute optimal control with vmap for batching.
-
-        Args:
-            x: State(s) (state_dim,) or (batch, state_dim)
-            state: Controller state (optional, uses get_init_state() if None)
-
-        Returns:
-            Tuple (u, new_state)
-        """
-        if state is None:
-            state = self.get_init_state()
-        return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
-
-    @jax.jit
-    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
-        """Compute optimal control with diagnostic info."""
-        if state is None:
-            state = self.get_init_state()
-        return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
-
-    @jax.jit
     def get_predicted_trajectory(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """Get predicted trajectory (x_traj, u_traj)."""
         if state is None:
             state = self.get_init_state()
-        _, _, info = self._optimal_control_single_with_info(x, state)
+        _, _, info = self.optimal_control_with_info(x, state)
         return info.x_traj, info.u_traj
 
 class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
@@ -234,11 +213,15 @@ class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
     Uses cooperative multiple inheritance. QuadraticCostMixin provides Q, R fields.
     """
 
-    # Cost matrices as Callable for JIT compatibility (static fields)
-    _Q: Optional[Callable] = eqx.field(static=True)
-    _R: Optional[Callable] = eqx.field(static=True)
-    _Q_e: Optional[Callable] = eqx.field(static=True)
-    _x_ref: Optional[Callable] = eqx.field(static=True)
+    # Cost matrices: array inputs -> traced leaves, callables -> static (dual storage)
+    _Q_value: Optional[jax.Array]
+    _R_value: Optional[jax.Array]
+    _Q_e_value: Optional[jax.Array]
+    _x_ref_value: Optional[jax.Array]
+    _Q_func: Optional[Callable] = eqx.field(static=True)
+    _R_func: Optional[Callable] = eqx.field(static=True)
+    _Q_e_func: Optional[Callable] = eqx.field(static=True)
+    _x_ref_func: Optional[Callable] = eqx.field(static=True)
 
     def __init__(self, **kwargs):
         """
@@ -257,10 +240,10 @@ class QuadraticiLQRControl(QuadraticCostMixin, iLQRControl):
             'action_dim': self._action_dim,
             'params': immutabledict(self._params) if self._params else None,
             'dynamics': self._dynamics,
-            'Q': self._Q,
-            'R': self._R,
-            'Q_e': self._Q_e,
-            'x_ref': self._x_ref,
+            'Q': self._cost_emit(self._Q_value, self._Q_func),
+            'R': self._cost_emit(self._R_value, self._R_func),
+            'Q_e': self._cost_emit(self._Q_e_value, self._Q_e_func),
+            'x_ref': self._cost_emit(self._x_ref_value, self._x_ref_func),
         }
 
     def _get_cost(self) -> Callable:
@@ -406,7 +389,7 @@ class ConstrainediLQRControl(iLQRControl):
         return self._cost_func
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ConstrainedILQRState]:
+    def optimal_control(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ConstrainedILQRState]:
         """Compute optimal control for single state. Returns (u, new_state)."""
         if state is None:
             state = self.get_init_state()
@@ -440,7 +423,7 @@ class ConstrainediLQRControl(iLQRControl):
         return U[0], ConstrainedILQRState(U=U)
 
     @jax.jit
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ConstrainedILQRState, ConstrainedILQRInfo]:
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> Tuple[jnp.ndarray, ConstrainedILQRState, ConstrainedILQRInfo]:
         """Compute optimal control with diagnostic info. Returns (u, new_state, info)."""
         if state is None:
             state = self.get_init_state()
@@ -480,22 +463,6 @@ class ConstrainediLQRControl(iLQRControl):
         )
         return U[0], ConstrainedILQRState(U=U), info
 
-    @jax.jit
-    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
-        """Compute optimal control with vmap for batching."""
-        if state is None:
-            state = self.get_init_state()
-
-        return jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
-
-    @jax.jit
-    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
-        """Compute optimal control with diagnostic info."""
-        if state is None:
-            state = self.get_init_state()
-
-        return jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
-
 
 class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl):
     """
@@ -504,11 +471,15 @@ class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl
     Uses cooperative multiple inheritance. QuadraticCostMixin provides Q, R fields.
     """
 
-    # Cost matrices as Callable for JIT compatibility (static fields)
-    _Q: Optional[Callable] = eqx.field(static=True)
-    _R: Optional[Callable] = eqx.field(static=True)
-    _Q_e: Optional[Callable] = eqx.field(static=True)
-    _x_ref: Optional[Callable] = eqx.field(static=True)
+    # Cost matrices: array inputs -> traced leaves, callables -> static (dual storage)
+    _Q_value: Optional[jax.Array]
+    _R_value: Optional[jax.Array]
+    _Q_e_value: Optional[jax.Array]
+    _x_ref_value: Optional[jax.Array]
+    _Q_func: Optional[Callable] = eqx.field(static=True)
+    _R_func: Optional[Callable] = eqx.field(static=True)
+    _Q_e_func: Optional[Callable] = eqx.field(static=True)
+    _x_ref_func: Optional[Callable] = eqx.field(static=True)
 
     def __init__(self, **kwargs):
         """
@@ -532,10 +503,10 @@ class QuadraticConstrainediLQRControl(QuadraticCostMixin, ConstrainediLQRControl
             'state_bounds_idx': list(self._state_bounds_idx) if self._has_state_bounds else None,
             'state_low': list(self._state_low) if self._has_state_bounds else None,
             'state_high': list(self._state_high) if self._has_state_bounds else None,
-            'Q': self._Q,
-            'R': self._R,
-            'Q_e': self._Q_e,
-            'x_ref': self._x_ref,
+            'Q': self._cost_emit(self._Q_value, self._Q_func),
+            'R': self._cost_emit(self._R_value, self._R_func),
+            'Q_e': self._cost_emit(self._Q_e_value, self._Q_e_func),
+            'x_ref': self._cost_emit(self._x_ref_value, self._x_ref_func),
         }
 
     def _get_cost(self) -> Callable:

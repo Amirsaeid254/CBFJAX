@@ -182,10 +182,15 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
     - NMPCSafeControl: NMPC + barrier + backend dispatch
     """
 
-    _Q: Optional[Callable] = eqx.field(static=True)
-    _R: Optional[Callable] = eqx.field(static=True)
-    _Q_e: Optional[Callable] = eqx.field(static=True)
-    _x_ref: Optional[Callable] = eqx.field(static=True)
+    # Cost matrices: array inputs -> traced leaves, callables -> static (dual storage)
+    _Q_value: Optional[jax.Array]
+    _R_value: Optional[jax.Array]
+    _Q_e_value: Optional[jax.Array]
+    _x_ref_value: Optional[jax.Array]
+    _Q_func: Optional[Callable] = eqx.field(static=True)
+    _R_func: Optional[Callable] = eqx.field(static=True)
+    _Q_e_func: Optional[Callable] = eqx.field(static=True)
+    _x_ref_func: Optional[Callable] = eqx.field(static=True)
 
     def __init__(self, **kwargs):
         super().__init__(cost_running=None, cost_terminal=None, **kwargs)
@@ -200,10 +205,10 @@ class QuadraticNMPCSafeControl(QuadraticCostMixin, NMPCSafeControl):
             'state_bounds_idx': list(self._state_bounds_idx) if self._has_state_bounds else None,
             'state_low': list(self._state_low) if self._has_state_bounds else None,
             'state_high': list(self._state_high) if self._has_state_bounds else None,
-            'Q': self._Q,
-            'R': self._R,
-            'Q_e': self._Q_e,
-            'x_ref': self._x_ref,
+            'Q': self._cost_emit(self._Q_value, self._Q_func),
+            'R': self._cost_emit(self._R_value, self._R_func),
+            'Q_e': self._cost_emit(self._Q_e_value, self._Q_e_func),
+            'x_ref': self._cost_emit(self._x_ref_value, self._x_ref_func),
             'barrier': self._barrier,
             'terminal_barrier': self._terminal_barrier,
         }

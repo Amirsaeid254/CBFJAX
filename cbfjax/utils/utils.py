@@ -112,22 +112,6 @@ def make_higher_order_lie_deriv_series(func: Callable, field: Callable, deg: int
     return derivatives
 
 
-def ensure_batch_dim(x: jnp.ndarray, target_ndim: int = 2) -> jnp.ndarray:
-    """
-    Ensure array has at least target number of dimensions.
-
-    Args:
-        x: Input array
-        target_ndim: Target number of dimensions (default 2)
-
-    Returns:
-        Array with at least target_ndim dimensions
-    """
-    while x.ndim < target_ndim:
-        x = jnp.expand_dims(x, 0)
-    return x
-
-
 def higher_order_lie_deriv(func: Callable, field: Callable, order: int) -> Callable:
     """
     Compute higher-order Lie derivative directly.
@@ -472,3 +456,50 @@ def check_qp_feasibility(G, h, tol=1e-4):
     return s_opt <= tol
 
 
+
+
+# ----------------------------------------------------------------- ensembles
+
+def stack_ensemble(template, where, values):
+    """
+    Build an N-robot ensemble by vmapping ``eqx.tree_at`` over ``values``.
+
+    Each member i is ``eqx.tree_at(where, template, values[i])``: the template
+    controller is built ONCE; only the selected leaf is substituted, so
+    construction never re-runs under vmap. The result has the template's
+    structure with every leaf array gaining a leading axis of size N — pass it
+    to ``eqx.filter_vmap`` together with per-robot states for one compiled
+    rollout::
+
+        ensemble = stack_ensemble(filt, lambda f: f._desired_control_module.goal, goals)
+        trajs = eqx.filter_vmap(
+            lambda f, x0: f.get_optimal_trajs_zoh(x0=x0[None], timestep=dt,
+                                                  sim_time=T, method='dopri5')[:, 0, :]
+        )(ensemble, x0s)
+
+    Stateful controllers: controller state is threaded functionally
+    (``u, state = filt.optimal_control(x, state)``), so under vmap each member
+    carries its own independent state lane (per-robot QP warm starts, iLQR
+    nominal trajectories, ...). State STRUCTURE must be identical across
+    members — guaranteed here since all members share one template. The
+    authoritative description of the ensemble stateful semantics (per-robot
+    lanes, the ``init_ctrl_states`` injection path, and the MPPI same-key
+    caveat) lives in ``cbfjax.utils.integration.get_ensemble_trajs_zoh`` — use
+    that as the canonical ensemble rollout. Host-backed controllers
+    (NMPC/acados, do-mpc) are not pytrees and cannot be ensembled.
+    """
+    import equinox as eqx
+    return eqx.filter_vmap(lambda v: eqx.tree_at(where, template, v))(values)
+
+
+def unstack_ensemble(stacked, i):
+    """
+    Extract member ``i`` from a stacked ensemble pytree.
+
+    Leaf arrays are indexed at ``i`` along the leading ensemble axis; static
+    (non-leaf) parts survive unchanged via ``eqx.partition``/``eqx.combine``.
+    """
+    import equinox as eqx
+    leaves, static = eqx.partition(stacked, eqx.is_array)
+    leaves_i = jax.tree_util.tree_map(lambda a: a[i], leaves)
+    return eqx.combine(leaves_i, static)

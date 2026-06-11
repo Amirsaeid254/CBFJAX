@@ -99,8 +99,8 @@ print(f"  Alpha: 0.5 * h")
 
 print("\nTesting controller...")
 
-u_test, _ = safety_filter.optimal_control(x0[None], safety_filter.get_init_state())
-print(f"  Test control: u = {np.array(u_test[0])}")
+u_test, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
+print(f"  Test control: u = {np.array(u_test)}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -134,7 +134,7 @@ n_steps = x_hist.shape[0] - 1
 time_array = np.linspace(0, sim_time, n_steps + 1)
 
 # Compute controls and info
-u_hist, _, info_hist = safety_filter.optimal_control_with_info(x_hist, safety_filter.get_init_state())
+u_hist, _, info_hist = jax.vmap(safety_filter.optimal_control_with_info, in_axes=(0, None))(x_hist, safety_filter.get_init_state())
 
 # Compute barrier values
 h_vals = jax.vmap(barrier.hocbf)(x_hist)

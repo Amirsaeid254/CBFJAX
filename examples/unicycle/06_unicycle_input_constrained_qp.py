@@ -50,7 +50,8 @@ qp_params = {
     'slack_gain': 200,
     'slacked': True,
     'use_softplus': False,
-    'softplus_gain': 2.0
+    'softplus_gain': 2.0,
+    'qp_solver': 'mpax'
 }
 
 # Control bounds for unicycle dynamics
@@ -109,8 +110,8 @@ print(f"  Control bounds: low={control_low}, high={control_high}")
 
 print("\nTesting controller...")
 
-u_test, _ = safety_filter.optimal_control(x0[None], safety_filter.get_init_state())
-print(f"  Test control: u = {np.array(u_test[0])}")
+u_test, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
+print(f"  Test control: u = {np.array(u_test)}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -144,7 +145,7 @@ n_steps = x_hist.shape[0] - 1
 time_array = np.linspace(0, sim_time, n_steps + 1)
 
 # Compute controls and info
-u_hist, _, info_hist = safety_filter.optimal_control_with_info(x_hist, safety_filter.get_init_state())
+u_hist, _, info_hist = jax.vmap(safety_filter.optimal_control_with_info, in_axes=(0, None))(x_hist, safety_filter.get_init_state())
 
 # Compute barrier values
 h_vals = jax.vmap(map_.barrier.hocbf)(x_hist)

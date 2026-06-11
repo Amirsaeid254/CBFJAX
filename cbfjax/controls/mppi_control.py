@@ -5,7 +5,7 @@ Fully JIT-compiled: vmap over K trajectory samples, lax.scan over N time steps.
 No Python loops in the hot path.
 
 Stateful interface (Optax-style):
-- _optimal_control_single(x, state) -> (u, new_state)
+- optimal_control(x, state) -> (u, new_state)
 - get_init_state()                  -> MPPIState(U, key)
 
 State carries the warm-start nominal trajectory U and the PRNGKey so the
@@ -30,7 +30,7 @@ Usage::
     )
 
     state = ctrl.get_init_state()
-    u, state = ctrl._optimal_control_single(x, state)
+    u, state = ctrl.optimal_control(x, state)
 """
 
 import jax
@@ -204,7 +204,7 @@ class MPPIControl(BaseControl):
         eps_eff = V - U[None]                           # (K, N, action_dim)
 
         # -- rollout: vmap over K, scan over N --------------------------
-        def rollout_single(v_k: jnp.ndarray) -> jnp.ndarray:
+        def rollout_one(v_k: jnp.ndarray) -> jnp.ndarray:
             """Roll out one perturbed trajectory; return total cost."""
 
             def step(x_t, args):
@@ -216,7 +216,7 @@ class MPPIControl(BaseControl):
             x_final, step_costs = jax.lax.scan(step, x, (jnp.arange(N), v_k))
             return jnp.sum(step_costs) + self._terminal_cost_func(x_final)
 
-        S = jax.vmap(rollout_single)(V)                 # (K,)
+        S = jax.vmap(rollout_one)(V)                 # (K,)
 
         # -- importance weights (numerically stable) --------------------
         # Guard: if any S is non-finite (fp32 overflow), replace with large finite value
@@ -244,7 +244,7 @@ class MPPIControl(BaseControl):
     # ------------------------------------------------------------------
 
     @jax.jit
-    def _optimal_control_single(
+    def optimal_control(
         self,
         x:     jnp.ndarray,
         state: MPPIState = None,
@@ -258,7 +258,7 @@ class MPPIControl(BaseControl):
         U_shifted = jnp.concatenate([U_new[1:], U_new[-1:]], axis=0)
         return u_star, MPPIState(U=U_shifted, key=new_key)
 
-    def _optimal_control_single_with_info(
+    def optimal_control_with_info(
         self,
         x:     jnp.ndarray,
         state: MPPIState = None,
@@ -311,7 +311,7 @@ class MPPIControl(BaseControl):
         if self._has_control_bounds:
             V = jnp.clip(V, jnp.array(self._control_low), jnp.array(self._control_high))
 
-        def rollout_single(v_k: jnp.ndarray):
+        def rollout_one(v_k: jnp.ndarray):
             """Roll out one perturbed sequence; collect every state visited."""
 
             def step(x_t, args):
@@ -328,7 +328,7 @@ class MPPIControl(BaseControl):
             total_cost = jnp.sum(step_costs) + self._terminal_cost_func(x_final)
             return x_traj, total_cost
 
-        x_trajs, S = jax.vmap(rollout_single)(V)   # (K, N+1, state_dim), (K,)
+        x_trajs, S = jax.vmap(rollout_one)(V)   # (K, N+1, state_dim), (K,)
 
         # Importance weights — same formula as _mppi_update
         S       = jnp.where(jnp.isfinite(S), S, jnp.finfo(S.dtype).max / 2)

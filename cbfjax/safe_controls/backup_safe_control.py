@@ -71,46 +71,28 @@ class BackupSafeControl(InputConstQPSafeControl):
             'barrier_cfg': self.barrier_cfg
         }
 
+    def _assemble_qp(self, x: jnp.ndarray, state) -> tuple:
+        """
+        Assemble the backup QP for dim inference (see _infer_qp_init_state).
+
+        Mirrors the QP built in optimal_control: one CBF row plus the
+        2*action_dim control-bound rows, no equality constraints.
+        """
+        hocbf, Lf_hocbf, Lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
+        Q_matrix, c_vector, state = self._make_objective(x, state)
+        G_cbf = -jnp.atleast_2d(Lg_hocbf).reshape(1, -1)
+        h_cbf_val = Lf_hocbf + self._alpha(hocbf - self.barrier_cfg['epsilon'])
+        h_cbf = jnp.atleast_1d(h_cbf_val.squeeze())
+        G_low = -jnp.eye(self._action_dim)
+        h_low = -jnp.array(self._control_low)
+        G_high = jnp.eye(self._action_dim)
+        h_high = jnp.array(self._control_high)
+        G = jnp.vstack([G_cbf, G_low, G_high])
+        h = jnp.concatenate([h_cbf, h_low, h_high])
+        A, b = self._make_eq_const(x, Q_matrix)
+        return Q_matrix, c_vector, G, h, A, b, state
+
     def optimal_control(self, x: jnp.ndarray, state=None):
-        """
-        Compute backup safe optimal control with automatic batch support.
-
-        Args:
-            x: State(s) - shape (state_dim,) or (batch, state_dim)
-            state: Controller state (optional, uses get_init_state() if None)
-
-        Returns:
-            Tuple (u, new_state)
-        """
-        if state is None:
-            state = self.get_init_state()
-        x = jnp.atleast_2d(x)
-
-        # Vmap over batch dimension
-        u, new_state = jax.vmap(self._optimal_control_single, in_axes=(0, None))(x, state)
-
-        return u, new_state
-
-    def optimal_control_with_info(self, x: jnp.ndarray, state=None):
-        """
-        Compute backup safe optimal control with diagnostic info.
-
-        Args:
-            x: State(s) - shape (state_dim,) or (batch, state_dim)
-            state: Controller state (optional, uses get_init_state() if None)
-
-        Returns:
-            Tuple (u, new_state, info)
-        """
-        if state is None:
-            state = self.get_init_state()
-        x = jnp.atleast_2d(x)
-
-        u, new_state, info = jax.vmap(self._optimal_control_single_with_info, in_axes=(0, None))(x, state)
-
-        return u, new_state, info
-
-    def _optimal_control_single(self, x: jnp.ndarray, state=None):
         """
         Compute backup safe optimal control for SINGLE state.
 
@@ -162,7 +144,8 @@ class BackupSafeControl(InputConstQPSafeControl):
         )
 
         # Compute QP-based safe control (always compute, select based on gamma)
-        Q_matrix, c_vector, state = self._make_objective_single(x, state)
+        ctrl_state, qp_state = self._split_state(state)
+        Q_matrix, c_vector, ctrl_state = self._make_objective(x, ctrl_state)
 
         # CBF constraints - ensure correct shapes for QP
         G_cbf = -jnp.atleast_2d(Lg_hocbf).reshape(1, -1)  # (1, action_dim)
@@ -180,10 +163,11 @@ class BackupSafeControl(InputConstQPSafeControl):
         h = jnp.concatenate([h_cbf, h_low, h_high])
 
         # Make equality constraints
-        A, b = self._make_eq_const_single(x, Q_matrix)
+        A, b = self._make_eq_const(x, Q_matrix)
 
         # Solve QP
-        u_qp, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
+        u_qp, qp_state = self._qp_solver(Q_matrix, c_vector, G, h, A, b, qp_state)
+        state = self._merge_state(ctrl_state, qp_state)
 
         u_star = jnp.where(gamma >= 0, u_qp, ub_select)
 
@@ -197,7 +181,7 @@ class BackupSafeControl(InputConstQPSafeControl):
 
         return u, state
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None):
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None):
         """
         Compute backup safe optimal control with diagnostic info for SINGLE state.
 
@@ -235,7 +219,8 @@ class BackupSafeControl(InputConstQPSafeControl):
         )
 
         # Compute QP-based safe control (stateful)
-        Q_matrix, c_vector, state = self._make_objective_single(x, state)
+        ctrl_state, qp_state = self._split_state(state)
+        Q_matrix, c_vector, ctrl_state = self._make_objective(x, ctrl_state)
 
         G_cbf = -jnp.atleast_2d(Lg_hocbf).reshape(1, -1)
         h_cbf_val = Lf_hocbf + self._alpha(hocbf - self.barrier_cfg['epsilon'])
@@ -249,8 +234,9 @@ class BackupSafeControl(InputConstQPSafeControl):
         G = jnp.vstack([G_cbf, G_low, G_high])
         h = jnp.concatenate([h_cbf, h_low, h_high])
 
-        A, b = self._make_eq_const_single(x, Q_matrix)
-        u_qp, _ = self._qp_solver(Q_matrix, c_vector, G, h, A, b)
+        A, b = self._make_eq_const(x, Q_matrix)
+        u_qp, qp_state = self._qp_solver(Q_matrix, c_vector, G, h, A, b, qp_state)
+        state = self._merge_state(ctrl_state, qp_state)
 
         u_star = jnp.where(gamma >= 0, u_qp, ub_select)
 
@@ -355,7 +341,7 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
             'params': dict(self._params),
             'dynamics': self._dynamics,
             'barrier': self._barrier,
-            'desired_control': self._desired_control,
+            'desired_control': self._emit_desired_control(),
             'desired_control_init_state': self._desired_control_init_state,
             'Q': self._Q,
             'c': self._c,
@@ -368,7 +354,7 @@ class MinIntervBackupSafeControl(BackupSafeControl, BaseMinIntervSafeControl):
     def desired_control(self):
         return self._desired_control
 
-    def _make_objective_single(self, x: jnp.ndarray, state=None) -> tuple:
+    def _make_objective(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Create QP objective for minimum intervention.
 

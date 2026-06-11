@@ -5,7 +5,7 @@ This module implements closed-form safe control algorithms using immutable
 data structures that are JIT-compatible for high performance.
 
 All controllers follow the stateful interface:
-- _optimal_control_single(x, state) -> (u, new_state)
+- optimal_control(x, state) -> (u, new_state)
 - get_init_state() -> initial controller state
 """
 
@@ -72,7 +72,7 @@ class CFSafeControl(BaseCBFSafeControl):
             'params': dict(self._params),
         }
 
-    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute safe optimal control for a single state using closed-form solution.
 
@@ -113,7 +113,7 @@ class CFSafeControl(BaseCBFSafeControl):
 
         return u, state
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
         """Compute safe optimal control with diagnostic info."""
         Q_matrix, state = self._Q(x, state)
         c_vector, state = self._c(x, state)
@@ -193,13 +193,13 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
             'alpha': self._alpha,
             'dynamics': self._dynamics,
             'barrier': self._barrier,
-            'desired_control': self._desired_control,
+            'desired_control': self._emit_desired_control(),
             'desired_control_init_state': self._desired_control_init_state,
             'params': dict(self._params),
         }
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute minimum intervention safe control for a single state.
 
@@ -238,7 +238,7 @@ class MinIntervCFSafeControl(BaseMinIntervSafeControl):
 
         return u, new_state
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
         """Compute minimum intervention safe control with diagnostic info."""
         hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = hocbf - self._buffer
@@ -291,7 +291,14 @@ class InputConstCFSafeControl(CFSafeControl):
     _ac_barrier: tuple
     _ac_rel_deg: int = eqx.field(static=True)
     _aux_desired_action: Optional[Callable] = eqx.field(static=True)
-    _desired_control: Optional[Callable] = eqx.field(static=True)
+    # Stored under a distinct name so the BaseMinIntervSafeControl ``_desired_control``
+    # property (used by the MinInterv* subclass) does not collide with this field.
+    _ic_desired_control: Optional[Callable] = eqx.field(static=True)
+
+    @property
+    def _desired_control(self) -> Optional[Callable]:
+        """Desired control as stored on this input-constrained controller."""
+        return self._ic_desired_control
 
     @staticmethod
     def _create_identity_func():
@@ -351,7 +358,7 @@ class InputConstCFSafeControl(CFSafeControl):
         self._ac_barrier = tuple(ac_barrier) if ac_barrier is not None else ()
         self._ac_rel_deg = ac_rel_deg if ac_rel_deg is not None else 1
         self._aux_desired_action = aux_desired_action
-        self._desired_control = desired_control
+        self._ic_desired_control = desired_control
 
         # Complete construction: build augmented dynamics and composed barrier
         # as soon as the components are available.
@@ -390,7 +397,7 @@ class InputConstCFSafeControl(CFSafeControl):
         return self._derive_aux_desired_action()
 
     @jax.jit
-    def _optimal_control_single(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control(self, x: jnp.ndarray, state=None) -> tuple:
         """
         Compute safe optimal control for input-constrained system.
 
@@ -421,7 +428,7 @@ class InputConstCFSafeControl(CFSafeControl):
 
         return u, state
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, state=None) -> tuple:
+    def optimal_control_with_info(self, x: jnp.ndarray, state=None) -> tuple:
         """Compute safe optimal control with diagnostic info."""
         hocbf, lf_hocbf, lg_hocbf = self._barrier.get_hocbf_and_lie_derivs(x)
         hocbf = hocbf - self._buffer

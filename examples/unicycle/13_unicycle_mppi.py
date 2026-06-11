@@ -180,7 +180,7 @@ vis_idx  = _vis_rng.choice(ctrl.num_samples, N_vis, replace=False)
 print("\nWarm-up (JIT compilation)...")
 _state_warmup = ctrl.get_init_state()
 _t0 = perf_counter()
-_, _ = ctrl._optimal_control_single(x0, _state_warmup)
+_, _ = ctrl.optimal_control(x0, _state_warmup)
 jax.block_until_ready(_)
 ctrl.get_predicted_trajectories(x0, _state_warmup)
 print(f"  Compilation time: {perf_counter() - _t0:.2f} s")
@@ -229,7 +229,7 @@ for step in range(n_steps):
         x_tr, _, w = ctrl.get_predicted_trajectories(x_step, _post_state)
         pred_xy_hist[step] = np.array(x_tr)[vis_idx, :, :2]
         pred_w_hist[step]  = np.array(w)[vis_idx]
-    u, _post_state = ctrl._optimal_control_single(x_step, _post_state)
+    u, _post_state = ctrl.optimal_control(x_step, _post_state)
     u_hist_list.append(np.array(u))
 
 u_hist = np.array(u_hist_list)   # (n_steps, nu)

@@ -4,11 +4,12 @@ Controls module for CBFJAX.
 Provides base control classes that can be extended with safety constraints.
 
 All controllers follow the stateful interface:
-- _optimal_control_single(x, state) -> (u, new_state)
+- optimal_control(x, state) -> (u, new_state)
 - get_init_state() -> initial controller state
 """
 
 from .base_control import BaseControl
+from .goal_control import GoalControl
 from .mppi_control import MPPIControl
 from .control_types import (
     ILQRState,
@@ -56,6 +57,7 @@ def __getattr__(name):
 
 __all__ = [
     "BaseControl",
+    "GoalControl",
     "MPPIControl",
     "NMPCControl",
     "QuadraticNMPCControl",

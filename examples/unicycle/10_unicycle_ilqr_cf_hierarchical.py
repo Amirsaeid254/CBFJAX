@@ -140,14 +140,14 @@ x0 = jnp.array([-1.0, -8.5, 0.0, pi / 2])
 
 # Test iLQR alone
 print("  Testing iLQR controller...")
-u_ilqr_test, _ = ilqr_controller.optimal_control(x0[None], ilqr_controller.get_init_state())
-print(f"    iLQR control: u = {np.array(u_ilqr_test[0])}")
+u_ilqr_test, _ = ilqr_controller.optimal_control(x0, ilqr_controller.get_init_state())
+print(f"    iLQR control: u = {np.array(u_ilqr_test)}")
 
 # Test CF safety filter
 print("  Testing CF safety filter...")
-u_safe_test, _ = safety_filter.optimal_control(x0[None], safety_filter.get_init_state())
-print(f"    Safe control: u = {np.array(u_safe_test[0])}")
-print(f"    Intervention: du = {np.array(u_safe_test[0] - u_ilqr_test[0])}")
+u_safe_test, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
+print(f"    Safe control: u = {np.array(u_safe_test)}")
+print(f"    Intervention: du = {np.array(u_safe_test - u_ilqr_test)}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -187,7 +187,7 @@ print("\nComputing control actions and analysis data...")
 
 # Thread safety filter state through trajectory via scan (threads iLQR warm-start)
 def safe_scan_step(state, x):
-    u, new_state, info = safety_filter._optimal_control_single_with_info(x, state)
+    u, new_state, info = safety_filter.optimal_control_with_info(x, state)
     return new_state, (u, info)
 
 safe_init_state = safety_filter.get_init_state()
@@ -198,7 +198,7 @@ u_ilqr_hist = safe_info_hist.u_desired
 
 # Thread iLQR state separately for predicted trajectories (visualization only)
 def ilqr_scan_step(state, x):
-    u, new_state, info = ilqr_controller._optimal_control_single_with_info(x, state)
+    u, new_state, info = ilqr_controller.optimal_control_with_info(x, state)
     return new_state, (u, info)
 
 ilqr_init_state = ilqr_controller.get_init_state()
