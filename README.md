@@ -32,10 +32,12 @@ This project is the JAX successor to the
   - NMPC with barrier constraints (acados / do-mpc — optional)
   - Constrained iLQR with barrier-aware cost (trajax — optional)
 - **Composable barrier algebra**: `MultiBarriers`, `SoftCompositionBarrier`,
-  `NonSmoothCompositionBarrier`, `BackupBarrier`.
+  `HardCompositionBarrier`, `BackupBarrier`.
+- **Config-driven construction** (`cbfjax.from_config`): a named barrier
+  namespace — define barriers by name, reference them by name, wire one into
+  the filter; unused entries stay available for plotting/analysis.
 - **Built-in dynamics**: unicycle, single/double integrator, bicycle, inverted pendulum,
   reduced-order unicycle — plus a generic `AffineInControlDynamics` base.
-- **Map editor** (`cbfjax-map-editor`) for visually authoring obstacle/boundary maps.
 - **64-bit precision by default** for the numerical stability that CBF methods require.
 
 ---
@@ -86,14 +88,13 @@ pip install -e .[dev,examples]
 
 ## Quick Start
 
-The pattern is the same for every safe controller in CBFJAX:
+Everything is built from one config dict — named barriers, referenced by
+name, and one controller consuming the barrier it names:
 
 ```text
-dynamics  ──┐
-            ├──► safety_filter ──► safe action u(x)
-barrier   ──┤
-            ├──► assign_desired_control(u_des)
-desired u ──┘
+dynamics ──► barriers {name: spec, ...} ──► filter ──► safe action u(x)
+                                              ▲
+                       desired_control (goal controller / iLQR / MPPI planner)
 ```
 
 ### Minimal example — QP safety filter on a unicycle
@@ -101,75 +102,78 @@ desired u ──┘
 ```python
 import jax.numpy as jnp
 import cbfjax
-from cbfjax.barriers import Barrier
 
-# 1. Dynamics
-dynamics = cbfjax.UnicycleDynamics()  # state: [x, y, v, theta], control: [a, omega]
-
-# 2. Barrier: stay outside the unit disk centered at the origin
-#    h(x) = ||p|| - 1.0 >= 0  (relative degree 2 for unicycle position)
-barrier = (
-    Barrier.create_empty()
-    .assign(barrier_func=lambda x: jnp.linalg.norm(x[:2]) - 1.0, rel_deg=2)
-    .assign_dynamics(dynamics)
-)
-
-# 3. Desired (nominal) controller — drive to a goal
 goal = jnp.array([5.0, 5.0])
-def desired_control(x):
-    return 0.5 * jnp.array([goal[0] - x[0], goal[1] - x[1]])
 
-# 4. QP-based min-intervention safety filter
-safety_filter = (
-    cbfjax.MinIntervQPSafeControl(
-        action_dim=dynamics.action_dim,
-        alpha=lambda h: 1.0 * h,
-        params={"slack_gain": 200.0, "slacked": True},
-    )
-    .assign_dynamics(dynamics)
-    .assign_state_barrier(barrier)
-    .assign_desired_control(desired_control)
-)
+system = cbfjax.from_config({
+    # 1. Dynamics — state [x, y, v, theta], control [a, omega]
+    'dynamics': 'unicycle',
 
-# 5. Query the safe action
-x0 = jnp.array([[-2.0, -2.0, 0.0, 0.0]])     # batched (1, 4)
-u_safe, _ = safety_filter.optimal_control(x0, safety_filter.get_init_state())
+    # 2. Barriers — every barrier gets a name
+    'barriers': {
+        # stay outside the unit disk at the origin (relative degree 2)
+        'disk': {'type': 'func',
+                 'h': lambda x: jnp.linalg.norm(x[:2]) - 1.0,
+                 'rel_deg': 2, 'alphas': (10.0,)},
+    },
+
+    # 3. QP-based min-intervention safety filter consuming 'disk'
+    'filter': {
+        'type': 'min_interv_qp',
+        'barrier': 'disk',
+        'action_dim': 2,
+        'alpha': lambda h: 1.0 * h,
+        'params': {'slack_gain': 200.0, 'slacked': True, 'qp_solver': 'qpax'},
+        'desired_control': lambda x: 0.5 * jnp.array([goal[0] - x[0],
+                                                      goal[1] - x[1]]),
+    },
+})
+
+# 4. Query the safe action (single state in, single action out)
+x0 = jnp.array([-2.0, -2.0, 0.0, 0.0])
+u_safe, _ = system.filter.optimal_control(x0, system.filter.get_init_state())
 print(u_safe)
 ```
 
-### Multiple barriers via `MultiBarriers`
+### Maps and compositions
+
+A `map` entry turns a geometric world description into member barriers, and
+compositions reduce them: `soft_composition` (scalar softmin — what
+closed-form filters need), `hard_composition` (scalar exact min), or
+`multi_barrier` (one QP constraint per member). Entries nobody consumes are
+still built — handy for plotting and analysis.
 
 ```python
-import jax.numpy as jnp
-from cbfjax.barriers import Barrier, MultiBarriers
-import cbfjax
-
-dynamics = cbfjax.UnicycleDynamics()
-
-# Two obstacle barriers + workspace boundary, each with dynamics already assigned.
-def obstacle(center, radius):
-    return lambda x: jnp.linalg.norm(x[:2] - jnp.array(center)) - radius
-
-barriers = [
-    Barrier.create_empty().assign(obstacle([2.0, 2.0], 0.5), rel_deg=2).assign_dynamics(dynamics),
-    Barrier.create_empty().assign(obstacle([-1.0, 3.0], 0.5), rel_deg=2).assign_dynamics(dynamics),
-    Barrier.create_empty().assign(
-        lambda x: 10.0 - jnp.maximum(jnp.abs(x[0]), jnp.abs(x[1])), rel_deg=2
-    ).assign_dynamics(dynamics),
-]
-
-# Pass infer_dynamics=True to pick up the dynamics from the first barrier.
-multi = MultiBarriers.create_empty().add_barriers(barriers, infer_dynamics=True)
+cfg = {
+    'dynamics': 'unicycle',
+    'barriers': {
+        'map': {'type': 'map',
+                'geoms': (
+                    ('cylinder', {'center': (2.0, 2.0), 'radius': 0.5}),
+                    ('norm_box', {'center': (-1.0, 3.0), 'size': (1.0, 1.0)}),
+                    ('norm_boundary', {'center': (0.0, 0.0), 'size': (10.0, 10.0)}),
+                ),
+                'velocity': (2, (-2.0, 2.0)),
+                'cfg': {'softmin_rho': 20, 'pos_barrier_rel_deg': 2,
+                        'vel_barrier_rel_deg': 1, 'obstacle_alpha': (10.0,),
+                        'boundary_alpha': (10.0,), 'velocity_alpha': ()}},
+        'rows': {'type': 'multi_barrier', 'barriers': ['map']},
+    },
+    'filter': {'type': 'min_interv_input_const_qp', 'barrier': 'rows', ...},
+}
+system = cbfjax.from_config(cfg)
+system.barriers['map']     # the Map instance — plotting, member access
+system.barriers['rows']    # the MultiBarriers the filter consumes
 ```
 
 ### Closed-loop simulation
 
 ```python
-trajs = safety_filter.get_optimal_trajs(
-    x0=x0,
+trajs = system.filter.get_optimal_trajs(
+    x0=x0[None],           # (batch, state_dim)
     sim_time=10.0,
     timestep=0.01,
-    method="euler",
+    method='euler',
 )
 print(trajs.shape)  # (T, batch, state_dim)
 ```
@@ -184,19 +188,6 @@ python 03_unicycle_qp.py
 
 ---
 
-## Map editor
-
-CBFJAX ships with a browser-based visual editor for authoring obstacle/boundary maps:
-
-```bash
-cbfjax-map-editor
-```
-
-It opens an HTML canvas in your default browser where you can drop in cylinders,
-ellipses, norm-boxes, and boundaries and export a CBFJAX `map_config.py`.
-
----
-
 ## Architecture
 
 ```
@@ -204,7 +195,7 @@ cbfjax/
 ├── barriers/                       # CBF & HOCBF
 │   ├── barrier.py                  #  Single barrier
 │   ├── multi_barrier.py            #  Multiple barriers
-│   ├── composite_barrier.py        #  Soft / non-smooth composition
+│   ├── composite_barrier.py        #  Soft / hard composition
 │   └── backup_barrier.py           #  Backup-CBF
 ├── dynamics/                       # Affine-in-control system dynamics
 │   ├── base_dynamic.py
@@ -227,13 +218,12 @@ cbfjax/
 │   ├── backup_safe_control.py
 │   ├── nmpc_safe_control.py        #  (optional)
 │   └── ilqr_safe_control.py        #  (optional)
+├── factory.py                      # from_config: named-barrier construction
 ├── utils/
 │   ├── integration.py              #  Diffrax-based ODE rollouts
 │   ├── make_map.py                 #  Map / barrier factory
 │   ├── jax2casadi/                 #  JAX → CasADi conversion (used by NMPC)
-│   ├── map_editor/                 #  HTML map editor
 │   ├── profile_utils.py
-│   ├── run_map_editor.py
 │   └── utils.py
 └── config.py                       # JAX configuration helpers
 ```
@@ -258,7 +248,8 @@ where `α` is a class-K function.
 
 For barriers of relative degree `r > 1`, CBFJAX automatically constructs the HOCBF
 series `ψ_0, ψ_1, …, ψ_r` from a user-provided list of class-K functions
-(via `Barrier(...).assign(barrier_func, rel_deg=r, alphas=[α_1, …, α_r])`).
+(via `Barrier(barrier_func=h, rel_deg=r, alphas=[α_1, …, α_r], dynamics=dyn)`
+or a `{'type': 'func', 'h': h, 'rel_deg': r, 'alphas': [...]}` config entry).
 
 ---
 
@@ -267,11 +258,11 @@ series `ψ_0, ψ_1, …, ψ_r` from a user-provided list of class-K functions
 If you use CBFJAX in your research, please cite it as:
 
 ```bibtex
-@software{CBFJAX,
-  author       = {Safari, Amirsaeid},
-  title        = {{CBFJAX}: Control Barrier Functions in {JAX}},
-  howpublished = {\url{https://github.com/amirsaeid254/cbfjax}},
-  year         = {2025}
+@article{safari2026predicted,
+  title={Predicted-Flow Control Barrier Functions for Real-Time Safe Optimal Control},
+  author={Safari, Amirsaeid and Hoagg, Jesse B},
+  journal={arXiv preprint arXiv:2606.00297},
+  year={2026}
 }
 ```
 

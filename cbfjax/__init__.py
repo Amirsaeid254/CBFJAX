@@ -6,7 +6,7 @@ featuring JIT-compiled barrier functions, multiple safe-control backends
 (closed-form, QP, backup-CBF, NMPC, iLQR), and a rich set of system dynamics.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Amirsaeid Safari"
 __email__ = "safari.amirsaeid@gmail.com"
 __license__ = "MIT"

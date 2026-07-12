@@ -162,3 +162,11 @@ test_*.py
 *.bak
 *~
 /examples/backup_examples/unicycle/figs/
+
+# Local test/gate suite (not shipped)
+tests/
+
+# acados build artifacts
+c_generated_code/
+nmpc_model_ocp.json
+examples/unicycle/flowbarrier/
