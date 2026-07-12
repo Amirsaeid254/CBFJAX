@@ -15,8 +15,7 @@ from functools import partial
 from immutabledict import immutabledict
 
 from cbfjax.safe_controls.qp_safe_control import InputConstQPSafeControl
-from cbfjax.utils.integration import get_trajs_from_state_action_func_no_vmap, get_trajs_from_state_action_func_zoh_no_vmap, get_solver
-from cbfjax.utils.utils import ensure_batch_dim
+from cbfjax.utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh, get_solver
 from cbfjax.controls.control_types import QPInfo
 from jaxopt import OSQP
 
@@ -131,7 +130,12 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             alpha_action=None,
             alpha_time_shift=None,
             aug_action_dim=0,
-            theta_flat_dim=0
+            theta_flat_dim=0,
+            # Cost matrices (alternative to callable Q/c)
+            R=None,
+            Lambda=None,
+            Mu=None,
+            lambda_linear=None
     ):
         """
         Initialize ParametricFlowSafeControl.
@@ -157,6 +161,42 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             aug_action_dim: Augmented action dimension
             theta_flat_dim: Flattened theta dimension
         """
+        from ..barriers.parametric_flow_barrier import FlowBarrier
+
+        # A FlowBarrier passed as barrier= (e.g. factory wiring) sets the flow
+        # fields and augmented dynamics automatically.
+        if isinstance(barrier, FlowBarrier) and flow_barrier is None:
+            flow_barrier = barrier
+            theta_flat_dim = (barrier.original_dynamics.action_dim *
+                              barrier.control_param_num)
+            aug_action_dim = (barrier.original_dynamics.action_dim
+                              + theta_flat_dim + 1)
+            dynamics = barrier._augmented_dynamics
+
+        # Cost matrices -> callable Q/c (same construction as assign_cost_matrices)
+        if R is not None:
+            if flow_barrier is None:
+                raise ValueError("cost matrices require a FlowBarrier "
+                                 "('barrier' or 'flow_barrier')")
+            _fb = flow_barrier
+            _ad, _td, _gd = int(action_dim), int(theta_flat_dim), int(aug_action_dim)
+            Q_matrix = jnp.zeros((_gd, _gd))
+            Q_matrix = Q_matrix.at[:_ad, :_ad].set(R)
+            Q_matrix = Q_matrix.at[_ad:_ad + _td, _ad:_ad + _td].set(Lambda)
+            Q_matrix = Q_matrix.at[-1, -1].set(Mu)
+
+            def _Q_func(x, theta, gamma):
+                return Q_matrix
+
+            def _c_func(x, theta, gamma):
+                c_vec = jnp.zeros(_gd)
+                u_p = _fb._parametric_control(gamma, theta)
+                c_vec = c_vec.at[:_ad].set(-R @ u_p)
+                c_vec = c_vec.at[-1].set(lambda_linear)
+                return c_vec
+
+            Q, c = _Q_func, _c_func
+
         # Initialize parent class
         super().__init__(
             action_dim=action_dim,
@@ -309,7 +349,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
 
         def c_func(x, theta, gamma):
             """Static part of c vector (no trajectory computation).
-            The cost functional gradient term is added in _optimal_control_single."""
+            The cost functional gradient term is added in optimal_control."""
             c = jnp.zeros(aug_action_dim)
             u_p = flow_barrier._parametric_control(gamma, theta)
             c = c.at[:action_dim].set(-R @ u_p)
@@ -367,7 +407,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
-    def _optimal_control_single(self, x: jnp.ndarray, theta: jnp.ndarray = None, gamma: jnp.ndarray = None, state = None) -> tuple:
+    def optimal_control(self, x: jnp.ndarray, theta: jnp.ndarray = None, gamma: jnp.ndarray = None, state = None) -> tuple:
         """
         Compute optimal augmented control v_aug = [u, ω, z] for single state.
 
@@ -381,7 +421,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             Tuple (v_aug, new_state)
         """
         if theta is None or gamma is None:
-            theta_default, gamma_default = self._flow_barrier._get_default_parameters_single()
+            theta_default, gamma_default = self._flow_barrier._get_default_parameters()
             theta = theta_default if theta is None else theta
             gamma = gamma_default if gamma is None else gamma
 
@@ -391,9 +431,9 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
 
         return v_aug, new_state
 
-    def _optimal_control_single_with_info(self, x: jnp.ndarray, theta: jnp.ndarray = None, gamma: jnp.ndarray = None, state = None) -> tuple:
+    def optimal_control_with_info(self, x: jnp.ndarray, theta: jnp.ndarray = None, gamma: jnp.ndarray = None, state = None) -> tuple:
         if theta is None or gamma is None:
-            theta_default, gamma_default = self._flow_barrier._get_default_parameters_single()
+            theta_default, gamma_default = self._flow_barrier._get_default_parameters()
             theta = theta_default if theta is None else theta
             gamma = gamma_default if gamma is None else gamma
 
@@ -413,14 +453,14 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         JIT-compiled fused computation of all QP matrices.
         Single ODE solve for both cost gradient and barrier Jacobians.
         """
-        s = self._flow_barrier._create_augmented_state_single(x, theta, gamma)
+        s = self._flow_barrier._create_augmented_state(x, theta, gamma)
 
         flow_barrier = self._flow_barrier
         cost_functional = self._cost_functional
 
         def combined(s_inner):
-            x_i, theta_i, gamma_i = flow_barrier._extract_parameters_from_state_single(s_inner)
-            trajectory, dense_func = flow_barrier._compute_trajectory_single(x_i, theta_i, gamma_i)
+            x_i, theta_i, gamma_i = flow_barrier._extract_parameters_from_state(s_inner)
+            trajectory, dense_func = flow_barrier.compute_trajectory(x_i, theta_i, gamma_i)
 
             # Cost on shared trajectory
             J = cost_functional(trajectory)
@@ -461,7 +501,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         G_safety = -Lg_h
 
         if self._has_control_bounds:
-            G_bounds, h_bounds = self._extend_control_bounds_single(x)
+            G_bounds, h_bounds = self._extend_control_bounds(x)
             G = jnp.vstack([G_safety, G_bounds])
             h = jnp.concatenate([h_safety, h_bounds])
         else:
@@ -515,41 +555,9 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
 
         return h_safety
 
-    def optimal_control(
-            self,
-            x: jnp.ndarray,
-            theta: Optional[jnp.ndarray] = None,
-            gamma: Optional[jnp.ndarray] = None,
-            state=None
-    ) -> tuple:
-        """
-        Compute optimal augmented control with batching support.
-
-        Args:
-            x: State vector (n,) or batch (batch, n)
-            theta: Control parameters or None
-            gamma: Time shift or None
-            state: Controller state (passed through)
-
-        Returns:
-            Tuple (v_aug_batch, new_state)
-        """
-        x_batched = ensure_batch_dim(x)
-        batch_size = x_batched.shape[0]
-
-        if theta is None or gamma is None:
-            theta_default, gamma_default = self._flow_barrier._get_default_parameters_single()
-            theta = jnp.tile(jnp.expand_dims(theta_default, 0), (batch_size, 1, 1)) if theta is None else theta
-            gamma = jnp.tile(jnp.array([gamma_default]), (batch_size, 1)) if gamma is None else gamma
-
-        v_aug_batch, _ = jax.vmap(
-            self._optimal_control_single, in_axes=(0, 0, 0, None)
-        )(x_batched, theta, gamma, state)
-
-        return v_aug_batch, state
 
     @jax.jit
-    def _make_eq_const_single(self, x: jnp.ndarray, Q_matrix: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    def _make_eq_const(self, x: jnp.ndarray, Q_matrix: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
         JIT-compiled override of parent class method for equality constraints.
 
@@ -560,9 +568,9 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         Returns:
             Tuple (A, b) for equality constraints Av = b
         """
-        return super()._make_eq_const_single(x, Q_matrix)
+        return super()._make_eq_const(x, Q_matrix)
 
-    def _extend_control_bounds_single(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    def _extend_control_bounds(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
         Extend control bounds to augmented action space for single state.
         Bounds apply to physical control u and time shift rate z.
@@ -594,13 +602,13 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
 
         return G_extended, h_extended
 
-    def _get_parametric_control_value_single(
+    def get_parametric_control_value(
             self,
             theta: jnp.ndarray,
             gamma: jnp.ndarray
     ) -> jnp.ndarray:
         """
-        Get current parametric control value u_p(γ, θ) for single state.
+        Get current parametric control value u_p(γ, θ). Batch with jax.vmap.
 
         Args:
             theta: Control parameters (action_dim, num_params)
@@ -611,32 +619,15 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         """
         return self._flow_barrier._parametric_control(gamma, theta)
 
-    def get_parametric_control_value(
-            self,
-            theta: jnp.ndarray,
-            gamma: jnp.ndarray
-    ) -> jnp.ndarray:
-        """
-        Get current parametric control value u_p(γ, θ).
-
-        Args:
-            theta: Control parameters (action_dim, num_params)
-            gamma: Time shift scalar
-
-        Returns:
-            Parametric control (batch_size, action_dim)
-        """
-        return jax.vmap(self._flow_barrier._parametric_control, in_axes=(0,0))(gamma, theta)
-
     def get_init_state(self):
         """Get initial controller state for warm-starting OSQP.
 
         Runs one cold-start solve with default parameters to get the
         KKTSolution pytree with correct shapes.
         """
-        theta, gamma = self._flow_barrier._get_default_parameters_single()
+        theta, gamma = self._flow_barrier._get_default_parameters()
         x_dummy = jnp.zeros(self._flow_barrier.original_dynamics.state_dim)
-        _, init_state = self._optimal_control_single(x_dummy, theta, gamma, state=None)
+        _, init_state = self.optimal_control(x_dummy, theta, gamma, state=None)
         return init_state
 
     def _validate_setup(self):
@@ -660,31 +651,24 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         """Generate safe trajectories using parametric flow control."""
         self._validate_setup()
 
-        # Ensure batch dimension
-        x0 = ensure_batch_dim(x0)
-        batch_size = x0.shape[0]
-
-        # Get default parameters if not provided
+        # Single-trajectory (batch with jax.vmap at the caller)
         if theta0 is None or gamma0 is None:
-            theta_default, gamma_default = self._flow_barrier._get_default_parameters_single()
-            if theta0 is None:
-                theta0 = jnp.tile(theta_default[None, ...], (batch_size, 1, 1))
-            if gamma0 is None:
-                gamma0 = jnp.full((batch_size,), gamma_default)
+            theta_default, gamma_default = self._flow_barrier._get_default_parameters()
+            theta0 = theta_default if theta0 is None else theta0
+            gamma0 = gamma_default if gamma0 is None else gamma0
 
-        # Create initial augmented states - BATCHED version
-        s0 = self._flow_barrier._create_augmented_state_batched(x0, theta0, gamma0)
+        s0 = self._flow_barrier._create_augmented_state(x0, theta0, gamma0)
 
         def augmented_control_func(s_current: jnp.ndarray) -> jnp.ndarray:
             """Control function for SINGLE augmented state."""
             current_x, current_theta, current_gamma = \
-                self._flow_barrier._extract_parameters_from_state_single(s_current)
+                self._flow_barrier._extract_parameters_from_state(s_current)
 
-            v_aug, _ = self._optimal_control_single(current_x, current_theta, current_gamma)
+            v_aug, _ = self.optimal_control(current_x, current_theta, current_gamma)
             return v_aug
 
         # Use non-vmap version since CVXOPT is not JAX-compatible
-        return get_trajs_from_state_action_func_no_vmap(
+        return get_trajs_from_state_action_func(
             x0=s0,
             dynamics=self._dynamics,
             action_func=augmented_control_func,  # Single-state function
@@ -725,20 +709,13 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         """
         self._validate_setup()
 
-        # Ensure batch dimension
-        x0 = ensure_batch_dim(x0)
-        batch_size = x0.shape[0]
-
-        # Get default parameters if not provided
+        # Single-trajectory (batch with jax.vmap at the caller)
         if theta0 is None or gamma0 is None:
-            theta_default, gamma_default = self._flow_barrier._get_default_parameters_single()
-            if theta0 is None:
-                theta0 = jnp.tile(theta_default[None, ...], (batch_size, 1, 1))
-            if gamma0 is None:
-                gamma0 = jnp.full((batch_size,), gamma_default)
+            theta_default, gamma_default = self._flow_barrier._get_default_parameters()
+            theta0 = theta_default if theta0 is None else theta0
+            gamma0 = gamma_default if gamma0 is None else gamma0
 
-        # Create initial augmented states - BATCHED version
-        s0 = self._flow_barrier._create_augmented_state_batched(x0, theta0, gamma0)
+        s0 = self._flow_barrier._create_augmented_state(x0, theta0, gamma0)
 
         def augmented_control_func_zoh(s_current: jnp.ndarray) -> jnp.ndarray:
             """
@@ -754,13 +731,13 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
                 Augmented control (aug_action_dim,) to be held constant
             """
             current_x, current_theta, current_gamma = \
-                self._flow_barrier._extract_parameters_from_state_single(s_current)
+                self._flow_barrier._extract_parameters_from_state(s_current)
 
-            v_aug, _ = self._optimal_control_single(current_x, current_theta, current_gamma)
+            v_aug, _ = self.optimal_control(current_x, current_theta, current_gamma)
             return v_aug
 
         # Use non-vmap ZOH version since CVXOPT is not JAX-compatible
-        return get_trajs_from_state_action_func_zoh_no_vmap(
+        return get_trajs_from_state_action_func_zoh(
             x0=s0,
             dynamics=self._dynamics,  # Use AUGMENTED dynamics
             action_func=augmented_control_func_zoh,
@@ -803,20 +780,13 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         """
         self._validate_setup()
 
-        # Ensure batch dimension
-        x0 = ensure_batch_dim(x0)
-        batch_size = x0.shape[0]
-
-        # Get default parameters if not provided
+        # Single-trajectory (batch with jax.vmap at the caller)
         if theta0 is None or gamma0 is None:
-            theta_default, gamma_default = self._flow_barrier._get_default_parameters_single()
-            if theta0 is None:
-                theta0 = jnp.tile(theta_default[None, ...], (batch_size, 1, 1))
-            if gamma0 is None:
-                gamma0 = jnp.full((batch_size,), gamma_default)
+            theta_default, gamma_default = self._flow_barrier._get_default_parameters()
+            theta0 = theta_default if theta0 is None else theta0
+            gamma0 = gamma_default if gamma0 is None else gamma0
 
-        # Create initial augmented states - BATCHED version
-        s0 = self._flow_barrier._create_augmented_state_batched(x0, theta0, gamma0)
+        s0 = self._flow_barrier._create_augmented_state(x0, theta0, gamma0)
 
         num_steps = int(sim_time / timestep) + 1
         solver = get_solver(method)
@@ -827,8 +797,8 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             current_state, ctrl_state = carry
 
             current_x, current_theta, current_gamma = \
-                self._flow_barrier._extract_parameters_from_state_single(current_state)
-            v_aug, new_ctrl_state = self._optimal_control_single(
+                self._flow_barrier._extract_parameters_from_state(current_state)
+            v_aug, new_ctrl_state = self.optimal_control(
                 current_x, current_theta, current_gamma, state=ctrl_state)
 
             def ode_func(t, y, args):
@@ -852,23 +822,9 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             return (next_state, new_ctrl_state), (next_state, v_aug)
 
         init_ctrl_state = self.get_init_state()
-        batch_size = s0.shape[0]
-        batched_ctrl_state = jax.tree.map(
-            lambda leaf: jnp.broadcast_to(leaf, (batch_size,) + leaf.shape),
-            init_ctrl_state
-        )
+        _, (states_seq, actions_seq) = jax.lax.scan(
+            step_forward, (s0, init_ctrl_state), jnp.arange(num_steps - 1))
+        trajs = jnp.concatenate([jnp.expand_dims(s0, 0), states_seq], axis=0)
 
-        def scan_single(s0_single, ctrl_state_single):
-            _, (states_seq, actions_seq) = jax.lax.scan(
-                step_forward, (s0_single, ctrl_state_single), jnp.arange(num_steps - 1))
-            trajs = jnp.concatenate([jnp.expand_dims(s0_single, 0), states_seq], axis=0)
-            return trajs, actions_seq
-
-        trajs, actions = jax.vmap(scan_single)(s0, batched_ctrl_state)
-
-        # Reshape from (batch, time, dim) to (time, batch, dim)
-        trajs = jnp.transpose(trajs, (1, 0, 2))
-        actions = jnp.transpose(actions, (1, 0, 2))
-
-        return trajs, actions
+        return trajs, actions_seq
 

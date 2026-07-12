@@ -20,17 +20,10 @@ import matplotlib.animation as animation
 from immutabledict import immutabledict
 
 # CBFJAX configuration
-import cbfjax.config
-cbfjax.config.configure_jax(platform="cpu", enable_x64=True)
+import cbfjax
+cbfjax.configure_jax(platform="cpu", enable_x64=True)
 
-# CBFJAX imports
 from cbfjax.dynamics import UnicycleDynamics
-from cbfjax.barriers.barrier import Barrier
-from cbfjax.utils.make_map import Map
-
-# FlowBarrier imports
-from cbfjax.barriers import FlowBarrier
-from cbfjax.safe_controls import ParametricFlowSafeControl
 from map_config import map_config
 
 # Get script directory for saving figures
@@ -98,12 +91,12 @@ alpha_gains = {
 goal_pos = jnp.array([[8.0, 8.0]])
 
 # Initial condition
-x0 = jnp.array([[-8.0, -8.0, 0.0, 0.0]])
-x0 = jnp.tile(x0, (goal_pos.shape[0], 1))
+x0 = jnp.array([-8.0, -8.0, 0.0, 0.0])
 
 # Simulation parameters
 timestep = 0.001
 sim_time = 20.0
+make_animation = False  # MP4 render over all frames; enable when needed
 
 # ============================================
 # Setup Dynamics
@@ -126,10 +119,18 @@ print(f"  State dim: {nx}, Action dim: {nu}")
 
 print("Setting up state barriers...")
 
-map_ = Map(dynamics=dynamics, cfg=map_cfg, barriers_info=map_config).create_barriers()
-state_barrier = map_.barrier
+state_parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barriers': {
+        'map':   {'type': 'map', **map_config, 'cfg': map_cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': map_cfg},
+    },
+})
+map_ = state_parts.barriers['map']
+state_barrier = state_parts.barriers['state']
 
-print(f"  State barrier: {len(map_.barrier._barriers)} obstacle/boundary barriers")
+print(f"  State barrier: {len(map_.pos_barriers) + len(map_.vel_barriers)} "
+      "obstacle/boundary barriers")
 
 # ============================================
 # Setup Backup Barrier
@@ -139,33 +140,11 @@ print("Setting up backup barrier...")
 
 def backup_barrier_functional(x):
     """Backup barrier: state_barrier(x) - 0.5 * v^2 / u_max"""
-    state_h = state_barrier._hocbf_single(x)
+    state_h = state_barrier.hocbf(x)
     velocity_term = 0.5 * jnp.pow(x[2], 2) / control_high[0]
     return state_h - velocity_term
 
-backup_barrier = (Barrier.create_empty()
-                 .assign(barrier_func=backup_barrier_functional, rel_deg=1)
-                 .assign_dynamics(dynamics))
-
-print("  Backup barrier configured")
-
-# ============================================
-# Setup FlowBarrier
-# ============================================
-
-print("Setting up FlowBarrier...")
-
-flow_barrier = (FlowBarrier.create_empty(cfg=cfg)
-                .assign_state_barrier(state_barrier)
-                .assign_backup_barrier(backup_barrier)
-                .assign_dynamics(dynamics)
-                .make())
-
-print("  FlowBarrier created successfully")
-
-# Test FlowBarrier
-h_test = flow_barrier.hocbf(x0)
-print(f"  FlowBarrier test value: {np.array(h_test)}")
+print("  Backup barrier configured (as a 'func' entry in the main config)")
 
 # ============================================
 # Setup Cost Functional
@@ -218,32 +197,40 @@ print("  Cost functional configured")
 # Setup ParametricFlowSafeControl
 # ============================================
 
-print("Setting up ParametricFlowSafeControl...")
+print("Setting up FlowBarrier + ParametricFlowSafeControl via cbfjax.from_config...")
 
-safety_filter = ParametricFlowSafeControl(action_dim=dynamics.action_dim,
-                                          params={'qp_mode': 'dual'})
+system = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barriers': {
+        'state':  state_barrier,
+        'backup': {'type': 'func', 'h': backup_barrier_functional, 'rel_deg': 1},
+        'flow':   {'type': 'flow', 'state_barrier': 'state',
+                   'backup_barriers': ['backup'], 'cfg': cfg},
+    },
+    'filter': {
+        'type': 'parametric_flow',
+        'barrier': 'flow',
+        'action_dim': dynamics.action_dim,
+        'params': {'qp_mode': 'dual', 'qp_solver': 'jaxopt_osqp'},
+        'alpha_trajectory': lambda x: alpha_gains['trajectory'] * x,
+        'alpha_backup': lambda x: alpha_gains['backup'] * x,
+        'alpha_action': lambda x: alpha_gains['action'] * x,
+        'alpha_time_shift': lambda x: alpha_gains['time_shift'] * x,
+        'cost_functional': cost_functional,
+        'control_low': control_low,
+        'control_high': control_high,
+        'R': jnp.eye(2) * cost_matrices['R'],
+        'Lambda': jnp.eye(dynamics.action_dim * cfg['control_param_num']) * cost_matrices['Lambda'],
+        'Mu': jnp.array(cost_matrices['Mu']),
+        'lambda_linear': jnp.array(cost_matrices['lambda_linear']),
+    },
+})
+safety_filter = system.filter
+flow_barrier = system.barriers['flow']
 
-# Assign alpha functions
-safety_filter = safety_filter.assign_alpha_functions(
-    alpha_trajectory=lambda x: alpha_gains['trajectory'] * x,
-    alpha_backup=lambda x: alpha_gains['backup'] * x,
-    alpha_action=lambda x: alpha_gains['action'] * x,
-    alpha_time_shift=lambda x: alpha_gains['time_shift'] * x
-)
-
-# Configure safety filter
-safety_filter = (safety_filter
-    .assign_state_barrier(flow_barrier)
-    .assign_cost_functional(cost_functional)
-    .assign_control_bounds(low=control_low, high=control_high))
-
-# Assign cost matrices
-safety_filter = safety_filter.assign_cost_matrices(
-    R=jnp.eye(2) * cost_matrices['R'],
-    Lambda=jnp.eye(dynamics.action_dim * cfg['control_param_num']) * cost_matrices['Lambda'],
-    Mu=jnp.array(cost_matrices['Mu']),
-    lambda_linear=jnp.array(cost_matrices['lambda_linear'])
-)
+# Test FlowBarrier
+h_test = flow_barrier.hocbf(x0)
+print(f"  FlowBarrier test value: {np.array(h_test)}")
 
 print("  ParametricFlowSafeControl configured successfully")
 
@@ -254,7 +241,7 @@ print("  ParametricFlowSafeControl configured successfully")
 print("\nTesting controller...")
 print(f"  Device: {jax.devices()[0]}")
 
-v_aug, _, info = safety_filter._optimal_control_single_with_info(x0.squeeze(0))
+v_aug, _, info = safety_filter.optimal_control_with_info(x0)
 print(f"  Physical control: {np.array(v_aug[:dynamics.action_dim])}")
 print(f"  Parameter update shape: {v_aug[dynamics.action_dim:-1].shape}")
 print(f"  Time shift rate: {np.array(v_aug[-1:])}")
@@ -274,6 +261,10 @@ aug_trajs, actions = safety_filter.get_flow_safe_trajs_action_zoh(
     method='euler',
     use_disturbed=False
 )
+
+# single-trajectory rollout: (T, dim); keep a batch axis for the plotting code
+aug_trajs = aug_trajs[:, None, :]
+actions = actions[:, None, :]
 
 simulation_time = time.time() - start_time
 num_steps = int(sim_time / timestep)
@@ -324,13 +315,13 @@ for i in range(batch_size):
     theta_i = theta_trajs[:, i, :, :]
     gamma_i = gamma_trajs[:, i, 0]
 
-    flow_info = flow_barrier.get_flow_info(x_i, theta_i, gamma_i)
+    flow_info = jax.vmap(flow_barrier.get_flow_info)(x_i, theta_i, gamma_i)
 
     barrier_values.append(flow_info['flow_safety'])
     predicted_trajectories.append(flow_info['trajectory'])
-    h_backup_values.append(flow_info['h_backup'])
+    h_backup_values.append(flow_info['h_backup'].reshape(-1, 1))
 
-    u_p_i = safety_filter.get_parametric_control_value(theta_i, gamma_i)
+    u_p_i = jax.vmap(safety_filter.get_parametric_control_value)(theta_i, gamma_i)
     u_parametric.append(u_p_i)
 
     v_aug = actions[:, i, :]
@@ -443,7 +434,7 @@ X_grid, Y_grid = np.meshgrid(x_grid, y_grid)
 points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
 points_jax = jnp.array(points)
 points_jax = jnp.concatenate([points_jax, jnp.zeros((points_jax.shape[0], 2))], axis=-1)
-Z = map_.barrier.min_barrier(points_jax)
+Z = jax.vmap(map_.barrier.min_barrier)(points_jax)
 Z = np.array(Z).reshape(X_grid.shape)
 
 # --- Plot 1: Trajectory ---
@@ -695,7 +686,8 @@ plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_BackupAnalysis_{current_
 plt.show()
 
 # --- Animation ---
-print("\nCreating animation...")
+if make_animation:
+    print("\nCreating animation...")
 
 def create_animation():
     xy_points = np.column_stack((X_grid.flatten(), Y_grid.flatten()))
@@ -709,7 +701,7 @@ def create_animation():
                 jnp.full(xy_points.shape[0], v),
                 jnp.full(xy_points.shape[0], theta)
             ))
-            return backup_barrier.hocbf(state_grid)
+            return jax.vmap(system.barriers['backup'].hocbf)(state_grid)
         return jax.vmap(single_backup)(final_states)
 
     # Extract final predicted states
@@ -808,7 +800,8 @@ def create_animation():
     print(f"Animation saved as: {animation_file}")
     plt.show()
 
-create_animation()
+if make_animation:
+    create_animation()
 
 print(f"\nPlots saved with timestamp: {current_time}")
 print("Simulation complete!")

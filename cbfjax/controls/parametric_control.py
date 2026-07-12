@@ -81,7 +81,17 @@ class ParametricControl(eqx.Module):
         """
         raise NotImplementedError
 
-    def set_control_bounds(self, low: list, high: list) -> 'ParametricControl':
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        raise NotImplementedError
+
+    def _replace(self, **kwargs):
+        """New instance with the given constructor kwargs replaced."""
+        defaults = self._ctor_defaults()
+        defaults.update(kwargs)
+        return self.__class__(**defaults)
+
+    def set_control_bounds(self, low, high):
         """
         Return new instance with control bounds set.
 
@@ -90,9 +100,11 @@ class ParametricControl(eqx.Module):
             high: Upper bounds for control inputs
 
         Returns:
-            New ParametricControl instance with bounds
+            New instance of the same class with bounds
         """
-        raise NotImplementedError
+        assert len(low) == len(high), 'low and high should have the same length'
+        assert len(low) == self.control_dim, 'bounds length should match control dimension'
+        return self._replace(control_low=low, control_high=high)
 
     def get_action_barrier_functions(self) -> tuple:
         """
@@ -202,28 +214,16 @@ class ZOHParametricControl(ParametricControl):
 
         return tuple(barrier_funcs)
 
-    def set_control_bounds(self, low: tuple, high: tuple) -> 'ZOHParametricControl':
-        """
-        Return new instance with control bounds.
-
-        Args:
-            low: Lower bounds for control inputs (tuple)
-            high: Upper bounds for control inputs (tuple)
-
-        Returns:
-            New ZOHParametricControl with bounds
-        """
-        assert len(low) == len(high), 'low and high should have the same length'
-        assert len(low) == self.control_dim, 'bounds length should match control dimension'
-
-        return ZOHParametricControl(
-            horizon=self.horizon,
-            control_dim=self.control_dim,
-            num_segments=self.num_segments,
-            dt=self.dt,
-            control_low=low,
-            control_high=high
-        )
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
+            'horizon': self.horizon,
+            'control_dim': self.control_dim,
+            'num_segments': self.num_segments,
+            'dt': self.dt,
+            'control_low': self._control_low,
+            'control_high': self._control_high,
+        }
 
 
 class FOHParametricControl(ParametricControl):
@@ -340,28 +340,16 @@ class FOHParametricControl(ParametricControl):
 
         return tuple(barrier_funcs)
 
-    def set_control_bounds(self, low: tuple, high: tuple) -> 'FOHParametricControl':
-        """
-        Return new instance with control bounds.
-
-        Args:
-            low: Lower bounds for control inputs (tuple)
-            high: Upper bounds for control inputs (tuple)
-
-        Returns:
-            New FOHParametricControl with bounds
-        """
-        assert len(low) == len(high), 'low and high should have the same length'
-        assert len(low) == self.control_dim, 'bounds length should match control dimension'
-
-        return FOHParametricControl(
-            horizon=self.horizon,
-            control_dim=self.control_dim,
-            num_waypoints=self.num_waypoints,
-            dt=self.dt,
-            control_low=low,
-            control_high=high
-        )
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
+        return {
+            'horizon': self.horizon,
+            'control_dim': self.control_dim,
+            'num_waypoints': self.num_waypoints,
+            'dt': self.dt,
+            'control_low': self._control_low,
+            'control_high': self._control_high,
+        }
 
 
 def create_parametric_control(method: str, horizon: float, control_dim: int,
@@ -371,7 +359,7 @@ def create_parametric_control(method: str, horizon: float, control_dim: int,
     Factory function to create parametric control instances.
 
     Args:
-        method: 'zoh' or 'foh' (also accepts 'linear_interp' for backward compatibility)
+        method: 'zoh' or 'foh'
         horizon: Time horizon T
         control_dim: Control dimension
         num_params: Number of parameters

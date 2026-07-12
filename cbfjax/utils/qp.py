@@ -1,148 +1,31 @@
 """
-Central QP solver module with a configurable backend registry.
+Central QP solver registry.
 
 All backends solve:
     min  0.5 u'Qu + c'u    s.t.  Gu <= h  (+ optional Au = b)
 
-Backends are thin adapters with a unified signature, selected by name once
-(statically) via get_qp_solver(); the returned function is jit/vmap-compatible.
+Adapters share the signature (Q, c, G, h, A=None, b=None, state=None, **opts)
+-> (u, state) and are jit/vmap-compatible. Each adapter extracts the options
+it understands from opts (`tol`, `maxiter`) and passes its real solver's
+arguments; anything else is ignored. Each adapter carries its warm-start
+builder as its `init_state` attribute, signature (n, m, n_eq=0) -> state.
 """
 
 import dataclasses
+from typing import Callable
 
 import jax.numpy as jnp
-from typing import Callable, Dict, Optional, Tuple
-
 from qpax import solve_qp_primal
 from jaxopt import OSQP
 from jaxopt._src.base import KKTSolution
 from mpax import create_qp, raPDHG
 
-
-def _has_eq_const(A, b) -> bool:
-    return (A is not None and A.shape[0] > 0) or (b is not None and b.shape[0] > 0)
-
-
-def _no_init_state(n: int, m: int, n_eq: int = 0):
-    """Init warm-start state for stateless backends: always None."""
-    return None
-
-
-def _solve_qpax(Q, c, G, h, A=None, b=None, state=None, **opts):
-    """qpax primal interior-point backend (default)."""
-    if A is None:
-        A = jnp.zeros((0, Q.shape[0]))
-        b = jnp.zeros(0)
-    u = solve_qp_primal(Q, c, A, b, G, h, **opts)
-    return u, state
-
-
-_OSQP_SETTINGS = {'tol': 1e-8, 'maxiter': 10000}
-_OSQP = OSQP(**_OSQP_SETTINGS)
-
-
-def _solve_jaxopt_osqp(Q, c, G, h, A=None, b=None, state=None, **opts):
-    """
-    jaxopt boxed-OSQP backend.
-
-    Warm-starts from state (a jaxopt KKTSolution) when given; returns the
-    final KKTSolution as the new state. opts (e.g. tol, maxiter) override
-    the module-level solver settings.
-    """
-    solver = OSQP(**{**_OSQP_SETTINGS, **opts}) if opts else _OSQP
-    params_eq = (A, b) if _has_eq_const(A, b) else None
-    sol = solver.run(
-        init_params=state,
-        params_obj=(Q, c),
-        params_eq=params_eq,
-        params_ineq=(G, h),
-    )
-    return sol.params.primal, sol.params
-
-
-def _init_state_jaxopt_osqp(n: int, m: int, n_eq: int = 0) -> KKTSolution:
-    """
-    Structured zero warm-start state (a jaxopt KKTSolution) for OSQP.
-
-    n: decision variables, m: inequality rows, n_eq: equality rows.
-    The pytree structure must match what ``solver.run`` returns so the state
-    can be carried unchanged across a ``lax.scan`` (cold start = this zero
-    state, which OSQP treats as an ordinary warm start from the origin).
-    ``dual_eq`` is None when there are no equality constraints, matching the
-    structure OSQP produces with ``params_eq=None``.
-    """
-    return KKTSolution(
-        primal=jnp.zeros(n),
-        dual_eq=jnp.zeros(n_eq) if n_eq > 0 else None,
-        dual_ineq=jnp.zeros(m),
-    )
-
-
-def _solve_mpax(Q, c, G, h, A=None, b=None, state=None, **opts):
-    """
-    EXPERIMENTAL: mpax raPDHG first-order backend.
-
-    Gu <= h is passed to mpax as -Gu >= -h; variables are unbounded.
-    opts (e.g. eps_abs, eps_rel, iteration_limit) are forwarded to raPDHG.
-    """
-    n = Q.shape[0]
-    if A is None:
-        A = jnp.zeros((0, n))
-        b = jnp.zeros(0)
-    l = jnp.full(n, -jnp.inf, dtype=h.dtype)
-    ub = jnp.full(n, jnp.inf, dtype=h.dtype)
-    qp = create_qp(Q, c, A, b, -G, -h, l, ub, use_sparse_matrix=False)
-    # dense create_qp sets is_lp = jnp.all(Q == 0), a traced bool under jit;
-    # force the concrete QP path
-    qp = dataclasses.replace(qp, is_lp=False)
-    solver = raPDHG(**{'eps_abs': 1e-8, 'eps_rel': 1e-8, **opts})
-    res = solver.optimize(qp)
-    return res.primal_solution, state
-
-
-QP_SOLVERS: Dict[str, Callable] = {
-    'qpax': _solve_qpax,
-    'jaxopt_osqp': _solve_jaxopt_osqp,
-    'mpax': _solve_mpax,
+# Solver name -> adapter function name; get_qp_solver resolves lazily.
+QP_SOLVERS: dict[str, str] = {
+    'qpax': '_solve_qpax',
+    'jaxopt_osqp': '_solve_jaxopt_osqp',
+    'mpax': '_solve_mpax',
 }
-
-# Parallel registry of warm-start init-state builders, keyed identically to
-# QP_SOLVERS. init_state_fn(n, m, n_eq) -> warm-start state for the next solve.
-# Stateless backends use _no_init_state (always None); their solve adapter
-# threads that None straight through, so a None state lane is a valid no-op.
-QP_INIT_STATES: Dict[str, Callable] = {
-    'qpax': _no_init_state,
-    'jaxopt_osqp': _init_state_jaxopt_osqp,
-    'mpax': _no_init_state,
-}
-
-
-def get_qp_solver(name: str) -> Callable:
-    """Return the backend adapter registered under name."""
-    try:
-        return QP_SOLVERS[name]
-    except KeyError:
-        raise ValueError(
-            f"Unknown QP solver '{name}'. Available: {sorted(QP_SOLVERS)}"
-        ) from None
-
-
-def get_qp_init_state(name: str) -> Callable:
-    """
-    Return the warm-start init-state builder registered under name.
-
-    The returned callable has signature ``(n, m, n_eq=0) -> state`` where n is
-    the number of decision variables, m the number of inequality rows, and n_eq
-    the number of equality rows. It returns None for stateless backends and a
-    structured zero state (matching the solver's output pytree) for warm-start
-    backends such as jaxopt_osqp.
-    """
-    try:
-        return QP_INIT_STATES[name]
-    except KeyError:
-        raise ValueError(
-            f"Unknown QP solver '{name}'. Available: {sorted(QP_INIT_STATES)}"
-        ) from None
 
 
 def solve_qp(Q, c, G, h, A=None, b=None, state=None, *, solver='qpax', **opts):
@@ -153,3 +36,90 @@ def solve_qp(Q, c, G, h, A=None, b=None, state=None, *, solver='qpax', **opts):
     it is threaded through unchanged. Returns (u, state).
     """
     return get_qp_solver(solver)(Q, c, G, h, A, b, state, **opts)
+
+
+def get_qp_solver(name: str) -> Callable:
+    """Return the backend adapter registered under name."""
+    try:
+        return globals()[QP_SOLVERS[name]]
+    except KeyError:
+        raise ValueError(
+            f"Unknown QP solver '{name}'. Available: {sorted(QP_SOLVERS)}"
+        ) from None
+
+
+def get_qp_init_state(name: str) -> Callable:
+    """Return the backend's warm-start init-state builder."""
+    return get_qp_solver(name).init_state
+
+
+def _no_init_state(n: int, m: int, n_eq: int = 0):
+    """Warm-start state for stateless backends: always None."""
+    return None
+
+
+def _solve_qpax(Q, c, G, h, A=None, b=None, state=None, **opts):
+    """qpax primal interior-point backend (default). No iteration cap."""
+    if A is None:
+        A = jnp.zeros((0, Q.shape[0]))
+        b = jnp.zeros(0)
+    u = solve_qp_primal(Q, c, A, b, G, h, solver_tol=opts.get('tol', 1e-5))
+    return u, state
+
+
+_solve_qpax.init_state = _no_init_state
+
+
+def _solve_jaxopt_osqp(Q, c, G, h, A=None, b=None, state=None, **opts):
+    """jaxopt OSQP backend; warm-starts from state (a KKTSolution) and
+    returns the final KKTSolution as the new state."""
+    solver = OSQP(tol=opts.get('tol', 1e-8), maxiter=opts.get('maxiter', 10000))
+    has_eq = (A is not None and A.shape[0] > 0) or (b is not None and b.shape[0] > 0)
+    sol = solver.run(
+        init_params=state,
+        params_obj=(Q, c),
+        params_eq=(A, b) if has_eq else None,
+        params_ineq=(G, h),
+    )
+    return sol.params.primal, sol.params
+
+
+def _init_state_jaxopt_osqp(n: int, m: int, n_eq: int = 0) -> KKTSolution:
+    """Zero warm-start state for OSQP (n vars, m inequality rows, n_eq
+    equality rows).
+
+    The pytree structure must match what ``solver.run`` returns -- including
+    ``dual_eq=None`` when there are no equality constraints -- so the state
+    can be carried unchanged across a ``lax.scan``.
+    """
+    return KKTSolution(
+        primal=jnp.zeros(n),
+        dual_eq=jnp.zeros(n_eq) if n_eq > 0 else None,
+        dual_ineq=jnp.zeros(m),
+    )
+
+
+_solve_jaxopt_osqp.init_state = _init_state_jaxopt_osqp
+
+
+def _solve_mpax(Q, c, G, h, A=None, b=None, state=None, **opts):
+    """mpax raPDHG first-order backend. Gu <= h is passed to mpax as
+    -Gu >= -h; variables are unbounded."""
+    n = Q.shape[0]
+    if A is None:
+        A = jnp.zeros((0, n))
+        b = jnp.zeros(0)
+    lb = jnp.full(n, -jnp.inf, dtype=h.dtype)
+    ub = jnp.full(n, jnp.inf, dtype=h.dtype)
+    qp = create_qp(Q, c, A, b, -G, -h, lb, ub, use_sparse_matrix=False)
+    # dense create_qp sets is_lp = jnp.all(Q == 0), a traced bool under jit;
+    # force the concrete QP path
+    qp = dataclasses.replace(qp, is_lp=False)
+    solver = raPDHG(eps_abs=opts.get('tol', 1e-8),
+                    eps_rel=opts.get('tol', 1e-8),
+                    iteration_limit=opts.get('maxiter', 2147483647))
+    res = solver.optimize(qp)
+    return res.primal_solution, state
+
+
+_solve_mpax.init_state = _no_init_state

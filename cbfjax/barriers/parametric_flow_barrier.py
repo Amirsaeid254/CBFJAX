@@ -17,8 +17,8 @@ from cbfjax.barriers.barrier import Barrier
 from cbfjax.barriers.composite_barrier import SoftCompositionBarrier
 from cbfjax.dynamics.base_dynamic import AffineInControlDynamics, CustomDynamics, create_augmented_dynamics
 from cbfjax.dynamics.single_integrator import SingleIntegratorDynamics
-from cbfjax.utils.utils import softmin, apply_and_batchize, apply_and_batchize_tuple, ensure_batch_dim
-from cbfjax.utils.integration import get_trajs_from_time_action_func_with_dense_single
+from cbfjax.utils.utils import softmin
+from cbfjax.utils.integration import get_trajs_from_time_action_func_with_dense
 
 
 class FlowBarrier(MultiBarriers):
@@ -184,18 +184,8 @@ class FlowBarrier(MultiBarriers):
         Returns:
             New FlowBarrier instance with updated fields
         """
-        defaults = {
-            # Parent MultiBarriers fields
-            'barrier_func': self._barrier_func,
-            'dynamics': self._dynamics,
-            'rel_deg': self._rel_deg,
-            'alphas': self._alphas,
-            'barriers': self._barriers,
-            'hocbf_func': self._hocbf_func,
-            'cfg': self.cfg,
-            'barrier_funcs': self._barrier_funcs,
-            'hocbf_funcs': self._hocbf_funcs,
-            'multidim_indices': self._multidim_indices,
+        defaults = super()._ctor_defaults()
+        defaults.update({
             # FlowBarrier specific fields
             'state_barrier_rel_deg': self._rel_deg,
             'horizon': self.horizon,
@@ -218,7 +208,7 @@ class FlowBarrier(MultiBarriers):
             'integration_method': self.integration_method,
             'control_low': self.control_low,
             'control_high': self.control_high
-        }
+        })
         defaults.update(kwargs)
         return self.__class__(**defaults)
 
@@ -235,11 +225,8 @@ class FlowBarrier(MultiBarriers):
             New FlowBarrier instance with assigned state barrier
         """
         if isinstance(state_barrier, list):
-            assigned_barrier = SoftCompositionBarrier.create_empty(self.cfg).assign_barriers_and_rule(
-                barriers=state_barrier,
-                rule='i',
-                infer_dynamics=True
-            )
+            assigned_barrier = SoftCompositionBarrier(barriers=state_barrier,
+                                                      rule='i', cfg=self.cfg)
         elif isinstance(state_barrier, Barrier):
             assigned_barrier = state_barrier
         else:
@@ -308,76 +295,41 @@ class FlowBarrier(MultiBarriers):
 
         return final_flow_barrier
 
-    # === Public Interface Methods ===
-
-    def _hocbf_single(self, x, theta=None, gamma=None):
-        """
-        Compute highest order CBF for single state using augmented state.
-
-        Args:
-            x: State vector (n,)
-            theta: Control parameters or None
-            gamma: Time shift parameter or None
-
-        Returns:
-            HOCBF values
-        """
-        s = self._create_augmented_state_single(x, theta, gamma)
-        return super()._hocbf_single(s)
+    # === Public Interface Methods (single-sample; batch with jax.vmap) ===
 
     def hocbf(self, x, theta=None, gamma=None):
         """
         Compute highest order CBF using augmented state.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
-            theta: Control parameters or None
-            gamma: Time shift parameter or None
-
-        Returns:
-            HOCBF values with shape (batch, num_barriers, 1)
-        """
-        x = jnp.atleast_2d(x)
-        if theta is not None:
-            theta = jnp.atleast_3d(theta)
-        if gamma is not None:
-            gamma = jnp.atleast_1d(gamma)
-
-        s = self._create_augmented_state_batched(x, theta, gamma)
-        return super().hocbf(s)
-
-    def _barrier_single(self, x, theta=None, gamma=None):
-        """
-        Compute barrier values for single state using augmented state.
-
-        Args:
             x: State vector (n,)
             theta: Control parameters or None
             gamma: Time shift parameter or None
 
         Returns:
-            Barrier values
+            HOCBF values (num_barriers,)
         """
-        s = self._create_augmented_state_single(x, theta, gamma)
-        return super()._barrier_single(s)
+        s = self._create_augmented_state(x, theta, gamma)
+        return super().hocbf(s)
 
     def barrier(self, x, theta=None, gamma=None):
         """
         Compute barrier values using augmented state.
 
         Args:
-            x: State vector (n,) or batch (batch, n)
+            x: State vector (n,)
             theta: Control parameters or None
             gamma: Time shift parameter or None
 
         Returns:
-            Barrier values with shape (batch, num_barriers, 1)
+            Barrier values (num_barriers,)
         """
-        return apply_and_batchize(partial(self._barrier_single, theta=theta, gamma=gamma), x)
+        s = self._create_augmented_state(x, theta, gamma)
+        return super().barrier(s)
 
-    def _get_hocbf_and_lie_derivs_single(self, x, theta=None, gamma=None):
+    def get_hocbf_and_lie_derivs(self, x, theta=None, gamma=None):
         """
-        Get HOCBF and Lie derivatives for single state with respect to augmented state.
+        Get HOCBF and Lie derivatives with respect to augmented state.
 
         Args:
             x: State vector (n,)
@@ -385,24 +337,10 @@ class FlowBarrier(MultiBarriers):
             gamma: Time shift parameter or None
 
         Returns:
-            Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf)
+            Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf), per-member shapes
         """
-        s = self._create_augmented_state_single(x, theta, gamma)
-        return super()._get_hocbf_and_lie_derivs_single(s)
-
-    def get_hocbf_and_lie_derivs(self, x, theta=None, gamma=None):
-        """
-        Get HOCBF and Lie derivatives with respect to augmented state.
-
-        Args:
-            x: State vector (n,) or batch (batch, n)
-            theta: Control parameters or None
-            gamma: Time shift parameter or None
-
-        Returns:
-            Tuple of (hocbf_values, Lf_hocbf, Lg_hocbf) with batched shapes
-        """
-        return apply_and_batchize_tuple(partial(self._get_hocbf_and_lie_derivs_single, theta=theta, gamma=gamma), x)
+        s = self._create_augmented_state(x, theta, gamma)
+        return super().get_hocbf_and_lie_derivs(s)
 
     def get_flow_info(self, x, theta, gamma):
         """
@@ -421,8 +359,8 @@ class FlowBarrier(MultiBarriers):
 
         trajectory, _ = self.compute_trajectory(x, theta, gamma)
         flow_safety = self.hocbf(x, theta, gamma)
-        terminal_states = trajectory[:, -1, :]
-        h_backup = self._backup_barriers[0].hocbf(terminal_states)
+        terminal_state = trajectory[-1]
+        h_backup = self._backup_barriers[0].hocbf(terminal_state)
 
         return {
             'flow_safety': flow_safety,
@@ -532,8 +470,8 @@ class FlowBarrier(MultiBarriers):
 
         state_barrier = self._state_barrier
         backup_barrier = self._backup_barriers[0]
-        compute_traj= self._compute_trajectory_single
-        extract_params = self._extract_parameters_from_state_single
+        compute_traj= self.compute_trajectory
+        extract_params = self._extract_parameters_from_state
         traj_rho = self.traj_softmin_rho
 
         def trajectory_backup_func(s):
@@ -544,20 +482,19 @@ class FlowBarrier(MultiBarriers):
             trajectory, _ = compute_traj(x, theta, gamma)  # Shape: (time_steps, state_dim)
 
             # Evaluate state barrier along trajectory
-            h_traj_values = state_barrier.hocbf(trajectory[:-1])  # Shape: (time_steps-2,)
-            h_traj_combined = softmin(h_traj_values, rho=traj_rho, dim=0).squeeze(0)
+            h_traj_values = jax.vmap(state_barrier.hocbf)(trajectory[:-1])  # Shape: (time_steps-2,)
+            h_traj_combined = softmin(h_traj_values, rho=traj_rho, dim=0)
 
             # Evaluate backup barrier at terminal state
             terminal_state = trajectory[-1]
-            h_backup = backup_barrier._hocbf_single(terminal_state)
+            h_backup = backup_barrier.hocbf(terminal_state)
 
             # Return both trajectory and backup as separate constraints
             return jnp.array([h_traj_combined, h_backup])
 
-        return Barrier().assign(
-            barrier_func=trajectory_backup_func,
-            rel_deg=self._rel_deg
-        ).assign_dynamics(self._augmented_dynamics)
+        return Barrier(barrier_func=trajectory_backup_func,
+                       rel_deg=self._rel_deg,
+                       dynamics=self._augmented_dynamics)
 
     def _create_individual_trajectory_backup_barriers(self):
         """Create separate barriers for each individual state constraint along trajectory"""
@@ -565,8 +502,8 @@ class FlowBarrier(MultiBarriers):
         # Capture necessary attributes
         state_barrier = self._state_barrier
         backup_barrier = self._backup_barriers[0]
-        compute_traj = self._compute_trajectory_single
-        extract_params = self._extract_parameters_from_state_single
+        compute_traj = self.compute_trajectory
+        extract_params = self._extract_parameters_from_state
 
         def individual_trajectory_backup_func(s):
             """
@@ -580,7 +517,7 @@ class FlowBarrier(MultiBarriers):
             trajectory, _ = compute_traj(x, theta, gamma)  # Shape: (time_steps, state_dim)
 
             # Evaluate state barrier along trajectory (exclude first and last)
-            h_traj = state_barrier.hocbf(trajectory[1:-1])  # Shape: (time_steps-2,)
+            h_traj = jax.vmap(state_barrier.hocbf)(trajectory[1:-1])  # Shape: (time_steps-2,)
 
             # Evaluate backup barrier at terminal state
             terminal_state = trajectory[-1]
@@ -594,10 +531,9 @@ class FlowBarrier(MultiBarriers):
             return h_combined.squeeze(-1)
 
         # Create single barrier that returns multi-dimensional output
-        return Barrier().assign(
-            barrier_func=individual_trajectory_backup_func,
-            rel_deg=self._rel_deg
-        ).assign_dynamics(self._augmented_dynamics)
+        return Barrier(barrier_func=individual_trajectory_backup_func,
+                       rel_deg=self._rel_deg,
+                       dynamics=self._augmented_dynamics)
 
     def _create_danskin_trajectory_backup_barriers(self):
         """
@@ -607,8 +543,8 @@ class FlowBarrier(MultiBarriers):
         """
         # Capture necessary attributes
         backup_barrier = self._backup_barriers[0]
-        compute_traj = self._compute_trajectory_single
-        extract_params = self._extract_parameters_from_state_single
+        compute_traj = self.compute_trajectory
+        extract_params = self._extract_parameters_from_state
         compute_minimizer = self._compute_minimizer
 
         def danskin_trajectory_backup_func(s):
@@ -633,7 +569,7 @@ class FlowBarrier(MultiBarriers):
 
             # Evaluate backup barrier at terminal state
             terminal_state = trajectory[-1]
-            h_backup = backup_barrier._hocbf_single(terminal_state)
+            h_backup = backup_barrier.hocbf(terminal_state)
 
             # Concatenate trajectory global mins with backup constraint
             h_backup_arr = jnp.atleast_1d(h_backup)
@@ -642,10 +578,9 @@ class FlowBarrier(MultiBarriers):
             return h_combined  # Shape: (horizon_steps-2+1,) = (horizon_steps-1,)
 
         # Create single barrier that returns multi-dimensional output
-        return Barrier().assign(
-            barrier_func=danskin_trajectory_backup_func,
-            rel_deg=self._rel_deg
-        ).assign_dynamics(self._augmented_dynamics)
+        return Barrier(barrier_func=danskin_trajectory_backup_func,
+                       rel_deg=self._rel_deg,
+                       dynamics=self._augmented_dynamics)
 
     def _create_action_constraint_barrier(self):
         """Create action constraint barrier if control bounds exist"""
@@ -684,10 +619,9 @@ class FlowBarrier(MultiBarriers):
             else:
                 return 1.0
 
-        return Barrier().assign(
-            barrier_func=action_constraint_func,
-            rel_deg=1
-        ).assign_dynamics(self._augmented_dynamics)
+        return Barrier(barrier_func=action_constraint_func,
+                       rel_deg=1,
+                       dynamics=self._augmented_dynamics)
 
     def _create_individual_action_constraint_barriers(self):
         """Create separate barriers for each individual action constraint (no softmin)"""
@@ -731,10 +665,9 @@ class FlowBarrier(MultiBarriers):
                 # Create barrier with closure-captured function and index
                 barrier_func = create_individual_constraint_func(theta_func, seg_idx)
 
-                barrier = Barrier().assign(
-                    barrier_func=barrier_func,
-                    rel_deg=1
-                ).assign_dynamics(self._augmented_dynamics)
+                barrier = Barrier(barrier_func=barrier_func,
+                       rel_deg=1,
+                       dynamics=self._augmented_dynamics)
 
                 individual_barriers.append(barrier)
 
@@ -746,14 +679,13 @@ class FlowBarrier(MultiBarriers):
         def time_shift_func(s):
             return s[-1]  # Extract γ (last element) as scalar
 
-        return Barrier().assign(
-            barrier_func=time_shift_func,
-            rel_deg=1
-        ).assign_dynamics(self._augmented_dynamics)
+        return Barrier(barrier_func=time_shift_func,
+                       rel_deg=1,
+                       dynamics=self._augmented_dynamics)
 
     # === Helper Methods for State and Parameter Management ===
 
-    def _create_augmented_state_single(self, x, theta=None, gamma=None):
+    def _create_augmented_state(self, x, theta=None, gamma=None):
         """
         Create augmented state s = [x, θ_flat, γ] for single state.
 
@@ -766,7 +698,7 @@ class FlowBarrier(MultiBarriers):
             Augmented state s (aug_state_dim,)
         """
         if theta is None or gamma is None:
-            theta, gamma = self._get_default_parameters_single()
+            theta, gamma = self._get_default_parameters()
 
         # Flatten theta and concatenate
         theta_flat = theta.flatten()
@@ -774,38 +706,7 @@ class FlowBarrier(MultiBarriers):
 
         return jnp.concatenate([x, theta_flat, gamma_scalar])
 
-    def _create_augmented_state_batched(
-            self,
-            x: jnp.ndarray,
-            theta: jnp.ndarray = None,
-            gamma: jnp.ndarray = None
-    ) -> jnp.ndarray:
-        """
-        Create batched augmented states.
-
-        Args:
-            x: States (batch, state_dim)
-            theta: Parameters (batch, action_dim, num_params) or None
-            gamma: Time shifts (batch,) or None
-
-        Returns:
-            Augmented states (batch, aug_state_dim)
-        """
-        batch_size = x.shape[0]
-
-        if theta is None or gamma is None:
-            theta, gamma = self._get_default_parameters_batched(batch_size)
-
-        # Flatten theta: (batch, action_dim, num_params) -> (batch, action_dim * num_params)
-        theta_flat = theta.reshape(theta.shape[0], -1)
-
-        # Expand gamma to (batch, 1)
-        gamma_expanded = gamma.reshape(-1, 1)
-
-        # Concatenate [x, theta_flat, gamma]
-        return jnp.concatenate([x, theta_flat, gamma_expanded], axis=1)
-
-    def _extract_parameters_from_state_single(self, s):
+    def _extract_parameters_from_state(self, s):
         """
         Extract x, theta, gamma from augmented state s for single state.
 
@@ -826,9 +727,9 @@ class FlowBarrier(MultiBarriers):
 
         return x, theta, gamma
 
-    def _compute_trajectory_single(self, x, theta, gamma):
+    def compute_trajectory(self, x, theta, gamma):
         """
-        Compute flow trajectory φ(τ; x, θ, γ) for single state.
+        Compute flow trajectory φ(τ; x, θ, γ) for a single state.
 
         Uses adaptive time step to maintain fixed number of trajectory points.
 
@@ -848,7 +749,7 @@ class FlowBarrier(MultiBarriers):
         def action_func(tau):
             return parametric_control_fn(tau, theta)
 
-        trajectory, dense_func = get_trajs_from_time_action_func_with_dense_single(
+        trajectory, dense_func = get_trajs_from_time_action_func_with_dense(
             x0=x,
             dynamics=self._original_dynamics,
             action_func=action_func,
@@ -860,19 +761,6 @@ class FlowBarrier(MultiBarriers):
 
         return trajectory, dense_func
 
-    def compute_trajectory(self, x, theta, gamma):
-        """
-        Compute flow trajectory φ(τ; x, θ, γ) for batched states.
-
-        Args:
-            x: Initial states (batch, state_dim)
-            theta: Control parameters (batch, action_dim, num_params)
-            gamma: Time shift parameters (batch,)
-
-        Returns:
-            Trajectories (batch, time_steps, state_dim)
-        """
-        return jax.vmap(self._compute_trajectory_single, in_axes=(0, 0, 0))(x, theta, gamma)
 
     def _evaluate_traj_backup_on_trajectory(self, trajectory, dense_func, theta, gamma):
         """
@@ -886,17 +774,17 @@ class FlowBarrier(MultiBarriers):
         """
         backup_barrier = self._backup_barriers[0]
         terminal_state = trajectory[-1]
-        h_backup = backup_barrier._hocbf_single(terminal_state)
+        h_backup = backup_barrier.hocbf(terminal_state)
 
         if self.compose_state_barriers:
-            h_traj_values = self._state_barrier.hocbf(trajectory[:-1])
-            h_traj_combined = softmin(h_traj_values, rho=self.traj_softmin_rho, dim=0).squeeze(0)
+            h_traj_values = jax.vmap(self._state_barrier.hocbf)(trajectory[:-1])
+            h_traj_combined = softmin(h_traj_values, rho=self.traj_softmin_rho, dim=0)
             return jnp.array([h_traj_combined, h_backup])
         elif self.danskin_state_barriers:
             h_traj = self._compute_minimizer(trajectory, dense_func, theta, gamma)
             return jnp.concatenate([h_traj, jnp.atleast_1d(h_backup)])
         else:
-            h_traj = self._state_barrier.hocbf(trajectory[1:-1])
+            h_traj = jax.vmap(self._state_barrier.hocbf)(trajectory[1:-1])
             return jnp.concatenate([h_traj, jnp.atleast_1d(h_backup)]).squeeze(-1)
 
     def _compute_minimizer(self, trajectory, dense_func, theta, gamma, tolerance=1e-3, epsilon_threshold=1e-3):
@@ -930,7 +818,7 @@ class FlowBarrier(MultiBarriers):
 
         if USE_SIMPLE_VERSION:
             # Evaluate barrier at all trajectory points (excluding first and last)
-            h_traj = jax.vmap(self._state_barrier._hocbf_single)(trajectory[1:-1])  # Shape: (horizon_steps-2,)
+            h_traj = jax.vmap(self._state_barrier.hocbf)(trajectory[1:-1])  # Shape: (horizon_steps-2,)
 
             # Find global minimum
             min_h_value = jnp.min(h_traj)
@@ -1051,7 +939,7 @@ class FlowBarrier(MultiBarriers):
             plt.close()
 
         # Execute visualization outside traced context
-        h_traj = self._state_barrier.hocbf(trajectory)
+        h_traj = jax.vmap(self._state_barrier.hocbf)(trajectory)
         gamma_scalar = jnp.squeeze(gamma)
         jax.debug.callback(debug_plot, h_traj, barrier_derivs, tau_candidates,
                           valid_mask, h_values, gamma_scalar)
@@ -1076,7 +964,7 @@ class FlowBarrier(MultiBarriers):
         duration = self.horizon - gamma
         dt_actual = duration / (horizon_steps - 1)
 
-        grad_barrier = jax.grad(lambda x: self._state_barrier._hocbf_single(x))
+        grad_barrier = jax.grad(lambda x: self._state_barrier.hocbf(x))
 
         def compute_dhdt_at_index(i):
             """Compute dh/dt at trajectory index i."""
@@ -1170,7 +1058,7 @@ class FlowBarrier(MultiBarriers):
         def evaluate_single_candidate(tau, is_valid):
             """Evaluate barrier at tau if valid, else return inf."""
             state = dense_func(tau)
-            h_value = self._state_barrier._hocbf_single(state)
+            h_value = self._state_barrier.hocbf(state)
             return jnp.where(is_valid, h_value, jnp.inf)
 
         return jax.vmap(evaluate_single_candidate)(tau_candidates, valid_mask)
@@ -1206,7 +1094,7 @@ class FlowBarrier(MultiBarriers):
         # Truncate to fixed output size (horizon_steps-2 to match Individual barriers' trajectory[1:-1])
         return h_output_full[:horizon_steps-2]
 
-    def _get_default_parameters_single(self):
+    def _get_default_parameters(self):
         """
         Get default parameter values for single state.
 
@@ -1216,21 +1104,6 @@ class FlowBarrier(MultiBarriers):
 
         theta = jnp.zeros((self._original_dynamics.action_dim, self.control_param_num))
         gamma = jnp.array([0.0])
-        return theta, gamma
-
-    def _get_default_parameters_batched(self, batch_size):
-        """
-        Get default parameter values for batched states.
-
-        Args:
-            batch_size: Number of states in batch
-
-        Returns:
-            Tuple of (theta, gamma) with default values
-        """
-        theta_single, gamma_single = self._get_default_parameters_single()
-        theta = jnp.tile(theta_single[None, ...], (batch_size, 1, 1))
-        gamma = jnp.tile(gamma_single, (batch_size,))
         return theta, gamma
 
     # === Override parent methods that don't apply ===
@@ -1258,20 +1131,14 @@ class FlowBarrier(MultiBarriers):
         Returns:
             New FlowBarrier instance with added barriers and preserved FlowBarrier fields
         """
-        # Call parent method to get the updated MultiBarriers fields
-        updated_multi_barriers = super().add_barriers(barriers, infer_dynamics, multidim)
-
-        # Create new FlowBarrier with updated barriers using helper
+        new_funcs = tuple(b.barrier for b in barriers)
+        new_hocbfs = tuple(b.hocbf for b in barriers)
+        new_series = tuple(b.barriers for b in barriers)
+        start = len(self._mb_barrier_funcs)
+        new_idx = tuple(range(start, start + len(barriers))) if multidim else ()
         return self._create_updated_instance(
-            # Updated MultiBarriers fields from parent method
-            barrier_func=updated_multi_barriers._barrier_func,
-            dynamics=updated_multi_barriers._dynamics,
-            rel_deg=updated_multi_barriers._rel_deg,
-            alphas=updated_multi_barriers._alphas,
-            barriers=updated_multi_barriers._barriers,
-            hocbf_func=updated_multi_barriers._hocbf_func,
-            cfg=updated_multi_barriers.cfg,
-            barrier_funcs=updated_multi_barriers._barrier_funcs,
-            hocbf_funcs=updated_multi_barriers._hocbf_funcs,
-            multidim_indices=updated_multi_barriers._multidim_indices
+            barrier_funcs=self._mb_barrier_funcs + new_funcs,
+            hocbf_funcs=self._mb_hocbf_funcs + new_hocbfs,
+            barriers=self._mb_barriers + new_series,
+            multidim_indices=tuple(self._multidim_indices) + new_idx,
         )
