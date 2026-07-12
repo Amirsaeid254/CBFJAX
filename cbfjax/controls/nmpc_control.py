@@ -668,7 +668,7 @@ class NMPCControl(BaseControl):
         cost_terminal: Optional[Callable] = None,
         **kwargs
     ):
-        # Default params for NMPC (unified)
+        # Default params for NMPC
         params = kwargs.get('params', None)
         default_params = {
             # Horizon settings
@@ -693,7 +693,7 @@ class NMPCControl(BaseControl):
         }
         if params is not None:
             default_params.update(params)
-        # Backward compat: map old 'nlp_solver_type' to 'nlp_solver'
+        # Accept 'nlp_solver_type' as an alias for 'nlp_solver'
         if 'nlp_solver_type' in default_params and 'nlp_solver' not in (params or {}):
             default_params['nlp_solver'] = default_params.pop('nlp_solver_type')
         kwargs['params'] = default_params
@@ -731,7 +731,7 @@ class NMPCControl(BaseControl):
         self._backend = None
         self._dynamics_casadi = None
 
-        # Eager validation when fully configured (backend build stays in make())
+        # Validate eagerly when fully configured; backend build is deferred to make()
         if (type(self) is NMPCControl and self.has_dynamics
                 and self._has_control_bounds and self._cost_running is not None):
             self._validate_for_make()
@@ -1112,7 +1112,7 @@ class QuadraticNMPCControl(QuadraticCostMixin, NMPCControl):
 
     def __init__(self, **kwargs):
         super().__init__(cost_running=None, cost_terminal=None, **kwargs)
-        # Eager validation when fully configured (backend build stays in make())
+        # Validate eagerly when fully configured; backend build is deferred to make()
         if (type(self) is QuadraticNMPCControl and self.has_dynamics
                 and self._has_control_bounds
                 and self._Q is not None and self._R is not None):

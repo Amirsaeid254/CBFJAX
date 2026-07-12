@@ -55,13 +55,13 @@ class BackupBarrier(Barrier):
         """
         Initialize BackupBarrier with all parameters.
 
-        Complete construction:
+        Construction:
 
             barrier = BackupBarrier(state_barrier=sb, backup_barriers=[bb],
                                     backup_policies=[pi], dynamics=dyn, cfg=cfg)
 
         When state barrier, backup barriers, backup policies and dynamics are
-        all provided, the backup barrier is built immediately (no make() needed).
+        all provided, the instance is fully functional at construction.
         """
         # Initialize parent Barrier
         super().__init__(
@@ -87,9 +87,9 @@ class BackupBarrier(Barrier):
         self._backup_barriers = tuple(backup_barriers) if backup_barriers else tuple()
         self._backup_policies = tuple(backup_policies) if backup_policies else tuple()
 
-    # === Complete-constructor readiness ===
-    # When all components are provided at construction, barrier/hocbf derive
-    # from _backup_barrier_func on demand (no make() needed).
+    # === Readiness ===
+    # When all components are provided, barrier/hocbf derive from
+    # _backup_barrier_func on demand.
 
     def _backup_ready(self):
         return (len(self._backup_policies) > 0

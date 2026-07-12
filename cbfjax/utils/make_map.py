@@ -450,8 +450,6 @@ def create_map_from_config(barriers_info, dynamics, cfg) -> Map:
     """
     Create map from configuration dictionary.
 
-    This function provides compatibility with existing configuration formats.
-
     Args:
         barriers_info: Barrier configuration dictionary or geometry list
         dynamics: System dynamics object

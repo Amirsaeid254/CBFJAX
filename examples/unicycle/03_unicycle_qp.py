@@ -69,7 +69,7 @@ sim_time = 20.0
 dt_sim = 0.01
 
 # ============================================
-# Build the full pipeline with cbfjax.from_config
+# Build the full pipeline
 # ============================================
 
 print("Building safety filter via cbfjax.from_config...")

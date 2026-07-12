@@ -72,7 +72,7 @@ sim_time = 20.0
 dt_sim = 0.01
 
 # ============================================
-# Build the full pipeline with cbfjax.from_config
+# Build the full pipeline
 # ============================================
 
 print("Building safety filter via cbfjax.from_config...")
@@ -97,7 +97,7 @@ parts = cbfjax.from_config({
 safety_filter = parts.filter
 dynamics = parts.dynamics
 barrier = parts.barriers['rows']
-map_ = parts.barriers['map']  # kept for plotting
+map_ = parts.barriers['map']  # used for plotting
 
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]

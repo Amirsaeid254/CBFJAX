@@ -2,9 +2,9 @@
 Barrier class for Control Barrier Functions.
 
 This module implements barrier functions and higher-order control barrier functions
-using automatic differentiation. Barriers are complete at construction: the HOCBF
-series is derived on demand from the stored fields rather than precomputed closures,
-so instances are valid pytrees and numeric parameters stay traced.
+using automatic differentiation. The HOCBF series is derived on demand from stored
+fields (no precomputed closures), so instances are valid pytrees and numeric
+parameters stay traced.
 """
 
 import jax
@@ -193,7 +193,7 @@ class Barrier(eqx.Module):
                            alphas: tuple) -> List[Callable]:
         """
         Generate an explicit higher-order barrier function series
-        [h, Lf(h) + alpha_1(h), ...] as closures. Retained for subclasses
+        [h, Lf(h) + alpha_1(h), ...] as closures. Used by subclasses
         that compose explicit series.
         """
         barriers = [barrier]

@@ -73,7 +73,7 @@ dynamics_params = {
     'discretization_method': 'rk4',
 }
 
-# Cost matrices for tracking (as Callable for JIT compatibility)
+# Cost matrices for tracking
 Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))  # State cost
 R = jnp.diag(jnp.array([0.1, 0.1]))               # Control cost
 Q_e = 5.0 * Q                                    # Terminal cost
@@ -110,7 +110,7 @@ parts = cbfjax.from_config({
 controller = parts.filter
 dynamics = parts.dynamics
 barrier = parts.barriers['state']
-map_ = parts.barriers['map']  # kept for plotting
+map_ = parts.barriers['map']  # used for plotting
 
 # State dimensions: [q_x, q_y, v, theta]
 nx = dynamics.state_dim  # 4
@@ -131,7 +131,6 @@ dt_sim = 0.01
 
 start_time = time()
 
-# Use get_optimal_trajs for simulation
 trajs = controller.get_optimal_trajs_zoh(
     x0=x0,
     sim_time=sim_time,

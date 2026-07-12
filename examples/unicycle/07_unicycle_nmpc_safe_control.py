@@ -88,7 +88,7 @@ print("Setting up NMPC controller...")
 nx = dynamics.state_dim  # 4
 nu = dynamics.action_dim  # 2
 
-# Cost matrices for tracking (as Callable for consistency)
+# Cost matrices for tracking
 Q = np.diag([10.0, 10.0, 1.0, 1.0])  # State cost
 R = np.diag([0.1, 0.1])               # Control cost
 Q_e = 100.0 * Q                        # Terminal cost
@@ -151,7 +151,6 @@ dt_sim = 0.01  # Control timestep
 
 start_time = time()
 
-# Use get_optimal_trajs_zoh for simulation
 trajs, actions = controller.get_optimal_trajs_zoh(
     s0=jnp.array(x0),
     sim_time=sim_time,

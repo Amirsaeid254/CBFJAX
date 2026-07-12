@@ -195,7 +195,7 @@ class BaseMinIntervSafeControl(BaseCBFSafeControl):
         _desired_control_static: stateful desired control for plain callables (static)
         _desired_control_init_state: Callable returning init state for desired control
 
-    Dual storage (mirrors Barrier._alpha_coefs): a plain callable / controller is
+    Dual storage: a plain callable / controller is
     normalized to a stateful function and kept in the static field
     ``_desired_control_static`` (it cannot be a leaf - subclasses jit on ``self``,
     so a raw lambda leaf would crash jit). An ``eqx.Module`` desired control is

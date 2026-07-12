@@ -2,7 +2,7 @@
 MPPI control for unicycle goal-reaching with soft obstacle avoidance.
 
 Demonstrates:
-- MPPIControl setup and assignment chain
+- MPPIControl setup
 - Running + terminal cost with soft barrier penalty
 - Stateful ZOH simulation loop (state carries warm-start U and PRNGKey)
 - Warm-up JIT compilation and per-step timing

@@ -4,7 +4,6 @@ Map configuration for CBFJAX unicycle example.
 
 import os
 
-# Make map configuration
 map_config = {
     'geoms': (
         ('norm_box', {'center': (2.0, 1.5), 'size': (2.0, 2.0)}),

@@ -70,7 +70,7 @@ control_low = [-2.0, -1.0]   # [min accel, min omega]
 control_high = [2.0, 1.0]    # [max accel, max omega]
 
 # ============================================
-# Setup Dynamics (explicit: iLQR needs it before the filter exists)
+# Setup Dynamics (shared by the iLQR planner and the safety filter)
 # ============================================
 
 print("Setting up dynamics...")
@@ -85,7 +85,7 @@ nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup iLQR Controller (High-Level) via cbfjax.from_config
+# Setup iLQR Controller (High-Level)
 # ============================================
 
 print("Setting up iLQR controller...")
@@ -98,7 +98,7 @@ goal_pos = jnp.array([3.0, 4.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
 # ============================================
-# Config 1: iLQR planner
+# iLQR planner
 # ============================================
 
 print("Setting up iLQR planner...")
@@ -116,7 +116,7 @@ ilqr_controller = cbfjax.from_config({
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 
 # ============================================
-# Config 2: barriers + QP safety filter (planner as desired control)
+# Barriers + QP safety filter (planner as desired control)
 # ============================================
 
 print("Setting up barriers and QP safety filter...")

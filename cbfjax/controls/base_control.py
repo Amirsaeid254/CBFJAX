@@ -327,13 +327,13 @@ class QuadraticCostMixin:
 
     Cost: (x - x_ref)^T Q (x - x_ref) + u^T R u
 
-    Cost quantities use dual storage (mirrors Barrier._alpha_coefs):
+    Cost quantities use dual storage:
       - array inputs are stored in LEAF fields ``_<name>_value`` so they are
         traced and a controller stack can be built with ``eqx.filter_vmap``
         without per-member recompiles;
       - callable inputs are kept in static ``_<name>_func`` fields (escape hatch).
-    A property per matrix (``_Q``/``_R``/``_Q_e``/``_x_ref``) returns the existing
-    zero-arg callable interface so all downstream code is unchanged.
+    A property per matrix (``_Q``/``_R``/``_Q_e``/``_x_ref``) exposes a zero-arg
+    callable interface for downstream code.
     """
 
     # Type hints for paired fields (actual fields declared in using class)

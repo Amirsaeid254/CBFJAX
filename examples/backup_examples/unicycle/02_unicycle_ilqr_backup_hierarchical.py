@@ -86,7 +86,7 @@ timestep = 0.01
 sim_time = 20.0
 
 # ============================================================================
-# Setup Dynamics (explicit: iLQR needs discretization params before filter exists)
+# Setup Dynamics (iLQR needs discretization params)
 # ============================================================================
 
 print("Setting up dynamics...")
@@ -105,7 +105,7 @@ nu = dynamics.action_dim  # 2: [accel, omega]
 print(f"  - Dynamics: UnicycleReducedOrderDynamics")
 
 # ============================================================================
-# Setup iLQR Controller (High-Level) via cbfjax.from_config
+# Setup iLQR Controller (High-Level)
 # ============================================================================
 
 print("Setting up iLQR controller...")
@@ -127,7 +127,7 @@ ilqr_controller = cbfjax.from_config({
 print(f"  - Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 
 # ============================================================================
-# Build backup barrier + safety filter via cbfjax.from_config
+# Build backup barrier + safety filter
 # ============================================================================
 
 print("Setting up backup barriers and safety filter...")

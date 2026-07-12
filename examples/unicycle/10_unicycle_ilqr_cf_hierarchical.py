@@ -67,7 +67,7 @@ cf_params = {
 }
 
 # ============================================
-# Setup Dynamics (explicit: iLQR needs it before the filter exists)
+# Setup Dynamics (shared by the iLQR planner and the safety filter)
 # ============================================
 
 print("Setting up dynamics...")
@@ -82,7 +82,7 @@ nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup iLQR Controller (High-Level) via cbfjax.from_config
+# Setup iLQR Controller (High-Level)
 # ============================================
 
 print("Setting up iLQR controller...")
@@ -107,7 +107,7 @@ ilqr_controller = cbfjax.from_config({
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 
 # ============================================
-# Build safety filter pipeline via cbfjax.from_config
+# Build safety filter pipeline
 # ============================================
 
 print("Setting up barriers and CF safety filter...")

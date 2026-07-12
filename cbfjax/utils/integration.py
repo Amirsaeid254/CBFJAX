@@ -6,11 +6,10 @@ Every single-trajectory function here integrates ONE trajectory: inputs are
 (jax.vmap or host Python loops) is the caller's responsibility (see
 base_control, backup_barrier).
 
-The one exception is ``get_ensemble_trajs_zoh`` (bottom of this file): the
-authoritative home for an N-robot ensemble rollout. It wraps the single-traj
-ZOH integrator in ``eqx.filter_vmap`` over the members of a stacked controller
-pytree, giving each member its own dynamics, action function, and controller
-state lane.
+The one exception is ``get_ensemble_trajs_zoh`` (bottom of this file): an
+N-robot ensemble rollout. It wraps the single-trajectory ZOH integrator in
+``eqx.filter_vmap`` over the members of a stacked controller pytree, giving
+each member its own dynamics, action function, and controller state lane.
 
 Eager diffrax recompiles (~250ms/call) on every invocation, so these functions
 MUST be called from within a caller's jit/vmap context.
@@ -342,7 +341,7 @@ def get_ensemble_trajs_zoh(ensemble, x0s: jnp.ndarray, timestep: float,
     """
     Roll out an N-robot ensemble with zero-order-hold control, one compiled call.
 
-    This is the authoritative ensemble counterpart of the single-trajectory
+    Ensemble counterpart of the single-trajectory
     ``get_trajs_from_state_action_func_zoh``. It ``eqx.filter_vmap``s over the
     members of a stacked controller pytree; each member rolls out through the
     SINGLE-trajectory ZOH integrator with its OWN dynamics, its OWN stateful
@@ -366,8 +365,8 @@ def get_ensemble_trajs_zoh(ensemble, x0s: jnp.ndarray, timestep: float,
         Trajectories (N, time_steps, state_dim). The single-trajectory ZOH
         return shape is unchanged; this just adds the leading robot axis. Final
         controller states are NOT returned — per-robot lanes evolve internally
-        inside each member's ``lax.scan`` and are not surfaced (keep the API
-        symmetric with the single-trajectory integrator).
+        inside each member's ``lax.scan`` and are not surfaced, keeping the API
+        symmetric with the single-trajectory integrator.
 
     STATEFUL handling (per-robot controller state lanes)
     ----------------------------------------------------
@@ -383,8 +382,8 @@ def get_ensemble_trajs_zoh(ensemble, x0s: jnp.ndarray, timestep: float,
     - ``init_ctrl_states is None`` (default): each member's initial state comes
       from its OWN ``get_init_state()``, evaluated PER MEMBER under the vmap.
       This is genuinely per-member when the state depends on a traced leaf
-      (verified: an ensemble whose ``get_init_state`` reads a stacked leaf
-      yields distinct per-member states under ``filter_vmap``). When the state
+      (a ``get_init_state`` that reads a stacked leaf yields distinct
+      per-member states under ``filter_vmap``). When the state
       depends only on STATIC params it is identical for every member — notably
       MPPI seeds its PRNG key from the static ``init_seed`` param, so every
       robot samples the SAME noise (correlated rollouts). To break that
@@ -396,9 +395,6 @@ def get_ensemble_trajs_zoh(ensemble, x0s: jnp.ndarray, timestep: float,
       (``jax.vmap(jax.random.PRNGKey)(seeds)`` or ``jax.random.split``) and for
       per-robot warm starts / nominal-trajectory guesses. For stateless
       controllers (``get_init_state() is None``) pass ``None``.
-
-    (This block is the authoritative location for the ensemble stateful
-    semantics; ``stack_ensemble``'s docstring points here.)
     """
     import equinox as eqx
 

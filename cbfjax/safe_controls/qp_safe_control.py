@@ -80,8 +80,7 @@ class QPSafeControl(BaseCBFSafeControl):
         Split the controller state into (ctrl_state, qp_state).
 
         When warm-start is active the controller state is a (ctrl_state, qp_state)
-        tuple; otherwise it is the bare ctrl_state (qpax-default lane, unchanged)
-        and the QP state is None.
+        tuple; otherwise it is the bare ctrl_state and the QP state is None.
         """
         if self._qp_warm_start and isinstance(state, tuple) and len(state) == 2:
             return state[0], state[1]
@@ -102,11 +101,11 @@ class QPSafeControl(BaseCBFSafeControl):
         Initial controller state.
 
         Without warm-start (e.g. qpax) this returns the bare desired/objective
-        controller state (None for a stateless desired control), byte-identical
-        to the previous behaviour. With a warm-start backend (jaxopt_osqp) it
-        returns a (ctrl_state, qp_state) tuple whose qp_state is a STRUCTURED
-        zero state sized for the QP this filter assembles, so the state pytree
-        carried across lax.scan keeps an identical structure every step.
+        controller state (None for a stateless desired control). With a
+        warm-start backend (jaxopt_osqp) it returns a (ctrl_state, qp_state)
+        tuple whose qp_state is a structured zero state sized for the QP this
+        filter assembles, so the state pytree carried across lax.scan keeps an
+        identical structure every step.
         """
         ctrl_state = super().get_init_state()
         if not self._qp_warm_start:

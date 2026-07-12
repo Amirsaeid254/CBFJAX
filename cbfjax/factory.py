@@ -48,6 +48,9 @@ Barrier entry types
         # no reduction: one CBF constraint per member (QP filters)
     {'type': 'backup', 'state_barrier': <name>, 'backup_barriers': [<name>, ...],
      'backup_policies': [...], 'rel_deg': 1, 'cfg': {...}}
+    {'type': 'flow', 'state_barrier': <name>, 'backup_barriers': [<name>, ...],
+     'cfg': {...}}   # FlowBarrier over augmented state [x, theta, gamma];
+                     # consumed by the 'parametric_flow' filter
         # cfg: horizon, time_steps, integration_method, softmin_rho,
         # softmax_rho; backup filters also read epsilon, h_scale, feas_scale.
         # A terminal like h_terminal = state.hocbf + margin is just another
@@ -60,7 +63,7 @@ Exactly one of 'filter' (FILTER_TYPES) or 'control' (CONTROL_TYPES —
 performance controllers such as iLQR/MPPI/NMPC; never barrier-wired) per
 config; both may be omitted for barrier-only configs. Layered designs use one
 config per layer, passing system.control on as 'desired_control'. NMPC
-controllers still require their post-construction .make() step.
+controllers require their post-construction .make() step.
 
 Filter wiring: 'barrier' (and 'terminal_barrier') given as a string resolve
 against the named entries. If 'barrier' is omitted and exactly one entry
@@ -89,6 +92,7 @@ from .safe_controls import (
     MinIntervInputConstQPSafeControl,
     BackupSafeControl,
     MinIntervBackupSafeControl,
+    ParametricFlowSafeControl,
 )
 from .barriers import (
     Barrier,
@@ -96,6 +100,7 @@ from .barriers import (
     SoftCompositionBarrier,
     HardCompositionBarrier,
     BackupBarrier,
+    FlowBarrier,
 )
 from .utils.make_map import Map
 
@@ -248,6 +253,20 @@ DYNAMICS_TYPES = {
     'unicycle_reduced_order': UnicycleReducedOrderDynamics,
 }
 
+def _build_flow(name, spec, built, dynamics):
+    _check_keys(spec, ('state_barrier', 'backup_barriers', 'cfg'), 'flow')
+    for key in ('state_barrier', 'backup_barriers'):
+        if key not in spec:
+            raise _requires('flow', key)
+    where = f"'{name}'"
+    return (FlowBarrier.create_empty(cfg=dict(spec.get('cfg', {})))
+            .assign_state_barrier(_resolve_single(spec['state_barrier'], built, where))
+            .assign_backup_barrier([_resolve_single(b, built, where)
+                                    for b in spec['backup_barriers']])
+            .assign_dynamics(dynamics)
+            .make())
+
+
 BARRIER_TYPES = {
     'map': _build_map,
     'func': _build_func,
@@ -255,6 +274,7 @@ BARRIER_TYPES = {
     'hard_composition': _build_hard_composition,
     'multi_barrier': _build_multi_barrier,
     'backup': _build_backup,
+    'flow': _build_flow,
 }
 
 # String values are class names with optional dependencies (acados/casadi,
@@ -270,6 +290,7 @@ FILTER_TYPES = {
     'min_interv_input_const_qp': MinIntervInputConstQPSafeControl,
     'backup': BackupSafeControl,
     'min_interv_backup': MinIntervBackupSafeControl,
+    'parametric_flow': ParametricFlowSafeControl,
     'nmpc': 'NMPCSafeControl',
     'quadratic_nmpc': 'QuadraticNMPCSafeControl',
     'ilqr': 'iLQRSafeControl',

@@ -45,7 +45,7 @@ class CompositionBarrier(Barrier):
         """
         Initialize CompositionBarrier with all parameters.
 
-        Complete construction from Barrier objects:
+        Construction from Barrier objects:
 
             barrier = SoftCompositionBarrier(barriers=[b1, b2], rule='intersection', cfg=cfg)
 
@@ -64,8 +64,8 @@ class CompositionBarrier(Barrier):
             composition_rule: Composition rule identifier
             barriers_raw: Tuple of raw barrier objects
             composed_barrier_func: Function for computing individual barrier values
-            rule: Composition rule ('intersection', 'union', 'i', 'u'); triggers
-                complete construction from the barriers list
+            rule: Composition rule ('intersection', 'union', 'i', 'u'); when
+                given, the composition is built from the barriers list
         """
         if rule is not None:
             valid_rules = ['intersection', 'union', 'i', 'u']

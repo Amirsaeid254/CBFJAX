@@ -85,7 +85,7 @@ timestep = 0.01
 sim_time = 20.0
 
 # ============================================
-# Build the full pipeline with cbfjax.from_config
+# Build the full pipeline
 # ============================================
 
 print("Building backup safety filter via cbfjax.from_config...")

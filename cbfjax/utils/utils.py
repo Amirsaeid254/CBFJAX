@@ -27,8 +27,6 @@ def lie_deriv(func: Callable, field: Callable, x: jnp.ndarray) -> jnp.ndarray:
     """
     Compute Lie derivative of func along vector field.
 
-    JAX Optimization: Direct jax.grad - no manual graph management needed
-
     Args:
         func: Scalar function R^n -> R
         field: Vector field R^n -> R^n or R^n -> R^{n×m}
@@ -50,8 +48,6 @@ def lie_deriv(func: Callable, field: Callable, x: jnp.ndarray) -> jnp.ndarray:
 def lie_deriv_from_values(func_deriv: jnp.ndarray, field_val: jnp.ndarray) -> jnp.ndarray:
     """
     Compute Lie derivative from pre-computed gradient and field values.
-
-    JAX Optimization: Direct einsum operations, more efficient than loops
 
     Args:
         func_deriv: Gradient of function (n,)
@@ -113,11 +109,7 @@ def make_higher_order_lie_deriv_series(func: Callable, field: Callable, deg: int
 
 
 def higher_order_lie_deriv(func: Callable, field: Callable, order: int) -> Callable:
-    """
-    Compute higher-order Lie derivative directly.
-
-    JAX Optimization: Automatic differentiation for arbitrary orders
-    """
+    """Compute higher-order Lie derivative directly."""
     result_func = func
     for _ in range(order):
         result_func = functools.partial(lie_deriv, result_func, field)
@@ -481,12 +473,12 @@ def stack_ensemble(template, where, values):
     (``u, state = filt.optimal_control(x, state)``), so under vmap each member
     carries its own independent state lane (per-robot QP warm starts, iLQR
     nominal trajectories, ...). State STRUCTURE must be identical across
-    members — guaranteed here since all members share one template. The
-    authoritative description of the ensemble stateful semantics (per-robot
-    lanes, the ``init_ctrl_states`` injection path, and the MPPI same-key
-    caveat) lives in ``cbfjax.utils.integration.get_ensemble_trajs_zoh`` — use
-    that as the canonical ensemble rollout. Host-backed controllers
-    (NMPC/acados, do-mpc) are not pytrees and cannot be ensembled.
+    members — guaranteed here since all members share one template. See
+    ``cbfjax.utils.integration.get_ensemble_trajs_zoh`` for a single-call
+    ensemble rollout and the full stateful semantics (per-robot lanes, the
+    ``init_ctrl_states`` injection path, and the MPPI same-key caveat).
+    Host-backed controllers (NMPC/acados, do-mpc) are not pytrees and cannot
+    be ensembled.
     """
     import equinox as eqx
     return eqx.filter_vmap(lambda v: eqx.tree_at(where, template, v))(values)

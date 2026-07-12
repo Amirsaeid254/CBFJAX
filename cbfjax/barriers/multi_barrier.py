@@ -33,7 +33,7 @@ class MultiBarriers(Barrier):
         """
         Initialize MultiBarriers.
 
-        Complete construction from Barrier objects:
+        Construction from Barrier objects:
 
             mb = MultiBarriers(barriers=[b1, b2], dynamics=dyn)
 
@@ -53,7 +53,7 @@ class MultiBarriers(Barrier):
             multidim_indices: Tuple of indices for multi-dimensional barriers
             multidim: If True, mark constructor-provided barriers as multi-dimensional
         """
-        # Complete-constructor path: barriers given as Barrier objects
+        # Barriers given as Barrier objects: derive functions and series from them
         if barriers and all(isinstance(b, Barrier) for b in barriers):
             barrier_objs = list(barriers)
             if dynamics is None or isinstance(dynamics, DummyDynamics):
@@ -69,7 +69,7 @@ class MultiBarriers(Barrier):
             dynamics=dynamics,
             rel_deg=rel_deg,
             alphas=alphas,
-            barriers=tuple(),  # Start with empty
+            barriers=tuple(),  # series are stored in _mb_barriers
             hocbf_func=hocbf_func,
             cfg=cfg
         )
@@ -239,7 +239,6 @@ class MultiBarriers(Barrier):
         Returns:
             Tuple of all barrier functions from all barrier series
         """
-        # Flatten: [b for barrier in self._barriers for b in barrier]
         flat = []
         for barrier_series in self._barriers:
             for b in barrier_series:
