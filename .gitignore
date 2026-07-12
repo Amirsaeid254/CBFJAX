@@ -161,7 +161,7 @@ test_*.py
 *.tmp
 *.bak
 *~
-/examples/backup_examples/unicycle/figs/
+/examples/unicycle/backup/figs/
 
 # Local test/gate suite (not shipped)
 tests/

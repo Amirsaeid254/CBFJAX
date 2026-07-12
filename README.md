@@ -179,7 +179,7 @@ print(trajs.shape)  # (T, batch, state_dim)
 ```
 
 More end-to-end scripts live under `examples/unicycle/` (closed-form, QP, input-constrained
-QP, NMPC, iLQR, hierarchical) and `examples/backup_examples/` (Backup-CBF).
+QP, NMPC, iLQR, hierarchical) and `examples/unicycle/backup/` (Backup-CBF).
 
 ```bash
 cd examples/unicycle

@@ -106,11 +106,6 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         """
         from ..barriers.parametric_flow_barrier import FlowBarrier
 
-        # Flow QPs are large and solved at control rate: default to the
-        # solver settings tuned for them (overridable via params['qp_opts']).
-        params = dict(params) if params else {}
-        params.setdefault('qp_opts', {'tol': 1e-5, 'maxiter': 200})
-
         # A FlowBarrier passed as barrier= sets the flow fields and
         # augmented dynamics automatically.
         if isinstance(barrier, FlowBarrier) and flow_barrier is None:
