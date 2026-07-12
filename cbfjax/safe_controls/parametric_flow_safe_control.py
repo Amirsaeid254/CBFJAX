@@ -17,63 +17,6 @@ from immutabledict import immutabledict
 from cbfjax.safe_controls.qp_safe_control import InputConstQPSafeControl
 from cbfjax.utils.integration import get_trajs_from_state_action_func, get_trajs_from_state_action_func_zoh, get_solver
 from cbfjax.controls.control_types import QPInfo
-from jaxopt import OSQP
-
-
-class FlowControlState(NamedTuple):
-    """State for FlowBarrier controller (warm-start OSQP)."""
-    osqp_params: Any  # KKTSolution pytree from jaxopt OSQP
-
-
-def _matvec_Q_diag(Q_diag, x):
-    return Q_diag * x
-
-
-def _matvec_dense(M, x):
-    return M @ x
-
-
-# OSQP instances: one for the diagonal-Hessian primal, one for the small dense dual.
-_osqp = OSQP(matvec_Q=_matvec_Q_diag, tol=1e-5, maxiter=200, jit=True)
-_osqp_dual = OSQP(matvec_Q=_matvec_dense, tol=1e-5, maxiter=200, jit=True)
-
-
-@jax.jit
-def _solve_qp_primal(Q_diag, c, G, h, state=None):
-    """Solve the n-variable primal QP directly with OSQP.
-
-        min 0.5 v' diag(Q) v + c' v   s.t.  G v <= h
-    """
-    osqp_params = state.osqp_params if state is not None else None
-    sol = _osqp.run(init_params=osqp_params, params_obj=(Q_diag, c), params_ineq=(G, h))
-    return sol.params.primal, FlowControlState(osqp_params=sol.params)
-
-
-@jax.jit
-def _solve_qp_dual(Q_diag, c, G, h, state=None):
-    """Solve the m-variable dual QP and recover the primal.
-
-        primal:  min 0.5 v' diag(Q) v + c' v   s.t.  G v <= h     (n vars, m constraints)
-        dual:    min 0.5 lam' M lam + q' lam    s.t.  lam >= 0     (m vars)
-                 M = G Q^-1 G',   q = G Q^-1 c + h
-        recover: v* = -Q^-1 (c + G' lam*)
-    """
-    Qinv = 1.0 / Q_diag
-    GQi  = G * Qinv[None, :]                       # (m, n) = G diag(Q^-1)
-    M    = GQi @ G.T                               # (m, m) dense dual Hessian (PSD)
-    q    = GQi @ c + h                             # (m,)
-    m    = h.shape[0]
-    G_dual = -jnp.eye(m, dtype=Q_diag.dtype)       # lam >= 0  ->  -I lam <= 0
-    h_dual = jnp.zeros(m, dtype=Q_diag.dtype)
-    osqp_params = state.osqp_params if state is not None else None
-    sol = _osqp_dual.run(init_params=osqp_params, params_obj=(M, q), params_ineq=(G_dual, h_dual))
-    lam = sol.params.primal
-    v   = -Qinv * (c + G.T @ lam)
-    return v, FlowControlState(osqp_params=sol.params)
-
-
-# Registry for the `qp_mode` flag (read from controller params; default 'primal').
-_QP_SOLVERS = {'primal': _solve_qp_primal, 'dual': _solve_qp_dual}
 
 
 class ParametricFlowSafeControl(InputConstQPSafeControl):
@@ -97,7 +40,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
 
     # Flow-specific components (static)
     _cost_functional: Optional[Callable] = eqx.field(static=True)
-    _flow_barrier: Any = eqx.field(static=True)
+    _flow_barrier: Any  # FlowBarrier (pytree leaf)
 
     # Alpha functions for different barrier types
     alpha_trajectory: Optional[Callable] = eqx.field(static=True)
@@ -143,7 +86,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         Args:
             action_dim: Control input dimension
             alpha: Class-K function for barrier constraint
-            params: Legacy parameter dictionary
+            params: Configuration parameters dictionary
             dynamics: System dynamics object
             barrier: Barrier function object
             Q: Cost matrix function
@@ -163,8 +106,13 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         """
         from ..barriers.parametric_flow_barrier import FlowBarrier
 
-        # A FlowBarrier passed as barrier= (e.g. factory wiring) sets the flow
-        # fields and augmented dynamics automatically.
+        # Flow QPs are large and solved at control rate: default to the
+        # solver settings tuned for them (overridable via params['qp_opts']).
+        params = dict(params) if params else {}
+        params.setdefault('qp_opts', {'tol': 1e-5, 'maxiter': 200})
+
+        # A FlowBarrier passed as barrier= sets the flow fields and
+        # augmented dynamics automatically.
         if isinstance(barrier, FlowBarrier) and flow_barrier is None:
             flow_barrier = barrier
             theta_flat_dim = (barrier.original_dynamics.action_dim *
@@ -173,7 +121,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
                               + theta_flat_dim + 1)
             dynamics = barrier._augmented_dynamics
 
-        # Cost matrices -> callable Q/c (same construction as assign_cost_matrices)
+        # Cost matrices -> callable Q/c
         if R is not None:
             if flow_barrier is None:
                 raise ValueError("cost matrices require a FlowBarrier "
@@ -226,163 +174,8 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         self._aug_action_dim = int(aug_action_dim)
         self._theta_flat_dim = int(theta_flat_dim)
 
-    @classmethod
-    def create_empty(cls, action_dim: int, alpha: Optional[Callable] = None,
-                     params: Optional[dict] = None) -> 'ParametricFlowSafeControl':
-        """
-        Create empty ParametricFlowSafeControl instance.
-
-        Args:
-            action_dim: Control input dimension
-            alpha: Class-K function
-            params: Optional parameter dictionary
-
-        Returns:
-            Empty ParametricFlowSafeControl instance
-        """
-        return cls(action_dim=action_dim, alpha=alpha, params=params)
-
-    def assign_cost_functional(
-            self,
-            cost_functional: Callable[[jnp.ndarray], jnp.ndarray]
-    ) -> 'ParametricFlowSafeControl':
-        """
-        Assign cost functional J(s) that takes augmented state s = [x, θ, γ].
-
-        Args:
-            cost_functional: Function s -> scalar cost
-
-        Returns:
-            New instance with assigned cost functional
-        """
-        return self._create_updated_instance(cost_functional=cost_functional)
-
-    def assign_state_barrier(self, barrier) -> 'ParametricFlowSafeControl':
-        """
-        Assign FlowBarrier and automatically set dynamics.
-
-        Args:
-            barrier: FlowBarrier instance
-
-        Returns:
-            New instance with assigned barrier
-        """
-        from ..barriers.parametric_flow_barrier import FlowBarrier
-
-        if not isinstance(barrier, FlowBarrier):
-            raise TypeError(f"Expected FlowBarrier, got {type(barrier)}")
-
-        # Cache augmented dimensions
-        theta_flat_dim = (barrier.original_dynamics.action_dim *
-                          barrier.control_param_num)
-        aug_action_dim = barrier.original_dynamics.action_dim + theta_flat_dim + 1
-
-        return self._create_updated_instance(
-            flow_barrier=barrier,
-            barrier=barrier,
-            dynamics=barrier._augmented_dynamics,
-            theta_flat_dim=theta_flat_dim,
-            aug_action_dim=aug_action_dim
-        )
-
-    def assign_alpha_functions(
-            self,
-            alpha_trajectory: Optional[Callable] = None,
-            alpha_backup: Optional[Callable] = None,
-            alpha_action: Optional[Callable] = None,
-            alpha_time_shift: Optional[Callable] = None
-    ) -> 'ParametricFlowSafeControl':
-        """
-        Assign different alpha functions for different barrier types.
-
-        Args:
-            alpha_trajectory: Class-K function for trajectory constraints
-            alpha_backup: Class-K function for backup barrier
-            alpha_action: Class-K function for action constraints
-            alpha_time_shift: Class-K function for time shift barrier
-
-        Returns:
-            New instance with assigned alpha functions
-        """
-        return self._create_updated_instance(
-            alpha_trajectory=alpha_trajectory,
-            alpha_backup=alpha_backup,
-            alpha_action=alpha_action,
-            alpha_time_shift=alpha_time_shift
-        )
-
-    def assign_cost_matrices(
-            self,
-            R: jnp.ndarray,
-            Lambda: jnp.ndarray,
-            Mu: float,
-            lambda_linear: float
-    ) -> 'ParametricFlowSafeControl':
-        """
-        Assign cost matrices and create Q and c functions.
-
-        Similar to MinIntervQPSafeControl, this creates callable Q and c functions
-        that are stored as static fields (inherited from parent class).
-
-        Args:
-            R: Control cost matrix (action_dim, action_dim)
-            Lambda: Parameter regularization matrix (theta_flat_dim, theta_flat_dim)
-            Mu: Time-shift cost scalar
-            lambda_linear: Linear time-shift cost
-
-        Returns:
-            New instance with Q and c functions assigned
-        """
-        action_dim = self._action_dim
-        theta_flat_dim = self._theta_flat_dim
-        aug_action_dim = self._aug_action_dim
-        flow_barrier = self._flow_barrier
-
-        # Precompute Q matrix
-        Q_matrix = jnp.zeros((aug_action_dim, aug_action_dim))
-        Q_matrix = Q_matrix.at[:action_dim, :action_dim].set(R)
-        Q_matrix = Q_matrix.at[action_dim:action_dim+theta_flat_dim, action_dim:action_dim+theta_flat_dim].set(Lambda)
-        Q_matrix = Q_matrix.at[-1, -1].set(Mu)
-
-        def Q_func(x, theta, gamma):
-            return Q_matrix
-
-        def c_func(x, theta, gamma):
-            """Static part of c vector (no trajectory computation).
-            The cost functional gradient term is added in optimal_control."""
-            c = jnp.zeros(aug_action_dim)
-            u_p = flow_barrier._parametric_control(gamma, theta)
-            c = c.at[:action_dim].set(-R @ u_p)
-            c = c.at[-1].set(lambda_linear)
-            return c
-
-        return self._create_updated_instance(Q=Q_func, c=c_func)
-
-    def assign_control_bounds(self, low, high) -> 'ParametricFlowSafeControl':
-        """
-        Assign control input bounds.
-
-        Args:
-            low: Lower bounds for control inputs (list or tuple)
-            high: Upper bounds for control inputs (list or tuple)
-
-        Returns:
-            New ParametricFlowSafeControl with bounds assigned
-        """
-        assert len(low) == len(high), 'low and high should have the same length'
-        assert len(low) == self._action_dim, 'bounds length should match action dimension'
-
-        # Convert to tuples if needed
-        low_tuple = tuple(low) if not isinstance(low, tuple) else low
-        high_tuple = tuple(high) if not isinstance(high, tuple) else high
-
-        return self._create_updated_instance(
-            control_low=low_tuple,
-            control_high=high_tuple
-        )
-
-    def _create_updated_instance(self, **kwargs):
-        """Create new instance with updated fields."""
+    def _ctor_defaults(self) -> dict:
+        """Constructor kwargs capturing current field values (per-class)."""
         defaults = {
             'action_dim': self._action_dim,
             'alpha': self._alpha,
@@ -404,8 +197,40 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             'aug_action_dim': self._aug_action_dim,
             'theta_flat_dim': self._theta_flat_dim
         }
-        defaults.update(kwargs)
-        return self.__class__(**defaults)
+        return defaults
+
+    def _solve_flow_qp(self, Q, c, G, h, state):
+        """
+        Solve the flow QP with the configured qp solver (params['qp_solver']).
+
+        params['dual'] (default False) picks the formulation — both are plain
+        QPs for any backend. params['qp_opts'] (dict) forwards backend-specific
+        options (jaxopt_osqp: tol, maxiter; qpax: solver_tol, target_kappa;
+        mpax: eps_abs, eps_rel, iteration_limit):
+
+            primal:  min 0.5 v' Q v + c' v      s.t.  G v <= h    (n vars)
+            dual:    min 0.5 lam' M lam + q' lam s.t.  lam >= 0    (m vars)
+                     M = G Q^-1 G',  q = G Q^-1 c + h  (Q treated as diagonal)
+                     recover  v* = -Q^-1 (c + G' lam*)
+
+        The dual form solves in the (much smaller) constraint space and
+        assumes a diagonal Q; off-diagonal terms are ignored there.
+        """
+        opts = dict(self._params.get('qp_opts', {}))
+        if not self._params.get('dual', False):
+            return self._qp_solver(Q, c, G, h, None, None, state, **opts)
+
+        Q_diag = jnp.diag(Q) if Q.ndim == 2 else Q
+        Qinv = 1.0 / Q_diag
+        GQi = G * Qinv[None, :]
+        M = GQi @ G.T
+        q = GQi @ c + h
+        m = h.shape[0]
+        G_dual = -jnp.eye(m, dtype=Q_diag.dtype)
+        h_dual = jnp.zeros(m, dtype=Q_diag.dtype)
+        lam, new_state = self._qp_solver(M, q, G_dual, h_dual, None, None, state, **opts)
+        v = -Qinv * (c + G.T @ lam)
+        return v, new_state
 
     def optimal_control(self, x: jnp.ndarray, theta: jnp.ndarray = None, gamma: jnp.ndarray = None, state = None) -> tuple:
         """
@@ -426,8 +251,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             gamma = gamma_default if gamma is None else gamma
 
         Q, c, G, h = self._compute_qp_data(x, theta, gamma)
-        solver = _QP_SOLVERS[self._params.get('qp_mode', 'primal')]
-        v_aug, new_state = solver(jnp.diag(Q), c, G, h, state)
+        v_aug, new_state = self._solve_flow_qp(Q, c, G, h, state)
 
         return v_aug, new_state
 
@@ -438,8 +262,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             gamma = gamma_default if gamma is None else gamma
 
         Q, c, G, h = self._compute_qp_data(x, theta, gamma)
-        solver = _QP_SOLVERS[self._params.get('qp_mode', 'primal')]
-        v_aug, new_state = solver(jnp.diag(Q), c, G, h, state)
+        v_aug, new_state = self._solve_flow_qp(Q, c, G, h, state)
 
         constraint_at_u = jnp.dot(G, v_aug) - h
         slack_vars = jnp.zeros(1)
@@ -620,7 +443,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         return self._flow_barrier._parametric_control(gamma, theta)
 
     def get_init_state(self):
-        """Get initial controller state for warm-starting OSQP.
+        """Get initial controller state for warm-start-capable QP backends.
 
         Runs one cold-start solve with default parameters to get the
         KKTSolution pytree with correct shapes.
@@ -633,7 +456,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
     def _validate_setup(self):
         """Validate that all required components are assigned."""
         if self._flow_barrier is None:
-            raise ValueError("FlowBarrier must be assigned using assign_state_barrier()")
+            raise ValueError("a FlowBarrier must be provided via 'barrier' or 'flow_barrier'")
         if self._aug_action_dim == 0:
             raise ValueError("Augmented dimensions not computed. Ensure FlowBarrier is properly initialized.")
 
@@ -667,7 +490,6 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             v_aug, _ = self.optimal_control(current_x, current_theta, current_gamma)
             return v_aug
 
-        # Use non-vmap version since CVXOPT is not JAX-compatible
         return get_trajs_from_state_action_func(
             x0=s0,
             dynamics=self._dynamics,
@@ -736,7 +558,6 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             v_aug, _ = self.optimal_control(current_x, current_theta, current_gamma)
             return v_aug
 
-        # Use non-vmap ZOH version since CVXOPT is not JAX-compatible
         return get_trajs_from_state_action_func_zoh(
             x0=s0,
             dynamics=self._dynamics,  # Use AUGMENTED dynamics

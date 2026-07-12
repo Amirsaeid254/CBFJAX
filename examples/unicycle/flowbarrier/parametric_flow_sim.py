@@ -211,7 +211,7 @@ system = cbfjax.from_config({
         'type': 'parametric_flow',
         'barrier': 'flow',
         'action_dim': dynamics.action_dim,
-        'params': {'qp_mode': 'dual', 'qp_solver': 'jaxopt_osqp'},
+        'params': {'qp_solver': 'jaxopt_osqp', 'dual': True},
         'alpha_trajectory': lambda x: alpha_gains['trajectory'] * x,
         'alpha_backup': lambda x: alpha_gains['backup'] * x,
         'alpha_action': lambda x: alpha_gains['action'] * x,
