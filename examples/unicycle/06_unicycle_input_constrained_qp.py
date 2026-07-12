@@ -51,7 +51,7 @@ qp_params = {
     'slacked': True,
     'use_softplus': False,
     'softplus_gain': 2.0,
-    'qp_solver': 'mpax'
+    'qp_solver': 'qpax'
 }
 
 # Control bounds for unicycle dynamics
@@ -79,8 +79,11 @@ print("Building safety filter via cbfjax.from_config...")
 
 parts = cbfjax.from_config({
     'dynamics': 'unicycle',
-    'barrier': {'type': 'map', **map_config, 'composition': 'multi', 'cfg': cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg},
+        'rows': {'type': 'multi_barrier', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'min_interv_input_const_qp',
         'action_dim': 2,
         'alpha': lambda x: 1.0 * x,
@@ -91,10 +94,10 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
+safety_filter = parts.filter
 dynamics = parts.dynamics
-barrier = parts.barrier
-map_ = parts.map  # soft/hard compositions kept for plotting
+barrier = parts.barriers['rows']
+map_ = parts.barriers['map']  # kept for plotting
 
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]

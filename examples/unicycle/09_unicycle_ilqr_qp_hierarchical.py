@@ -85,7 +85,7 @@ nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup iLQR Controller (High-Level, stays explicit)
+# Setup iLQR Controller (High-Level) via cbfjax.from_config
 # ============================================
 
 print("Setting up iLQR controller...")
@@ -123,8 +123,11 @@ print("Setting up barriers and QP safety filter...")
 
 parts = cbfjax.from_config({
     'dynamics': dynamics,
-    'barrier': {'type': 'map', **map_config, 'composition': 'multi', 'cfg': cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg},
+        'rows': {'type': 'multi_barrier', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'min_interv_input_const_qp',
         'action_dim': nu,
         'alpha': lambda h: 1.0 * h,
@@ -135,9 +138,9 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
-barrier = parts.barrier
-map_ = parts.map
+safety_filter = parts.filter
+barrier = parts.barriers['rows']
+map_ = parts.barriers['map']
 
 print(f"  Number of barriers: {len(map_.pos_barriers) + len(map_.vel_barriers)}")
 print(f"  Control bounds: low={control_low}, high={control_high}")

@@ -22,8 +22,6 @@ import os
 # CBFJAX imports
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
-from cbfjax.utils.make_map import Map
-from cbfjax.barriers.multi_barrier import MultiBarriers
 from immutabledict import immutabledict
 
 # Local imports
@@ -77,13 +75,8 @@ nmpc_params = {
 
 print("Setting up dynamics and barriers...")
 
-# Build the barrier map. NMPC uses position barriers only (velocity is enforced
-# via a state bound), so the filter barrier is a MultiBarriers over pos_barriers.
 dynamics = cbfjax.UnicycleDynamics()
-map_ = Map(barriers_info=map_config, dynamics=dynamics, cfg=cfg)
-barrier = MultiBarriers(barriers=list(map_.pos_barriers), cfg=cfg)
 
-print(f"  Number of position barriers: {barrier.num_constraints}")
 
 # ============================================
 # Setup NMPC Controller
@@ -119,9 +112,15 @@ x0 = np.array([-1.0, -8.5, 0.0, pi / 2])
 
 parts = cbfjax.from_config({
     'dynamics': dynamics,
-    'barrier': map_,  # registers the Map for plotting; filter uses pos-only barrier below
-    'safety_filter': {
+    'barriers': {
+        # velocity is enforced via NMPC state bounds, so the map spec omits
+        # the 'velocity' key and 'rows' holds position constraints only
+        'map':  {'type': 'map', 'geoms': map_config['geoms'], 'cfg': cfg},
+        'rows': {'type': 'multi_barrier', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'quadratic_nmpc',
+        'barrier': 'rows',
         'action_dim': nu,
         'params': nmpc_params,
         'control_low': control_low,
@@ -130,15 +129,14 @@ parts = cbfjax.from_config({
         'state_low': state_low,
         'state_high': state_high,
         'Q': Q, 'R': R, 'Q_e': Q_e, 'x_ref': x_ref,
-        'barrier': barrier,
     },
 })
-
-map_ = parts.map  # kept for plotting
+map_ = parts.barriers['map']
+barrier = parts.barriers['rows']
 
 # Build the controller
 print("Building NMPC solver (this may take a moment)...")
-controller = parts.safety_filter.make()
+controller = parts.filter.make()
 controller.set_init_guess(x0=x0)
 
 # ============================================

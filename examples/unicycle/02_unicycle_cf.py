@@ -74,8 +74,11 @@ print("Building safety filter via cbfjax.from_config...")
 
 parts = cbfjax.from_config({
     'dynamics': 'unicycle',
-    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'min_interv_cf',
         'action_dim': 2,
         'alpha': lambda x: 0.5 * x,
@@ -84,9 +87,9 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
+safety_filter = parts.filter
 dynamics = parts.dynamics
-barrier = parts.barrier
+barrier = parts.barriers['state']
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 

@@ -18,9 +18,6 @@ from jaxopt import OSQP
 from jaxopt._src.base import KKTSolution
 from mpax import create_qp, raPDHG
 
-from .qp_gpu import solve_admm_woodbury
-from .reluqp_jax import solve_reluqp_ineq
-
 
 def _has_eq_const(A, b) -> bool:
     return (A is not None and A.shape[0] > 0) or (b is not None and b.shape[0] > 0)
@@ -37,33 +34,6 @@ def _solve_qpax(Q, c, G, h, A=None, b=None, state=None, **opts):
         A = jnp.zeros((0, Q.shape[0]))
         b = jnp.zeros(0)
     u = solve_qp_primal(Q, c, A, b, G, h, **opts)
-    return u, state
-
-
-def _solve_admm_woodbury(Q, c, G, h, A=None, b=None, state=None, **opts):
-    """
-    EXPERIMENTAL: ADMM + Woodbury backend (diagonal Q, inequality-only).
-
-    Extracts diag(Q) when a 2-D Q is given; off-diagonal terms are ignored.
-    Fixed iteration count (see cbfjax.utils.qp_gpu.solve_admm_woodbury).
-    """
-    if _has_eq_const(A, b):
-        raise ValueError("'admm_woodbury' backend supports inequality constraints only")
-    Q_diag = jnp.diag(Q) if Q.ndim == 2 else Q
-    l = jnp.full(h.shape[0], -jnp.inf, dtype=h.dtype)
-    u = solve_admm_woodbury(Q_diag, c, G, l, h, **opts)
-    return u, state
-
-
-def _solve_reluqp(Q, c, G, h, A=None, b=None, state=None, **opts):
-    """
-    EXPERIMENTAL: ReLU-QP backend (inequality-only).
-
-    Fixed iteration count (see cbfjax.utils.reluqp_jax.solve_reluqp_ineq).
-    """
-    if _has_eq_const(A, b):
-        raise ValueError("'reluqp' backend supports inequality constraints only")
-    u = solve_reluqp_ineq(Q, c, G, h, **opts)
     return u, state
 
 
@@ -132,8 +102,6 @@ def _solve_mpax(Q, c, G, h, A=None, b=None, state=None, **opts):
 
 QP_SOLVERS: Dict[str, Callable] = {
     'qpax': _solve_qpax,
-    'admm_woodbury': _solve_admm_woodbury,
-    'reluqp': _solve_reluqp,
     'jaxopt_osqp': _solve_jaxopt_osqp,
     'mpax': _solve_mpax,
 }
@@ -144,8 +112,6 @@ QP_SOLVERS: Dict[str, Callable] = {
 # threads that None straight through, so a None state lane is a valid no-op.
 QP_INIT_STATES: Dict[str, Callable] = {
     'qpax': _no_init_state,
-    'admm_woodbury': _no_init_state,
-    'reluqp': _no_init_state,
     'jaxopt_osqp': _init_state_jaxopt_osqp,
     'mpax': _no_init_state,
 }

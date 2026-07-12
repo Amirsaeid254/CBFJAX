@@ -51,7 +51,8 @@ qp_params = {
     'slack_gain': 1e24,
     'slacked': False,
     'use_softplus': False,
-    'softplus_gain': 2.0
+    'softplus_gain': 2.0,
+    'qp_solver' : 'jaxopt_osqp',
 }
 
 # Control gains for desired control
@@ -75,8 +76,11 @@ print("Building safety filter via cbfjax.from_config...")
 
 parts = cbfjax.from_config({
     'dynamics': 'unicycle',
-    'barrier': {'type': 'map', **map_config, 'composition': 'multi', 'cfg': cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg},
+        'rows': {'type': 'multi_barrier', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'min_interv_qp',
         'action_dim': 2,
         'alpha': lambda x: 0.5 * x,
@@ -85,10 +89,10 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
+safety_filter = parts.filter
 dynamics = parts.dynamics
-barrier = parts.barrier
-map_ = parts.map
+barrier = parts.barriers['rows']
+map_ = parts.barriers['map']
 
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]

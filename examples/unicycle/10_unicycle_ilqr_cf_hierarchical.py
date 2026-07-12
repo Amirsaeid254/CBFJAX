@@ -24,7 +24,6 @@ import os
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.controls.ilqr_control import QuadraticiLQRControl
 from immutabledict import immutabledict
 
 # Local imports
@@ -83,7 +82,7 @@ nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Setup iLQR Controller (High-Level, stays explicit)
+# Setup iLQR Controller (High-Level) via cbfjax.from_config
 # ============================================
 
 print("Setting up iLQR controller...")
@@ -95,12 +94,15 @@ Q_e = 100.0 * Q                                    # Terminal cost
 goal_pos = jnp.array([3.0, 4.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
-ilqr_controller = QuadraticiLQRControl(
-    action_dim=nu,
-    params=ilqr_params,
-    dynamics=dynamics,
-    Q=Q, R=R, Q_e=Q_e, x_ref=x_ref,
-)
+ilqr_controller = cbfjax.from_config({
+    'dynamics': dynamics,
+    'control': {
+        'type': 'quadratic_ilqr',
+        'action_dim': nu,
+        'params': ilqr_params,
+        'Q': Q, 'R': R, 'Q_e': Q_e, 'x_ref': x_ref,
+    },
+}).control
 
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 
@@ -112,8 +114,11 @@ print("Setting up barriers and CF safety filter...")
 
 parts = cbfjax.from_config({
     'dynamics': dynamics,
-    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'min_interv_cf',
         'action_dim': nu,
         'alpha': lambda h: 0.5 * h,
@@ -122,8 +127,8 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
-barrier = parts.barrier
+safety_filter = parts.filter
+barrier = parts.barriers['state']
 
 print(f"  Barrier setup complete")
 print(f"  Alpha: 0.5 * h")

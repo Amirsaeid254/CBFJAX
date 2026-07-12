@@ -1,79 +1,74 @@
 """
-Config-driven construction for CBFJAX.
+Config-driven construction for CBFJAX: a named barrier namespace.
 
-cbfjax.from_config(cfg) builds one controller per config dict, each section a
-thin layer over the constructors::
+Every barrier gets a name; entries reference earlier entries by name; the
+filter names the barrier it consumes. Entries nobody references are still
+built — they are yours (plotting, analysis, debugging)::
 
     cfg = {
-        'dynamics': 'unicycle',          # name, {'type': ..., **params}, or instance
-        'barrier': {...barrier spec...}, # or a Barrier instance
-        'safety_filter': {               # XOR 'control', see below
-            'type': 'min_interv_qp',
-            'action_dim': 2,
-            'alpha': ...,                # remaining keys forward to the constructor
-            'desired_control': ...,
-            'params': {'slack_gain': 200, 'qp_solver': 'qpax'},
+        'dynamics': 'unicycle',          # name, {'type': ..., **params}, instance
+        'barriers': {
+            'map':   {'type': 'map', 'geoms': [...], 'velocity': (idx, bounds),
+                      'cfg': {...}},                    # -> the Map instance
+            'state': {'type': 'soft_composition', 'barriers': ['map'],
+                      'cfg': {...}},
+            'rows':  {'type': 'multi_barrier', 'barriers': ['map'],
+                      'cfg': {...}},
         },
+        'filter': {'type': 'min_interv_qp', 'barrier': 'state',
+                   'action_dim': 2, ...},               # XOR 'control'
     }
-    parts = cbfjax.from_config(cfg)
-    parts.safety_filter             # the ready filter
-    parts.dynamics, parts.barrier   # built instances
-    parts.map                       # the Map, when exactly one was built
-    parts.maps                      # every Map built during the config
+    system = cbfjax.from_config(cfg)
+    system.filter                   # the ready controller
+    system.barriers['rows']         # any named entry, used or not
+    system.barriers['map']          # the Map (plotting)
+    system.dynamics
 
-A config holds exactly ONE controller section: 'safety_filter' (FILTER_TYPES)
-or 'control' (CONTROL_TYPES — performance controllers such as iLQR/MPPI/NMPC).
-Layered designs use one config per layer; pass the planner instance on::
+Rules
+-----
+- Entries build in declaration order; a name reference must point to an
+  already-defined entry.
+- A 'map' entry's value is the Map instance. Referencing it in a 'barriers'
+  list contributes its position + velocity member barriers; wiring it
+  directly into a filter is an error (compose it first).
+- 'barriers' reference lists accept names and built instances. Built
+  Barrier/Map instances may also be used directly as entry values.
+- Spec keys are the constructor kwargs; string values in barrier positions
+  are name references.
 
-    planner = cbfjax.from_config({
-        'dynamics': dyn,
-        'control': {'type': 'quadratic_ilqr', 'action_dim': 2, ...},
-    }).control
-    filt = cbfjax.from_config({
-        'dynamics': dyn,
-        'barrier': {...},
-        'safety_filter': {..., 'desired_control': planner},
-    }).safety_filter
+Barrier entry types
+-------------------
+    {'type': 'map', 'geoms': [...], 'velocity': (idx, bounds), 'cfg': {...}}
+    {'type': 'func', 'h': callable, 'rel_deg': 1, 'alphas': ..., 'cfg': {...}}
+    {'type': 'soft_composition', 'barriers': [...], 'rule': 'i'|'u', 'cfg': {...}}
+    {'type': 'hard_composition', 'barriers': [...], 'rule': 'i'|'u', 'cfg': {...}}
+        # scalar softmin / exact-min reduction (closed-form filters need a
+        # scalar barrier)
+    {'type': 'multi_barrier', 'barriers': [...], 'cfg': {...}}
+        # no reduction: one CBF constraint per member (QP filters)
+    {'type': 'backup', 'state_barrier': <name>, 'backup_barriers': [<name>, ...],
+     'backup_policies': [...], 'rel_deg': 1, 'cfg': {...}}
+        # cfg: horizon, time_steps, integration_method, softmin_rho,
+        # softmax_rho; backup filters also read epsilon, h_scale, feas_scale.
+        # A terminal like h_terminal = state.hocbf + margin is just another
+        # barrier: build the state barrier first (own config or by hand) and
+        # define {'type': 'func', 'h': lambda x: state.hocbf(x) + margin(x)}.
 
-A 'barrier' section in a 'control' config is built and returned but never
-auto-wired into the controller; pass it explicitly (e.g. CiLQR's barrier=).
-NMPC controllers still require their post-construction .make() step.
+Controllers
+-----------
+Exactly one of 'filter' (FILTER_TYPES) or 'control' (CONTROL_TYPES —
+performance controllers such as iLQR/MPPI/NMPC; never barrier-wired) per
+config; both may be omitted for barrier-only configs. Layered designs use one
+config per layer, passing system.control on as 'desired_control'. NMPC
+controllers still require their post-construction .make() step.
 
-Barrier specs are recursive: wherever a barrier is expected, either a built
-Barrier instance or a {'type': ...} spec dict is accepted.
-
-    {'type': 'map', 'geoms': [...], 'velocity': (idx, bounds),
-     'composition': 'soft' | 'hard' | 'multi' | 'stacked', 'cfg': {...}}
-    # 'stacked' returns StackedBarrier.from_geoms (no Map built; parts.map=None)
-
-    {'type': 'barrier', 'func': h, 'rel_deg': 2, 'alphas': (10.0,), 'cfg': {...}}
-
-    {'type': 'soft' | 'hard' | 'multi',     # combine ANY barriers
-     'barriers': [<spec | instance>, ...],  # a 'map' spec/instance in this list
-     'rule': 'intersection',                #   expands to its member barriers
-     'cfg': {...}}                          # ('rule' not valid for 'multi')
-
-    {'type': 'backup',
-     'state_barrier': <barrier spec | instance | list of either>,
-     'backup_policies': [pi_1, ...],
-     'backup_barriers': [<barrier spec | instance | state_margin spec>, ...],
-     'cfg': {...}}   # horizon, time_steps, integration_method, softmin_rho,
-                     # softmax_rho; backup filters also read epsilon, h_scale,
-                     # feas_scale from this cfg
-
-    {'type': 'state_margin', 'margin': lambda x: ...,  # only inside 'backup':
-     'rel_deg': 1, 'alphas': ..., 'cfg': {...}}        # terminal barrier =
-                                                       # state_barrier.hocbf + margin
-    {'type': 'lidar', 'capacity': N, 'cfg': {...}}
-    # N cylinder placeholder slots (centers far away; inert until updated).
-    # Update at runtime via eqx.tree_at / _replace — zero recompiles.
-
-Wiring rule (the only one): the built barrier is passed to the filter
-constructor as barrier=; an explicit 'barrier' key inside 'safety_filter' wins.
+Filter wiring: 'barrier' (and 'terminal_barrier') given as a string resolve
+against the named entries. If 'barrier' is omitted and exactly one entry
+holds a single Barrier, it is wired; with several, name one explicitly.
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any, Dict
 
 from .dynamics import (
     UnicycleDynamics,
@@ -99,14 +94,150 @@ from .barriers import (
     Barrier,
     MultiBarriers,
     SoftCompositionBarrier,
-    NonSmoothCompositionBarrier,
+    HardCompositionBarrier,
     BackupBarrier,
-    StackedBarrier,
 )
 from .utils.make_map import Map
 
-__all__ = ['from_config', 'build_barrier', 'Parts']
+__all__ = ['from_config', 'System']
 
+
+# --------------------------------------------------------------- helpers
+
+def _unknown(kind, value, choices):
+    return ValueError(f"Unknown {kind} {value!r}. Available: {sorted(choices)}")
+
+
+def _requires(spec_name, key):
+    return ValueError(f"{spec_name!r} spec requires a {key!r} key")
+
+
+def _check_keys(spec, valid, spec_name):
+    unknown = set(spec) - set(valid)
+    if unknown:
+        raise ValueError(
+            f"Unknown keys {sorted(unknown)} in {spec_name!r} spec. "
+            f"Valid keys: {sorted(valid)}"
+        )
+
+
+def _resolve(ref, built, want):
+    """A reference is a name (str) or a built instance."""
+    if isinstance(ref, str):
+        if ref not in built:
+            raise ValueError(
+                f"Unknown barrier name {ref!r} in {want}. "
+                f"Defined (in order): {list(built)}"
+            )
+        return built[ref]
+    return ref
+
+
+def _resolve_members(refs, built, want):
+    """Flatten name/instance references into a member Barrier list."""
+    if not isinstance(refs, (list, tuple)):
+        refs = [refs]
+    members = []
+    for ref in refs:
+        value = _resolve(ref, built, want)
+        if isinstance(value, Map):
+            members.extend([*value.pos_barriers, *value.vel_barriers])
+        elif isinstance(value, Barrier):
+            members.append(value)
+        else:
+            raise TypeError(
+                f"{want}: expected barrier name or Barrier/Map instance, "
+                f"got {type(value).__name__}"
+            )
+    return members
+
+
+def _resolve_single(ref, built, want):
+    value = _resolve(ref, built, want)
+    if isinstance(value, Map):
+        raise ValueError(
+            f"{want} needs a single barrier, but {ref!r} is a Map; compose "
+            "its members first ({'type': 'soft_composition' | "
+            "'hard_composition' | 'multi_barrier', 'barriers': [...]})"
+        )
+    if not isinstance(value, Barrier):
+        raise TypeError(
+            f"{want}: expected a Barrier, got {type(value).__name__}"
+        )
+    return value
+
+
+# --------------------------------------------------------------- builders
+
+def _build_map(name, spec, built, dynamics):
+    _check_keys(spec, ('geoms', 'velocity', 'cfg'), 'map')
+    if 'geoms' not in spec:
+        raise _requires('map', 'geoms')
+    if dynamics is None:
+        raise ValueError("barrier type 'map' requires a 'dynamics' entry")
+    return Map(dynamics=dynamics, cfg=spec.get('cfg', {}),
+               barriers_info={k: v for k, v in spec.items()
+                              if k in ('geoms', 'velocity')})
+
+
+def _build_func(name, spec, built, dynamics):
+    _check_keys(spec, ('h', 'rel_deg', 'alphas', 'cfg'), 'func')
+    if 'h' not in spec:
+        raise _requires('func', 'h')
+    return Barrier(barrier_func=spec['h'],
+                   rel_deg=spec.get('rel_deg', 1),
+                   alphas=spec.get('alphas'),
+                   dynamics=dynamics,
+                   cfg=spec.get('cfg'))
+
+
+def _build_soft_composition(name, spec, built, dynamics):
+    _check_keys(spec, ('barriers', 'rule', 'cfg'), 'soft_composition')
+    if not spec.get('barriers'):
+        raise _requires('soft_composition', 'barriers')
+    members = _resolve_members(spec['barriers'], built, f"'{name}'")
+    return SoftCompositionBarrier(barriers=members,
+                                  rule=spec.get('rule', 'intersection'),
+                                  cfg=spec.get('cfg', {}))
+
+
+def _build_hard_composition(name, spec, built, dynamics):
+    _check_keys(spec, ('barriers', 'rule', 'cfg'), 'hard_composition')
+    if not spec.get('barriers'):
+        raise _requires('hard_composition', 'barriers')
+    members = _resolve_members(spec['barriers'], built, f"'{name}'")
+    return HardCompositionBarrier(barriers=members,
+                                       rule=spec.get('rule', 'intersection'),
+                                       cfg=spec.get('cfg', {}))
+
+
+def _build_multi_barrier(name, spec, built, dynamics):
+    _check_keys(spec, ('barriers', 'cfg'), 'multi_barrier')
+    if not spec.get('barriers'):
+        raise _requires('multi_barrier', 'barriers')
+    members = _resolve_members(spec['barriers'], built, f"'{name}'")
+    return MultiBarriers(barriers=members, cfg=spec.get('cfg', {}))
+
+
+def _build_backup(name, spec, built, dynamics):
+    _check_keys(spec, ('state_barrier', 'backup_barriers', 'backup_policies',
+                       'rel_deg', 'cfg'), 'backup')
+    for key in ('state_barrier', 'backup_barriers', 'backup_policies'):
+        if key not in spec:
+            raise _requires('backup', key)
+    where = f"'{name}'"
+    return BackupBarrier(
+        state_barrier=_resolve_single(spec['state_barrier'], built, where),
+        backup_barriers=[_resolve_single(t, built, where)
+                         for t in spec['backup_barriers']],
+        backup_policies=list(spec['backup_policies']),
+        rel_deg=spec.get('rel_deg', 1),
+        dynamics=dynamics,
+        cfg=spec.get('cfg', {}),
+    )
+
+
+# --------------------------------------------------------------- registries
 
 DYNAMICS_TYPES = {
     'unicycle': UnicycleDynamics,
@@ -115,6 +246,15 @@ DYNAMICS_TYPES = {
     'bicycle': BicycleDynamics,
     'inverted_pendulum': InvertedPendulumDynamics,
     'unicycle_reduced_order': UnicycleReducedOrderDynamics,
+}
+
+BARRIER_TYPES = {
+    'map': _build_map,
+    'func': _build_func,
+    'soft_composition': _build_soft_composition,
+    'hard_composition': _build_hard_composition,
+    'multi_barrier': _build_multi_barrier,
+    'backup': _build_backup,
 }
 
 # String values are class names with optional dependencies (acados/casadi,
@@ -148,56 +288,27 @@ CONTROL_TYPES = {
     'quadratic_nmpc': ('cbfjax.controls.nmpc_control', 'QuadraticNMPCControl'),
 }
 
-# Barrier spec types: map, barrier, soft, hard, multi, backup, state_margin,
-# lidar. Builders below register themselves via @_barrier_type.
-BARRIER_TYPES = {}
-
-_TOP_LEVEL_KEYS = ('dynamics', 'barrier', 'control', 'safety_filter')
-
-COMPOSITIONS = ('soft', 'hard', 'multi', 'stacked')
+_TOP_LEVEL_KEYS = ('dynamics', 'barriers', 'filter', 'control')
 
 
-def _barrier_type(name):
-    def register(builder):
-        if name in BARRIER_TYPES:
-            raise ValueError(f"barrier type {name!r} already registered")
-        BARRIER_TYPES[name] = builder
-        return builder
-    return register
-
+# --------------------------------------------------------------- assembly
 
 @dataclass(frozen=True)
-class Parts:
-    """Built instances of one from_config call. Absent sections are None."""
+class System:
+    """Everything one from_config call built. Absent sections are None."""
 
     dynamics: Any
-    map: Optional[Map]
-    maps: Tuple[Map, ...]
-    barrier: Optional[Barrier]
+    barriers: Dict[str, Any]
     control: Any
-    safety_filter: Any
+    filter: Any
 
     def __repr__(self):
-        fields = ('dynamics', 'map', 'barrier', 'control', 'safety_filter')
         body = ', '.join(f'{name}={type(getattr(self, name)).__name__}'
-                         for name in fields if getattr(self, name) is not None)
-        return f'Parts({body})'
-
-
-def _unknown(kind, value, choices):
-    return ValueError(f"Unknown {kind} {value!r}. Available: {sorted(choices)}")
-
-
-def _requires(spec_name, key):
-    return ValueError(f"{spec_name!r} spec requires a {key!r} key")
-
-
-class _BuildContext:
-    """Carries intermediates across the recursive build."""
-
-    def __init__(self):
-        self.maps = []
-        self.state_barrier = None
+                         for name in ('dynamics', 'control', 'filter')
+                         if getattr(self, name) is not None)
+        if self.barriers:
+            body += f", barriers=[{', '.join(self.barriers)}]"
+        return f'System({body})'
 
 
 def _build_dynamics(spec):
@@ -213,275 +324,52 @@ def _build_dynamics(spec):
     return DYNAMICS_TYPES[dyn_type](**spec)
 
 
-def _check_keys(spec, valid, spec_name):
-    unknown = set(spec) - set(valid)
-    if unknown:
-        raise ValueError(
-            f"Unknown keys {sorted(unknown)} in {spec_name!r} spec. "
-            f"Valid keys: {sorted(valid)}"
-        )
-
-
-def _make_map(spec, dynamics, ctx):
-    """Build a Map from the geometry keys of a validated map spec."""
-    if 'geoms' not in spec:
-        raise _requires('map', 'geoms')
-    if dynamics is None:
-        raise ValueError("barrier type 'map' requires a 'dynamics' entry")
-    map_ = Map(dynamics=dynamics, cfg=spec.get('cfg', {}),
-               barriers_info={k: v for k, v in spec.items()
-                              if k in ('geoms', 'velocity')})
-    ctx.maps.append(map_)
-    return map_
-
-
-@_barrier_type('map')
-def _build_map_barrier(spec, dynamics, ctx):
-    """Sugar over the combinators for the single-map case.
-
-    'soft'/'hard' return the compositions the Map already built; 'multi'
-    delegates to the 'multi' combinator over the map's member barriers.
-
-    'stacked' builds a StackedBarrier directly via
-    StackedBarrier.from_geoms(geoms, velocity=..., dynamics=..., cfg=...).
-    It does NOT build a Map (no ctx.maps entry); parts.map stays None for
-    pure-stacked configs.  The hocbf/Lf/Lg values are numerically identical
-    to the 'soft' composition (both use softmin with conservative=False).
-    """
-    _check_keys(spec, ('geoms', 'velocity', 'composition', 'cfg'), 'map')
-    composition = spec.get('composition', 'soft')
-    if composition not in COMPOSITIONS:
-        raise _unknown('composition', composition, COMPOSITIONS)
-
-    if composition == 'stacked':
-        if 'geoms' not in spec:
-            raise _requires('map', 'geoms')
-        if dynamics is None:
-            raise ValueError("barrier type 'map' requires a 'dynamics' entry")
-        return StackedBarrier.from_geoms(
-            geoms=spec['geoms'],
-            velocity=spec.get('velocity'),
-            dynamics=dynamics,
-            cfg=spec.get('cfg', {}),
-        )
-
-    map_ = _make_map(spec, dynamics, ctx)
-    if composition == 'soft':
-        return map_.barrier
-    if composition == 'hard':
-        return map_.map_barrier  # position barriers only
-    return _build_multi(
-        {'barriers': [*map_.pos_barriers, *map_.vel_barriers],
-         'cfg': spec.get('cfg', {})},
-        dynamics, ctx,
-    )
-
-
-def _build_members(specs, dynamics, ctx):
-    """Expand a 'barriers' list into member Barrier instances.
-
-    Map specs (without 'composition') and Map instances contribute their
-    member barriers; everything else contributes one barrier.
-    """
-    members = []
-    for s in specs:
-        if isinstance(s, Map):
-            ctx.maps.append(s)
-            members.extend([*s.pos_barriers, *s.vel_barriers])
-        elif isinstance(s, dict) and s.get('type') == 'map':
-            s = {k: v for k, v in s.items() if k != 'type'}
-            _check_keys(s, ('geoms', 'velocity', 'cfg'), 'map member')
-            map_ = _make_map(s, dynamics, ctx)
-            members.extend([*map_.pos_barriers, *map_.vel_barriers])
-        else:
-            members.append(_build_barrier(s, dynamics, ctx))
-    return members
-
-
-def _combinator_members(spec, valid_keys, spec_name, dynamics, ctx):
-    _check_keys(spec, valid_keys, spec_name)
-    if not spec.get('barriers'):
-        raise _requires(spec_name, 'barriers')
-    return _build_members(spec['barriers'], dynamics, ctx)
-
-
-@_barrier_type('soft')
-def _build_soft(spec, dynamics, ctx):
-    members = _combinator_members(spec, ('barriers', 'rule', 'cfg'), 'soft', dynamics, ctx)
-    return SoftCompositionBarrier(barriers=members,
-                                  rule=spec.get('rule', 'intersection'),
-                                  cfg=spec.get('cfg', {}))
-
-
-@_barrier_type('hard')
-def _build_hard(spec, dynamics, ctx):
-    members = _combinator_members(spec, ('barriers', 'rule', 'cfg'), 'hard', dynamics, ctx)
-    return NonSmoothCompositionBarrier(barriers=members,
-                                       rule=spec.get('rule', 'intersection'),
-                                       cfg=spec.get('cfg', {}))
-
-
-@_barrier_type('multi')
-def _build_multi(spec, dynamics, ctx):
-    members = _combinator_members(spec, ('barriers', 'cfg'), 'multi', dynamics, ctx)
-    return MultiBarriers(barriers=members, cfg=spec.get('cfg', {}))
-
-
-@_barrier_type('barrier')
-def _build_leaf_barrier(spec, dynamics, ctx):
-    _check_keys(spec, ('func', 'rel_deg', 'alphas', 'cfg'), 'barrier')
-    if 'func' not in spec:
-        raise _requires('barrier', 'func')
-    return Barrier(
-        barrier_func=spec['func'],
-        rel_deg=spec.get('rel_deg', 1),
-        alphas=spec.get('alphas'),
-        dynamics=dynamics,
-        cfg=spec.get('cfg'),
-    )
-
-
-@_barrier_type('state_margin')
-def _build_state_margin(spec, dynamics, ctx):
-    if ctx.state_barrier is None:
-        raise ValueError(
-            "'state_margin' barriers are only valid inside a 'backup' spec's "
-            "'backup_barriers' list"
-        )
-    _check_keys(spec, ('margin', 'rel_deg', 'alphas', 'cfg'), 'state_margin')
-    if 'margin' not in spec:
-        raise _requires('state_margin', 'margin')
-    margin = spec['margin']
-    state_barrier = ctx.state_barrier
-
-    def terminal_barrier(x):
-        return state_barrier.hocbf(x) + margin(x)
-
-    return Barrier(
-        barrier_func=terminal_barrier,
-        rel_deg=spec.get('rel_deg', 1),
-        alphas=spec.get('alphas'),
-        dynamics=dynamics,
-        cfg=spec.get('cfg'),
-    )
-
-
-@_barrier_type('backup')
-def _build_backup_barrier(spec, dynamics, ctx):
-    _check_keys(spec, ('state_barrier', 'backup_policies', 'backup_barriers',
-                       'rel_deg', 'cfg'), 'backup')
-    for key in ('state_barrier', 'backup_policies', 'backup_barriers'):
-        if key not in spec:
-            raise _requires('backup', key)
-    backup_cfg = spec.get('cfg', {})
-
-    sb_spec = spec['state_barrier']
-    if isinstance(sb_spec, (list, tuple)) and len(sb_spec) > 1:
-        state_barrier = _build_soft(
-            {'barriers': list(sb_spec), 'cfg': backup_cfg}, dynamics, ctx)
-    else:
-        if isinstance(sb_spec, (list, tuple)):
-            sb_spec = sb_spec[0]
-        state_barrier = _build_barrier(sb_spec, dynamics, ctx)
-
-    prev_state_barrier = ctx.state_barrier
-    ctx.state_barrier = state_barrier
-    try:
-        backup_barriers = [_build_barrier(s, dynamics, ctx)
-                           for s in spec['backup_barriers']]
-    finally:
-        ctx.state_barrier = prev_state_barrier
-
-    return BackupBarrier(
-        state_barrier=state_barrier,
-        backup_barriers=backup_barriers,
-        backup_policies=list(spec['backup_policies']),
-        rel_deg=spec.get('rel_deg', 1),
-        dynamics=dynamics,
-        cfg=backup_cfg,
-    )
-
-
-@_barrier_type('lidar')
-def _build_lidar(spec, dynamics, ctx):
-    """Build a StackedBarrier with N cylinder placeholder slots.
-
-    Placeholders have centers at (1e6, 1e6) and radius 1e-3, making them
-    provably inert: the HOCBF for a far-away cylinder is enormous, so its
-    softmin contribution exp(-rho * h) underflows to zero.
-
-    Update slots at runtime (zero recompiles)::
-
-        lidar_barrier = eqx.tree_at(
-            lambda b: (b.cyl_centers, b.cyl_radii),
-            lidar_barrier,
-            (new_centers, new_radii),
-        )
-
-    Args:
-        spec: dict with required 'capacity' (int > 0) and optional 'cfg'.
-        dynamics: system dynamics (must have .f(x) and .g(x)).
-        ctx: build context (unused; no Map is created).
-
-    Returns:
-        StackedBarrier with 'capacity' cylinder placeholder leaves.
-    """
-    _check_keys(spec, ('capacity', 'cfg'), 'lidar')
-    if 'capacity' not in spec:
-        raise _requires('lidar', 'capacity')
-    capacity = spec['capacity']
-    if not isinstance(capacity, int) or capacity <= 0:
-        raise ValueError(
-            f"'lidar' spec 'capacity' must be a positive int, got {capacity!r}"
-        )
-    if dynamics is None:
-        raise ValueError("barrier type 'lidar' requires a 'dynamics' entry")
-
-    placeholder_geoms = tuple(
-        ('cylinder', {'center': (1e6, 1e6), 'radius': 1e-3})
-        for _ in range(capacity)
-    )
-    return StackedBarrier.from_geoms(
-        geoms=placeholder_geoms,
-        velocity=None,
-        dynamics=dynamics,
-        cfg=spec.get('cfg', {}),
-    )
-
-
-def _build_barrier(spec, dynamics, ctx):
-    if isinstance(spec, Barrier):
-        return spec
-    if isinstance(spec, Map):
-        ctx.maps.append(spec)
-        return spec.barrier
-    if not isinstance(spec, dict):
+def _build_barriers(section, dynamics):
+    """The 'barriers' dict -> {name: built}, in declaration order."""
+    built = {}
+    if section is None:
+        return built
+    if not isinstance(section, dict):
         raise TypeError(
-            f"Expected a barrier spec dict or Barrier instance, got {type(spec).__name__}"
+            f"'barriers' must be a dict of named specs, got {type(section).__name__}"
         )
-    spec = dict(spec)
-    barrier_type = spec.pop('type', None)
-    if barrier_type not in BARRIER_TYPES:
-        raise _unknown('barrier type', barrier_type, BARRIER_TYPES)
-    return BARRIER_TYPES[barrier_type](spec, dynamics, ctx)
+    for name, spec in section.items():
+        if isinstance(spec, (Barrier, Map)):
+            built[name] = spec
+            continue
+        if not isinstance(spec, dict):
+            raise TypeError(
+                f"barrier entry {name!r}: expected a spec dict or Barrier/Map "
+                f"instance, got {type(spec).__name__}"
+            )
+        spec = dict(spec)
+        barrier_type = spec.pop('type', None)
+        builder = BARRIER_TYPES.get(barrier_type)
+        if builder is None:
+            raise _unknown('barrier type', barrier_type, BARRIER_TYPES)
+        built[name] = builder(name, spec, built, dynamics)
+    return built
 
 
-def build_barrier(spec, dynamics=None) -> Barrier:
-    """
-    Build a barrier from a spec dict (see module docstring for spec types).
-
-    Instances pass through unchanged. Use this to build a shared barrier once
-    and reference the instance from multiple places in a config.
-    """
-    return _build_barrier(spec, dynamics, _BuildContext())
+def _default_filter_barrier(built):
+    """The single Barrier-valued entry, if there is exactly one."""
+    singles = {n: v for n, v in built.items() if isinstance(v, Barrier)}
+    if len(singles) == 1:
+        return next(iter(singles.values()))
+    if not singles:
+        return None
+    raise ValueError(
+        f"several barriers defined ({list(singles)}); name one in the "
+        "filter section: {'barrier': '<name>'}"
+    )
 
 
 def _resolve_filter(filt_type):
     if filt_type is None:
-        raise _requires('safety_filter', 'type')
+        raise _requires('filter', 'type')
     cls = FILTER_TYPES.get(filt_type)
     if cls is None:
-        raise _unknown('safety_filter type', filt_type, FILTER_TYPES)
+        raise _unknown('filter type', filt_type, FILTER_TYPES)
     if isinstance(cls, str):
         from . import safe_controls
         cls = getattr(safe_controls, cls)
@@ -499,7 +387,7 @@ def _resolve_control(ctrl_type):
     return getattr(import_module(module_name), cls_name)
 
 
-def _build_controller(spec, resolver, dynamics, extra=None):
+def _build_controller(spec, resolver, dynamics, built):
     """Resolve a controller spec to an instance; instances pass through."""
     if not isinstance(spec, dict):
         return spec
@@ -507,68 +395,50 @@ def _build_controller(spec, resolver, dynamics, extra=None):
     cls = resolver(spec.pop('type', None))
     if dynamics is not None:
         spec.setdefault('dynamics', dynamics)
-    for key, value in (extra or {}).items():
-        spec.setdefault(key, value)
+    for key in ('barrier', 'terminal_barrier'):
+        if isinstance(spec.get(key), str):
+            spec[key] = _resolve_single(spec[key], built, f"filter {key!r}")
+    if 'barrier' not in spec and resolver is _resolve_filter:
+        default = _default_filter_barrier(built)
+        if default is not None:
+            spec['barrier'] = default
     return cls(**spec)
 
 
-def from_config(cfg: dict) -> Parts:
+def from_config(cfg: dict) -> System:
     """
-    Build the full pipeline from a config dict.
-
-    Args:
-        cfg: dict with 'dynamics', 'barrier', and exactly one of
-             'safety_filter' or 'control' (callables allowed as values;
-             instances pass through unchanged). 'control' builds a
-             performance controller from CONTROL_TYPES. Layered designs use
-             one config per layer (see module docstring).
+    Build named barriers and one controller from a config dict (see module
+    docstring).
 
     Returns:
-        Parts with the built instances:
-        (dynamics, map, maps, barrier, control, safety_filter).
+        System(dynamics, barriers, control, filter) — `barriers` is the
+        {name: built} dict.
     """
-    if 'map' in cfg:
-        raise ValueError(
-            "the 'map' entry was replaced by the 'barrier' section: "
-            "{'barrier': {'type': 'map', 'geoms': ..., 'composition': ..., 'cfg': ...}}"
-        )
     unknown = set(cfg) - set(_TOP_LEVEL_KEYS)
     if unknown:
         raise ValueError(
             f"Unknown top-level cfg keys {sorted(unknown)}. "
             f"Valid keys: {sorted(_TOP_LEVEL_KEYS)}"
         )
-    if 'safety_filter' not in cfg and 'control' not in cfg:
-        raise ValueError("cfg must contain a 'safety_filter' or 'control' entry")
-    if 'safety_filter' in cfg and 'control' in cfg:
+    if 'filter' in cfg and 'control' in cfg:
         raise ValueError(
             "one controller per config: build the planner with a 'control' "
-            "config first, then pass parts.control as 'desired_control' in "
-            "the safety_filter config"
+            "config first, then pass system.control as 'desired_control' in "
+            "the filter config"
         )
 
     dynamics = _build_dynamics(cfg.get('dynamics'))
-
-    ctx = _BuildContext()
-    barrier = None
-    if cfg.get('barrier') is not None:
-        barrier = _build_barrier(cfg['barrier'], dynamics, ctx)
+    built = _build_barriers(cfg.get('barriers'), dynamics)
 
     control = None
     if cfg.get('control') is not None:
-        control = _build_controller(cfg['control'], _resolve_control, dynamics)
+        control = _build_controller(cfg['control'], _resolve_control,
+                                    dynamics, built)
 
-    safety_filter = None
-    if cfg.get('safety_filter') is not None:
-        extra = {'barrier': barrier} if barrier is not None else None
-        safety_filter = _build_controller(
-            cfg['safety_filter'], _resolve_filter, dynamics, extra)
+    filter_ = None
+    if cfg.get('filter') is not None:
+        filter_ = _build_controller(cfg['filter'], _resolve_filter,
+                                    dynamics, built)
 
-    return Parts(
-        dynamics=dynamics,
-        map=ctx.maps[0] if len(ctx.maps) == 1 else None,
-        maps=tuple(ctx.maps),
-        barrier=barrier,
-        control=control,
-        safety_filter=safety_filter,
-    )
+    return System(dynamics=dynamics, barriers=built,
+                  control=control, filter=filter_)

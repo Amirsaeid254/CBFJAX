@@ -36,7 +36,6 @@ import numpy as np
 
 import cbfjax
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.controls.mppi_control import MPPIControl
 from immutabledict import immutabledict
 
 from map_config import map_config
@@ -120,11 +119,14 @@ print(f"  state_dim={nx}, action_dim={nu}")
 
 print("Setting up barriers...")
 
-barrier = cbfjax.build_barrier(
-    {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
-    dynamics=dynamics,
-)
-print(f"  SoftCompositionBarrier built via cbfjax.build_barrier")
+barrier = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barriers': {
+        'map':   {'type': 'map', **map_config, 'cfg': cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': cfg},
+    },
+}).barriers['state']
+print(f"  SoftCompositionBarrier built via cbfjax.from_config")
 
 # ============================================================
 # MPPI Cost Functions
@@ -156,16 +158,19 @@ def terminal_cost(x):
 
 print("Setting up MPPI controller...")
 
-ctrl = MPPIControl(
-    action_dim=nu,
-    params=mppi_params,
-    dynamics=dynamics,
-    cost_func=running_cost,
-    terminal_cost_func=terminal_cost,
-    noise_sigma=noise_sigma,
-    control_low=ctrl_low,
-    control_high=ctrl_high,
-)
+ctrl = cbfjax.from_config({
+    'dynamics': dynamics,
+    'control': {
+        'type': 'mppi',
+        'action_dim': nu,
+        'params': mppi_params,
+        'cost_func': running_cost,
+        'terminal_cost_func': terminal_cost,
+        'noise_sigma': noise_sigma,
+        'control_low': ctrl_low,
+        'control_high': ctrl_high,
+    },
+}).control
 
 print(f"  K={ctrl.num_samples} samples, N={ctrl.N_horizon} steps, dt={dt_ctrl}s")
 

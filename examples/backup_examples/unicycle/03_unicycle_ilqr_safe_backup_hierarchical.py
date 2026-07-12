@@ -26,7 +26,6 @@ from immutabledict import immutabledict
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics import UnicycleReducedOrderDynamics
-from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
 from cbfjax.utils.make_map import Map
 
 # Local imports
@@ -127,12 +126,10 @@ print(f"  - Dynamics: UnicycleReducedOrderDynamics")
 
 print("Setting up barriers...")
 
-map_ilqr = Map(dynamics=dynamics, cfg=ilqr_barrier_cfg, barriers_info=map_config)
-ilqr_barrier = map_ilqr.barrier
 print(f"  - iLQR barrier: as AL inequality constraint")
 
 # ============================================================================
-# Setup iLQR Safe Controller (High-Level, stays explicit)
+# Setup iLQR Safe Controller (High-Level) via cbfjax.from_config
 # ============================================================================
 
 print("\nSetting up iLQR safe controller...")
@@ -141,15 +138,24 @@ Q = jnp.diag(jnp.array([0.01, 0.01, 0.001, 0.001]))
 R = jnp.diag(jnp.array([0.1, 0.1]))
 Q_e = 5.0 * Q
 
-ilqr_controller = QuadraticiLQRSafeControl(
-    action_dim=nu,
-    params=ilqr_params,
-    dynamics=dynamics,
-    control_low=list(control_bounds[0]),
-    control_high=list(control_bounds[1]),
-    Q=Q, R=R, Q_e=Q_e, x_ref=x_ref,
-    barrier=ilqr_barrier,
-)
+ilqr_parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barriers': {
+        'map':   {'type': 'map', **map_config, 'cfg': ilqr_barrier_cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'],
+                  'cfg': ilqr_barrier_cfg},
+    },
+    'filter': {
+        'type': 'quadratic_ilqr',
+        'barrier': 'state',  # barrier as AL inequality constraint
+        'action_dim': nu,
+        'params': ilqr_params,
+        'control_low': list(control_bounds[0]),
+        'control_high': list(control_bounds[1]),
+        'Q': Q, 'R': R, 'Q_e': Q_e, 'x_ref': x_ref,
+    },
+})
+ilqr_controller = ilqr_parts.filter
 
 print(f"  - Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 print(f"  - Barrier: handled as AL inequality constraint")
@@ -162,19 +168,29 @@ print("Setting up backup barriers and safety filter...")
 
 backup_controls = UnicycleBackupControl(ub_gain, control_bounds)()
 
+state_parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barriers': {
+        'map':   {'type': 'map', **map_config, 'cfg': map_cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': map_cfg},
+    },
+})
+state_barrier = state_parts.barriers['state']
+
 parts = cbfjax.from_config({
     'dynamics': dynamics,
-    'barrier': {
-        'type': 'backup',
-        'state_barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': map_cfg},
-        'backup_policies': backup_controls,
-        'backup_barriers': [
-            {'type': 'state_margin',
-             'margin': lambda x: -(1.0 * jnp.pow(x[2:3], 2)) / control_bounds[1][0]},
-        ],
-        'cfg': backup_cfg,
+    'barriers': {
+        'state':    state_barrier,
+        'terminal': {'type': 'func',
+                     'h': lambda x: state_barrier.hocbf(x)
+                     -(1.0 * jnp.pow(x[2:3], 2)) / control_bounds[1][0]},
+        'fwd':      {'type': 'backup', 'state_barrier': 'state',
+                     'backup_barriers': ['terminal'],
+                     'backup_policies': backup_controls,
+                     'cfg': backup_cfg},
     },
-    'safety_filter': {
+    'filter': {
+        'barrier': 'fwd',
         'type': 'min_interv_backup',
         'action_dim': nu,
         'alpha': lambda x: 1.0 * x,
@@ -185,10 +201,9 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
-map_ = parts.map
-fwd_barrier = parts.barrier
-state_barrier = fwd_barrier.state_barrier
+safety_filter = parts.filter
+map_ = state_parts.barriers['map']
+fwd_barrier = parts.barriers['fwd']
 
 print(f"  - State barrier: {len(map_.barrier._barriers)} obstacle/boundary barriers")
 print(f"  - Backup policies: {len(backup_controls)} policies")

@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from immutabledict import immutabledict
 
 from ..barriers.barrier import Barrier
-from ..barriers.composite_barrier import SoftCompositionBarrier, NonSmoothCompositionBarrier
+from ..barriers.composite_barrier import SoftCompositionBarrier, HardCompositionBarrier
 from .utils import (
     make_circle_barrier_functional,
     make_norm_rectangular_barrier_functional,
@@ -148,7 +148,7 @@ class Map(eqx.Module):
     pos_barriers: tuple
     vel_barriers: tuple
     barrier: Optional[SoftCompositionBarrier]
-    map_barrier: Optional[NonSmoothCompositionBarrier]
+    map_barrier: Optional[HardCompositionBarrier]
 
     # Static configuration
     cfg: immutabledict = eqx.field(static=True)
@@ -301,9 +301,9 @@ class Map(eqx.Module):
         """Create soft composition barrier from individual barriers."""
         return SoftCompositionBarrier(barriers=barriers, rule='intersection', cfg=self.cfg)
 
-    def _create_hard_composition_barrier(self, barriers: List[Barrier]) -> NonSmoothCompositionBarrier:
+    def _create_hard_composition_barrier(self, barriers: List[Barrier]) -> HardCompositionBarrier:
         """Create hard composition barrier from position barriers only."""
-        return NonSmoothCompositionBarrier(barriers=barriers, rule='intersection', cfg=self.cfg)
+        return HardCompositionBarrier(barriers=barriers, rule='intersection', cfg=self.cfg)
 
     def _get_barrier_config(self, geom_type: str) -> Tuple[callable, str]:
         """

@@ -93,8 +93,11 @@ print("Setting up iLQR controller...")
 
 parts = cbfjax.from_config({
     'dynamics': {'type': 'unicycle', 'params': dynamics_params},
-    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': cfg},
+    },
+    'filter': {
         'type': 'quadratic_ilqr',
         'action_dim': 2,
         'params': ilqr_params,
@@ -104,10 +107,10 @@ parts = cbfjax.from_config({
     },
 })
 
-controller = parts.safety_filter
+controller = parts.filter
 dynamics = parts.dynamics
-barrier = parts.barrier
-map_ = parts.map  # kept for plotting
+barrier = parts.barriers['state']
+map_ = parts.barriers['map']  # kept for plotting
 
 # State dimensions: [q_x, q_y, v, theta]
 nx = dynamics.state_dim  # 4

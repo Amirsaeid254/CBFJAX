@@ -3,7 +3,7 @@ Multi-robot ensemble: 8 unicycles with a single compiled rollout.
 
 Demonstrates:
 - stack_ensemble / unstack_ensemble from cbfjax.utils
-- StackedBarrier via from_config with composition='stacked'
+- Shared softmin map barrier via from_config with composition='soft'
 - UnicycleGoalControl as a traced leaf — goal swap = no retrace
 - eqx.filter_jit + eqx.filter_vmap over lax.scan for N robots
 """
@@ -94,8 +94,11 @@ print("Building template safety filter via cbfjax.from_config ...")
 
 parts = cbfjax.from_config({
     'dynamics': 'unicycle',
-    'barrier': {'type': 'map', **map_config, 'composition': 'stacked', 'cfg': barrier_cfg},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': barrier_cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': barrier_cfg},
+    },
+    'filter': {
         'type': 'min_interv_cf',
         'action_dim': 2,
         'alpha': lambda h: 0.5 * h,
@@ -104,9 +107,9 @@ parts = cbfjax.from_config({
     },
 })
 
-template_filter = parts.safety_filter
+template_filter = parts.filter
 dynamics = parts.dynamics
-barrier = parts.barrier
+barrier = parts.barriers['state']
 
 print(f"  dynamics: {type(dynamics).__name__}, barrier: {type(barrier).__name__}")
 print(f"  filter: {type(template_filter).__name__}")

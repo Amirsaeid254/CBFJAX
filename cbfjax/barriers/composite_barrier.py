@@ -292,7 +292,7 @@ class SoftCompositionBarrier(CompositionBarrier):
         return soft_intersection
 
 
-class NonSmoothCompositionBarrier(CompositionBarrier):
+class HardCompositionBarrier(CompositionBarrier):
     """
     Non-smooth composition barrier using exact operations.
 

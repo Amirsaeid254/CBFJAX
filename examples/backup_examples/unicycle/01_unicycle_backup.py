@@ -100,21 +100,30 @@ desired_control_func = UnicycleReducedOrderGoalControl(
     d=jnp.array(dynamics_params['d']),
 )
 
-parts = cbfjax.from_config({
+state_parts = cbfjax.from_config({
     'dynamics': {'type': 'unicycle_reduced_order', 'params': dynamics_params},
-    'barrier': {
-        'type': 'backup',
-        'state_barrier': {'type': 'map', **map_config,
-                          'composition': 'soft', 'cfg': map_cfg},
-        'backup_policies': backup_controls,
-        'backup_barriers': [
-            # terminal set: state barrier shrunk by the braking margin
-            {'type': 'state_margin',
-             'margin': lambda x: -(0.5 * jnp.pow(x[2], 2)) / control_high[0]},
-        ],
-        'cfg': backup_cfg,
+    'barriers': {
+        'map':   {'type': 'map', **map_config, 'cfg': map_cfg},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': map_cfg},
     },
-    'safety_filter': {
+})
+state_barrier = state_parts.barriers['state']
+
+parts = cbfjax.from_config({
+    'dynamics': state_parts.dynamics,
+    'barriers': {
+        'state':    state_barrier,
+        # terminal set: state barrier shrunk by the braking margin
+        'terminal': {'type': 'func',
+                     'h': lambda x: state_barrier.hocbf(x)
+                     - (0.5 * jnp.pow(x[2], 2)) / control_high[0]},
+        'fwd':      {'type': 'backup', 'state_barrier': 'state',
+                     'backup_barriers': ['terminal'],
+                     'backup_policies': backup_controls,
+                     'cfg': backup_cfg},
+    },
+    'filter': {
+        'barrier': 'fwd',
         'type': 'min_interv_backup',
         'action_dim': 2,
         'alpha': lambda x: 1.0 * x,
@@ -125,11 +134,10 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
+safety_filter = parts.filter
 dynamics = parts.dynamics
-map_ = parts.map
-fwd_barrier = parts.barrier
-state_barrier = fwd_barrier.state_barrier
+map_ = state_parts.barriers['map']
+fwd_barrier = parts.barriers['fwd']
 
 nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]

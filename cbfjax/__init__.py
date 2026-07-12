@@ -35,9 +35,8 @@ from .barriers import (
     Barrier,
     MultiBarriers,
     SoftCompositionBarrier,
-    NonSmoothCompositionBarrier,
+    HardCompositionBarrier,
     BackupBarrier,
-    StackedBarrier,
 )
 from .controls import BaseControl
 from .safe_controls import (
@@ -54,7 +53,7 @@ from .safe_controls import (
 )
 
 # Config-driven construction
-from .factory import from_config, build_barrier
+from .factory import from_config, System
 
 # Ensemble utilities
 from .utils.utils import stack_ensemble, unstack_ensemble
@@ -92,9 +91,8 @@ __all__ = [
     "Barrier",
     "MultiBarriers",
     "SoftCompositionBarrier",
-    "NonSmoothCompositionBarrier",
+    "HardCompositionBarrier",
     "BackupBarrier",
-    "StackedBarrier",
     # Controls
     "BaseControl",
     # Safe controls (always available)
@@ -110,7 +108,7 @@ __all__ = [
     "MinIntervBackupSafeControl",
     # Config-driven construction
     "from_config",
-    "build_barrier",
+    "System",
     # Ensemble utilities
     "stack_ensemble",
     "unstack_ensemble",

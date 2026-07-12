@@ -26,7 +26,6 @@ import os
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 from cbfjax.dynamics.unicycle import UnicycleDynamics
-from cbfjax.safe_controls.ilqr_safe_control import QuadraticiLQRSafeControl
 from immutabledict import immutabledict
 
 # Local imports
@@ -106,20 +105,7 @@ nx = dynamics.state_dim  # 4: [q_x, q_y, v, theta]
 nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
 
 # ============================================
-# Build iLQR barrier (explicit: needed before ilqr_controller is constructed)
-# ============================================
-
-print("Setting up barriers...")
-
-barrier_ilqr = cbfjax.build_barrier(
-    {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg_ilqr},
-    dynamics=dynamics,
-)
-
-print(f"  iLQR barrier: composite barrier as AL inequality constraint")
-
-# ============================================
-# Setup iLQR Safe Controller (High-Level, stays explicit)
+# Setup iLQR Safe Controller (High-Level) via cbfjax.from_config
 # ============================================
 
 print("Setting up iLQR safe controller...")
@@ -133,16 +119,24 @@ Q_e = 5.0 * Q                                    # Terminal cost
 goal_pos = jnp.array([3.0, 4.5])
 x_ref = jnp.array([goal_pos[0], goal_pos[1], 0.0, 0.0])
 
-# Create iLQR controller WITH barrier as AL inequality constraint
-ilqr_controller = QuadraticiLQRSafeControl(
-    action_dim=nu,
-    params=ilqr_params,
-    dynamics=dynamics,
-    control_low=control_low,
-    control_high=control_high,
-    Q=Q, R=R, Q_e=Q_e, x_ref=x_ref,
-    barrier=barrier_ilqr,  # Barrier as AL constraint
-)
+ilqr_parts = cbfjax.from_config({
+    'dynamics': dynamics,
+    'barriers': {
+        'map':   {'type': 'map', **map_config, 'cfg': cfg_ilqr},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': cfg_ilqr},
+    },
+    'filter': {
+        'type': 'quadratic_ilqr',
+        'barrier': 'state',  # barrier as AL inequality constraint
+        'action_dim': nu,
+        'params': ilqr_params,
+        'control_low': control_low,
+        'control_high': control_high,
+        'Q': Q, 'R': R, 'Q_e': Q_e, 'x_ref': x_ref,
+    },
+})
+ilqr_controller = ilqr_parts.filter
+barrier_ilqr = ilqr_parts.barriers['state']
 
 print(f"  Horizon: {ilqr_controller.horizon}s, N={ilqr_controller.N_horizon}")
 print(f"  Barrier: handled as AL inequality constraint")
@@ -155,8 +149,11 @@ print("Setting up CF safety filter...")
 
 parts = cbfjax.from_config({
     'dynamics': dynamics,
-    'barrier': {'type': 'map', **map_config, 'composition': 'soft', 'cfg': cfg_cf},
-    'safety_filter': {
+    'barriers': {
+        'map':  {'type': 'map', **map_config, 'cfg': cfg_cf},
+        'state': {'type': 'soft_composition', 'barriers': ['map'], 'cfg': cfg_cf},
+    },
+    'filter': {
         'type': 'min_interv_cf',
         'action_dim': nu,
         'alpha': lambda h: 0.5 * h,
@@ -165,8 +162,8 @@ parts = cbfjax.from_config({
     },
 })
 
-safety_filter = parts.safety_filter
-barrier_cf = parts.barrier
+safety_filter = parts.filter
+barrier_cf = parts.barriers['state']
 
 print(f"  CF barrier: composite barrier for closed-form safety")
 print(f"  Alpha: 0.5 * h")
