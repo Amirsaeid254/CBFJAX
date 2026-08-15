@@ -278,14 +278,14 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
 
         def combined(s_inner):
             x_i, theta_i, gamma_i = flow_barrier._extract_parameters_from_state(s_inner)
-            trajectory, dense_func = flow_barrier.compute_trajectory(x_i, theta_i, gamma_i)
+            trajectory = flow_barrier.compute_trajectory(x_i, theta_i, gamma_i)
 
             # Cost on shared trajectory
             J = cost_functional(trajectory)
 
             # Trajectory + backup barriers on shared trajectory
             h_traj_backup = flow_barrier._evaluate_traj_backup_on_trajectory(
-                trajectory, dense_func, theta_i, gamma_i)
+                trajectory, theta_i, gamma_i)
 
             # Other barriers (action, time_shift) — no trajectory needed
             h_other_list = [jnp.atleast_1d(func(s_inner))

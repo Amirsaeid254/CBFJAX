@@ -51,6 +51,10 @@ Barrier entry types
     {'type': 'flow', 'state_barrier': <name>, 'backup_barriers': [<name>, ...],
      'cfg': {...}}   # FlowBarrier over augmented state [x, theta, gamma];
                      # consumed by the 'parametric_flow' filter
+    {'type': 'flow2', 'state_barrier': <name>, 'backup_barriers': [<name>, ...],
+     'backup_policy': callable, 'cfg': {...}}
+                     # FlowBarrier2 with backup-policy blended plan (cfg also
+                     # reads 'blend_fraction'); consumed by 'parametric_flow2'
         # cfg: horizon, time_steps, integration_method, softmin_rho,
         # softmax_rho; backup filters also read epsilon, h_scale, feas_scale.
         # A terminal like h_terminal = state.hocbf + margin is just another
@@ -93,6 +97,7 @@ from .safe_controls import (
     BackupSafeControl,
     MinIntervBackupSafeControl,
     ParametricFlowSafeControl,
+    ParametricFlowSafeControl2,
 )
 from .barriers import (
     Barrier,
@@ -101,6 +106,7 @@ from .barriers import (
     HardCompositionBarrier,
     BackupBarrier,
     FlowBarrier,
+    FlowBarrier2,
 )
 from .utils.make_map import Map
 
@@ -267,6 +273,22 @@ def _build_flow(name, spec, built, dynamics):
             .make())
 
 
+def _build_flow2(name, spec, built, dynamics):
+    _check_keys(spec, ('state_barrier', 'backup_barriers', 'backup_policy',
+                       'cfg'), 'flow2')
+    for key in ('state_barrier', 'backup_barriers', 'backup_policy'):
+        if key not in spec:
+            raise _requires('flow2', key)
+    where = f"'{name}'"
+    return (FlowBarrier2.create_empty(cfg=dict(spec.get('cfg', {})))
+            .assign_state_barrier(_resolve_single(spec['state_barrier'], built, where))
+            .assign_backup_barrier([_resolve_single(b, built, where)
+                                    for b in spec['backup_barriers']])
+            .assign_backup_policy(spec['backup_policy'])
+            .assign_dynamics(dynamics)
+            .make())
+
+
 BARRIER_TYPES = {
     'map': _build_map,
     'func': _build_func,
@@ -275,6 +297,7 @@ BARRIER_TYPES = {
     'multi_barrier': _build_multi_barrier,
     'backup': _build_backup,
     'flow': _build_flow,
+    'flow2': _build_flow2,
 }
 
 # String values are class names with optional dependencies (acados/casadi,
@@ -291,6 +314,7 @@ FILTER_TYPES = {
     'backup': BackupSafeControl,
     'min_interv_backup': MinIntervBackupSafeControl,
     'parametric_flow': ParametricFlowSafeControl,
+    'parametric_flow2': ParametricFlowSafeControl2,
     'nmpc': 'NMPCSafeControl',
     'quadratic_nmpc': 'QuadraticNMPCSafeControl',
     'ilqr': 'iLQRSafeControl',

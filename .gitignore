@@ -171,3 +171,6 @@ c_generated_code/
 nmpc_model_ocp.json
 
 /examples/unicycle/flowbarrier/figs/
+examples/*/*/figs/
+examples/*/*/figs_mc/
+examples/*/*/cache_mc/

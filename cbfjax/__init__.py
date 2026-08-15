@@ -38,6 +38,7 @@ from .barriers import (
     HardCompositionBarrier,
     BackupBarrier,
     FlowBarrier,
+    FlowBarrier2,
 )
 from .controls import (
     BaseControl,
@@ -58,6 +59,7 @@ from .safe_controls import (
     BackupSafeControl,
     MinIntervBackupSafeControl,
     ParametricFlowSafeControl,
+    ParametricFlowSafeControl2,
 )
 
 # Config-driven construction
@@ -102,6 +104,7 @@ __all__ = [
     "HardCompositionBarrier",
     "BackupBarrier",
     "FlowBarrier",
+    "FlowBarrier2",
     # Controls
     "BaseControl",
     "ParametricControl",
@@ -120,6 +123,7 @@ __all__ = [
     "BackupSafeControl",
     "MinIntervBackupSafeControl",
     "ParametricFlowSafeControl",
+    "ParametricFlowSafeControl2",
     # Config-driven construction
     "from_config",
     "System",

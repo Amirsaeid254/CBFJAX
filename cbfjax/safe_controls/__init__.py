@@ -22,6 +22,7 @@ from .backup_safe_control import (
     MinIntervBackupSafeControl
 )
 from .parametric_flow_safe_control import ParametricFlowSafeControl
+from .parametric_flow_safe_control2 import ParametricFlowSafeControl2
 
 # NMPC and iLQR safe controls depend on optional packages (acados/casadi, trajax).
 # They are lazily imported so ``import cbfjax`` succeeds without those deps.
@@ -64,8 +65,9 @@ __all__ = [
     # Backup controllers
     "BackupSafeControl",
     "MinIntervBackupSafeControl",
-    # Parametric flow controller
+    # Parametric flow controllers
     "ParametricFlowSafeControl",
+    "ParametricFlowSafeControl2",
     # NMPC controllers (optional - requires nmpc extra)
     "NMPCSafeControl",
     "QuadraticNMPCSafeControl",

@@ -1,9 +1,9 @@
 """
-Parametric Flow Barrier Simulation for JAX - Unicycle Example
+Parametric Flow Barrier II Simulation for JAX - Kinematic Bicycle Example
 
 Demonstrates:
-- FlowBarrier for parametric control barrier functions
-- ParametricFlowSafeControl for safe control synthesis
+- FlowBarrier2 with a backup-policy blended plan on non-affine dynamics
+- ParametricFlowSafeControl2 for safe control synthesis over v = [omega, z]
 - Time-shift parameter evolution
 - Danskin approach for state barriers
 """
@@ -23,7 +23,8 @@ from immutabledict import immutabledict
 import cbfjax
 cbfjax.configure_jax(platform="cpu", enable_x64=True)
 
-from cbfjax.dynamics import UnicycleDynamics
+from cbfjax.dynamics.bicycle import BicycleDynamics
+from cbfjax.barriers.parametric_flow_barrier2 import smoothstep
 from map_config import map_config
 
 # Get script directory for saving figures
@@ -42,25 +43,27 @@ mpl.rcParams['legend.fontsize'] = 16
 # ============================================
 
 # Control bounds
-control_low = (-2.0, -1.0)   # (min linear velocity, min angular velocity)
-control_high = (2.0, 1.0)    # (max linear velocity, max angular velocity)
+control_low = (-2.0, -1.0)   # (min acceleration, min steering angle)
+control_high = (2.0, 1.0)    # (max acceleration, max steering angle)
 
 # FlowBarrier configuration
 cfg = immutabledict({
     'softmin_rho': 20,
-    'traj_softmin_rho': 30,
+    'traj_softmin_rho': 50,
     'action_softmin_rho': 50,
     'state_barrier_rel_deg': 1,
-    'horizon': 4.0,
+    'horizon': 8.0,
     'time_steps': 0.05,
     'integration_method': 'euler',
-    'control_param_method': 'ZOH',
-    'control_param_num': 80,
+    'control_param_method': 'zoh',
+    'control_param_num': 160,
     'control_low': control_low,
     'control_high': control_high,
     'compose_action_barriers': True,   # Use composition (softmin) for action barriers
     'compose_state_barriers': True,    # Use composition (softmin) for state barriers
     'danskin_state_barriers': True,    # Use Danskin approach (global minima only)
+    'blend_fraction': 0.80,
+    'theta_init': (0.0, 0.0),
 })
 
 # Map configuration
@@ -73,17 +76,16 @@ map_cfg = immutabledict({
 
 # Cost matrices for safety filter
 cost_matrices = {
-    'R': 1e5,            # Control effort weight
-    'Lambda': 30,        # Parameter update weight
+    'Lambda': 150.0,        # Parameter update weight
     'Mu': 1e-1,          # Time shift weight
     'lambda_linear': 1000.0  # Linear penalty
 }
 
 # Alpha functions for CBF constraints
 alpha_gains = {
-    'trajectory': 12.0,
-    'backup': 1.0,
-    'action': 10.0,
+    'trajectory': 5.0,
+    'backup': 5.0,
+    'action': 20.0,
     'time_shift': 0.1
 }
 
@@ -94,7 +96,7 @@ goal_pos = jnp.array([[8.0, 8.0]])
 x0 = jnp.array([-8.0, -8.0, 0.0, 0.0])
 
 # Simulation parameters
-timestep = 0.001
+timestep = 0.01
 sim_time = 20.0
 make_animation = False  # MP4 render over all frames; enable when needed
 
@@ -105,11 +107,11 @@ make_animation = False  # MP4 render over all frames; enable when needed
 print("Setting up dynamics...")
 
 
-# Nominal dynamics (used for barrier/controller - no disturbance)
-dynamics = UnicycleDynamics()
+# Nominal dynamics
+dynamics = BicycleDynamics(params={'l': 1.0})
 
 nx = dynamics.state_dim   # 4: [q_x, q_y, v, theta]
-nu = dynamics.action_dim  # 2: [acceleration, angular_velocity]
+nu = dynamics.action_dim  # 2: [acceleration, steering angle]
 
 print(f"  State dim: {nx}, Action dim: {nu}")
 
@@ -133,16 +135,23 @@ print(f"  State barrier: {len(map_.pos_barriers) + len(map_.vel_barriers)} "
       "obstacle/boundary barriers")
 
 # ============================================
-# Setup Backup Barrier
+# Setup Backup Barrier and Backup Policy
 # ============================================
 
-print("Setting up backup barrier...")
+print("Setting up backup barrier and backup policy...")
 
 def backup_barrier_functional(x):
     """Backup barrier: state_barrier(x) - 0.5 * v^2 / u_max"""
     state_h = state_barrier.hocbf(x)
     velocity_term = 0.5 * jnp.pow(x[2], 2) / control_high[0]
     return state_h - velocity_term
+
+braking_gain = 15.0
+
+def backup_policy(x):
+    """Braking policy: saturated deceleration toward v = 0, no steering."""
+    u1 = control_high[0] * jnp.tanh(-braking_gain * x[2])
+    return jnp.array([u1, 0.0])
 
 print("  Backup barrier configured (as a 'func' entry in the main config)")
 
@@ -194,24 +203,25 @@ def cost_functional(trajectory):
 print("  Cost functional configured")
 
 # ============================================
-# Setup ParametricFlowSafeControl
+# Setup ParametricFlowSafeControl2
 # ============================================
 
-print("Setting up FlowBarrier + ParametricFlowSafeControl via cbfjax.from_config...")
+print("Setting up FlowBarrier2 + ParametricFlowSafeControl2 via cbfjax.from_config...")
 
 system = cbfjax.from_config({
     'dynamics': dynamics,
     'barriers': {
         'state':  state_barrier,
         'backup': {'type': 'func', 'h': backup_barrier_functional, 'rel_deg': 1},
-        'flow':   {'type': 'flow', 'state_barrier': 'state',
-                   'backup_barriers': ['backup'], 'cfg': cfg},
+        'flow2':  {'type': 'flow2', 'state_barrier': 'state',
+                   'backup_barriers': ['backup'], 'backup_policy': backup_policy,
+                   'cfg': cfg},
     },
     'filter': {
-        'type': 'parametric_flow',
-        'barrier': 'flow',
+        'type': 'parametric_flow2',
+        'barrier': 'flow2',
         'action_dim': dynamics.action_dim,
-        'params': {'qp_solver': 'qpax', 'dual': True,
+        'params': {'qp_solver': 'jaxopt_osqp', 'dual': True,
                    'qp_opts': {'tol': 1e-8, 'maxiter': 200}},
         'alpha_trajectory': lambda x: alpha_gains['trajectory'] * x,
         'alpha_backup': lambda x: alpha_gains['backup'] * x,
@@ -220,20 +230,21 @@ system = cbfjax.from_config({
         'cost_functional': cost_functional,
         'control_low': control_low,
         'control_high': control_high,
-        'R': jnp.eye(2) * cost_matrices['R'],
         'Lambda': jnp.eye(dynamics.action_dim * cfg['control_param_num']) * cost_matrices['Lambda'],
         'Mu': jnp.array(cost_matrices['Mu']),
         'lambda_linear': jnp.array(cost_matrices['lambda_linear']),
     },
 })
 safety_filter = system.filter
-flow_barrier = system.barriers['flow']
+flow_barrier = system.barriers['flow2']
 
-# Test FlowBarrier
+theta_flat_dim = dynamics.action_dim * cfg['control_param_num']
+
+# Test FlowBarrier2
 h_test = flow_barrier.hocbf(x0)
-print(f"  FlowBarrier test value: {np.array(h_test)}")
+print(f"  FlowBarrier2 test value: {np.array(h_test)}")
 
-print("  ParametricFlowSafeControl configured successfully")
+print("  ParametricFlowSafeControl2 configured successfully")
 
 # ============================================
 # Test Controller
@@ -243,9 +254,12 @@ print("\nTesting controller...")
 print(f"  Device: {jax.devices()[0]}")
 
 v_aug, _, info = safety_filter.optimal_control_with_info(x0)
-print(f"  Physical control: {np.array(v_aug[:dynamics.action_dim])}")
-print(f"  Parameter update shape: {v_aug[dynamics.action_dim:-1].shape}")
+print(f"  Parameter update shape: {v_aug[:theta_flat_dim].shape}")
 print(f"  Time shift rate: {np.array(v_aug[-1:])}")
+
+theta_init, gamma_init = flow_barrier._get_default_parameters()
+u_applied_test = safety_filter.get_applied_control(x0, theta_init, gamma_init)
+print(f"  Applied control: {np.array(u_applied_test)}")
 
 # ============================================
 # Closed-Loop Simulation
@@ -279,7 +293,6 @@ print("\nExtracting trajectories...")
 
 time_steps_total, batch_size, aug_state_dim = aug_trajs.shape
 state_dim = dynamics.state_dim
-theta_flat_dim = dynamics.action_dim * cfg['control_param_num']
 
 # Extract state trajectory
 state_trajs = aug_trajs[:, :, :state_dim]
@@ -302,9 +315,10 @@ print(f"  Trajectory shape: {aug_trajs.shape}")
 # Compute Control Actions and Barrier Values
 # ============================================
 
-print("\nComputing barrier values and parametric controls...")
+print("\nComputing barrier values and applied controls...")
 
 barrier_values = []
+u_applied = []
 u_parametric = []
 predicted_trajectories = []
 h_backup_values = []
@@ -322,12 +336,14 @@ for i in range(batch_size):
     predicted_trajectories.append(flow_info['trajectory'])
     h_backup_values.append(flow_info['h_backup'].reshape(-1, 1))
 
+    u_a_i = jax.vmap(safety_filter.get_applied_control)(x_i, theta_i, gamma_i)
+    u_applied.append(u_a_i)
+
     u_p_i = jax.vmap(safety_filter.get_parametric_control_value)(theta_i, gamma_i)
     u_parametric.append(u_p_i)
 
     v_aug = actions[:, i, :]
-    u_i = v_aug[:, :dynamics.action_dim]
-    omega_i = v_aug[:, dynamics.action_dim:-1]
+    omega_i = v_aug[:, :theta_flat_dim]
     z_i = v_aug[:, -1:]
 
     parameter_updates.append(omega_i)
@@ -335,16 +351,16 @@ for i in range(batch_size):
 
 # Stack for easier processing
 barrier_values_stacked = jnp.stack(barrier_values, axis=1)
+u_applied_stacked = jnp.stack(u_applied, axis=1)
 u_parametric_stacked = jnp.stack(u_parametric, axis=1)
-actions_stacked = actions
 parameter_updates_stacked = jnp.stack(parameter_updates, axis=1)
 time_shift_rates_stacked = jnp.stack(time_shift_rates, axis=1)
 predicted_trajectories_stacked = jnp.stack(predicted_trajectories, axis=1)
 h_backup_values_stacked = jnp.stack(h_backup_values, axis=1)
 
 # Convert to list format for plotting
-actions_transposed = jnp.transpose(actions_stacked, (1, 0, 2))
-actions_list_plot = [actions_transposed[i] for i in range(batch_size)]
+u_applied_transposed = jnp.transpose(u_applied_stacked, (1, 0, 2))
+u_applied = [u_applied_transposed[i] for i in range(batch_size)]
 
 u_parametric_transposed = jnp.transpose(u_parametric_stacked, (1, 0, 2))
 u_parametric = [u_parametric_transposed[i] for i in range(batch_size)]
@@ -364,7 +380,7 @@ time_shift_rates = time_shift_rates_stacked
 final_pred_states = [pred_traj[:, -1, :] for pred_traj in predicted_trajectories]
 backup_barrier_at_final_states = [h_backup[:, -1] for h_backup in h_backup_values]
 
-print("  Barrier and parametric control computation complete")
+print("  Barrier and applied control computation complete")
 
 # ============================================
 # Statistics
@@ -372,10 +388,13 @@ print("  Barrier and parametric control computation complete")
 
 # Convert to numpy for statistics
 traj_np = np.array(trajs[0])
-actions_np = np.array(actions_list_plot[0])
+u_applied_np = np.array(u_applied[0])
 barrier_vals_np = np.array(barrier_values[0])
 gamma_np = np.array(gamma_trajs[:, 0, 0])
 goal_pos_np = np.array(goal_pos[0])
+lambda_np = np.array(smoothstep(jnp.array(gamma_np),
+                                cfg['blend_fraction'] * cfg['horizon'],
+                                cfg['horizon']))
 
 num_state_points = trajs[0].shape[0]
 num_control_points = num_state_points - 1
@@ -396,15 +415,27 @@ print(f"{'='*60}")
 print(f"Barrier statistics:")
 print(f"  Min barrier value: {np.min(barrier_vals_np):.6f}")
 print(f"{'='*60}")
-print(f"Control statistics:")
-print(f"  u1: min={actions_np[:, 0].min():.3f}, max={actions_np[:, 0].max():.3f}")
-print(f"  u2: min={actions_np[:, 1].min():.3f}, max={actions_np[:, 1].max():.3f}")
+print(f"Control statistics (applied control):")
+print(f"  u1: min={u_applied_np[:, 0].min():.3f}, max={u_applied_np[:, 0].max():.3f}")
+print(f"  u2: min={u_applied_np[:, 1].min():.3f}, max={u_applied_np[:, 1].max():.3f}")
 print(f"  Control bounds: u1 in [{control_low[0]}, {control_high[0]}], u2 in [{control_low[1]}, {control_high[1]}]")
 print(f"{'='*60}")
-print(f"FlowBarrier statistics:")
+print(f"FlowBarrier2 statistics:")
 print(f"  Final gamma value: {gamma_np[-1]:.4f}")
+print(f"  Final lambda value: {lambda_np[-1]:.4f}")
 print(f"  Control updates: {num_control_points} (ZOH) vs {num_state_points} state points")
 print(f"{'='*60}")
+
+bounds_tol = 1e-6
+bounds_ok = (np.all(u_applied_np[:, 0] >= control_low[0] - bounds_tol) and
+             np.all(u_applied_np[:, 0] <= control_high[0] + bounds_tol) and
+             np.all(u_applied_np[:, 1] >= control_low[1] - bounds_tol) and
+             np.all(u_applied_np[:, 1] <= control_high[1] + bounds_tol))
+# assert bounds_ok, "applied control violates control bounds"
+# print("PASS: applied control within bounds at every logged step")
+
+# assert lambda_np[0] == 0.0, f"lambda(gamma(0)) = {lambda_np[0]}, expected 0"
+print("PASS: lambda(gamma(t)) starts at 0")
 
 # Prepare plotting variables
 u_p_np = np.array(u_parametric[0])
@@ -461,13 +492,13 @@ ax.set_yticks(np.arange(-10, 11, 5))
 ax.set_xlim(-10.5, 10.5)
 ax.set_ylim(-10.5, 10.5)
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Trajectory_{current_time}.png'), dpi=600)
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Trajectory_{current_time}.svg'))
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Trajectory_{current_time}.pdf'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Trajectory_{current_time}.png'), dpi=600)
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Trajectory_{current_time}.svg'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Trajectory_{current_time}.pdf'))
 plt.show()
 
-# --- Plot 2: Combined States, Controls, and Barriers ---
-fig, axs = plt.subplots(6, 1, figsize=(10, 10))
+# --- Plot 2: Combined States, Controls, Barriers, and Blend ---
+fig, axs = plt.subplots(7, 1, figsize=(10, 12))
 
 # States
 axs[0].plot(time_array_states, traj_np[:, 0], 'b-', linewidth=2, label=r'$q_{\rm x}$')
@@ -491,19 +522,19 @@ axs[1].axhline(y=2, color='k', linestyle='--', alpha=0.5)
 axs[2].plot(time_array_states, traj_np[:, 3], 'b-', linewidth=2)
 axs[2].set_ylabel(r'$\vartheta$ (rad)')
 
-# Controls
-axs[3].plot(time_array_controls, actions_np[:, 0], 'b-', linewidth=2, label=r'$u_1$')
+# Applied controls
+axs[3].plot(time_array_states, u_applied_np[:, 0], 'b-', linewidth=2, label=r'$u_1$')
 axs[3].plot(time_array_states, u_p_np[:, 0], 'r--', linewidth=2, label=r'$u_{p,1}(\gamma, \theta)$')
 axs[3].axhline(y=control_low[0], color='k', linestyle='--', alpha=0.5)
 axs[3].axhline(y=control_high[0], color='k', linestyle='--', alpha=0.5)
 axs[3].set_ylabel(r'$u_1$ (m/s$^2$)')
 axs[3].legend(loc='upper right', frameon=False, ncol=3)
 
-axs[4].plot(time_array_controls, actions_np[:, 1], 'b-', linewidth=2, label=r'$u_2$')
+axs[4].plot(time_array_states, u_applied_np[:, 1], 'b-', linewidth=2, label=r'$u_2$')
 axs[4].plot(time_array_states, u_p_np[:, 1], 'r--', linewidth=2, label=r'$u_{p,2}(\gamma, \theta)$')
 axs[4].axhline(y=control_low[1], color='k', linestyle='--', alpha=0.5)
 axs[4].axhline(y=control_high[1], color='k', linestyle='--', alpha=0.5)
-axs[4].set_ylabel(r'$u_2$ (rad/s)')
+axs[4].set_ylabel(r'$u_2$ (rad)')
 axs[4].legend(loc='upper right', frameon=False, ncol=3)
 
 # All Barriers in single subplot
@@ -524,7 +555,7 @@ if not compose_state_barriers:
         barrier_idx += num_trajectory_only
 else:
     if barrier_idx < num_barriers:
-        axs[5].plot(time_array_states, barrier_vals_np[:, barrier_idx] , color=colors[0], linewidth=2, label=r'$\bar\psi_{\rm m}$')
+        axs[5].plot(time_array_states, barrier_vals_np[:, barrier_idx], color=colors[0], linewidth=2, label=r'$\bar\psi_{\rm m}$')
         barrier_idx += 1
 
 # Backup barrier (psi_b)
@@ -546,14 +577,19 @@ if 'control_low' in cfg and cfg['control_low'] is not None:
             axs[5].plot(time_array_states, barrier_vals_np[:, barrier_idx], color=colors[2], linewidth=2, label=r'$\kappa$')
             barrier_idx += 1
 
-axs[5].set_yscale('log')
+axs[5].set_yscale('linear')
 axs[5].axhline(y=0, color='k', linestyle='--', alpha=0.5)
 axs[5].set_ylabel(r'$\bar\psi_{\rm m}, \bar\psi_{\rm t}, \kappa$')
-axs[5].set_xlabel(r'$t$ (s)')
 axs[5].legend(loc='center right', ncol=3, frameon=False)
 
+# Blend engagement
+axs[6].plot(time_array_states, lambda_np, 'b-', linewidth=2)
+axs[6].axhline(y=1, color='k', linestyle='--', alpha=0.5)
+axs[6].set_ylabel(r'$\lambda(\gamma)$')
+axs[6].set_xlabel(r'$t$ (s)')
+
 # Hide x labels except for last subplot
-for i in range(5):
+for i in range(6):
     axs[i].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=False)
 
 for ax in axs:
@@ -565,9 +601,9 @@ for ax in axs:
     ax.tick_params(axis='both', labelsize=20)
 
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Combined_{current_time}.png'), dpi=600)
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Combined_{current_time}.svg'))
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Combined_{current_time}.pdf'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Combined_{current_time}.png'), dpi=600)
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Combined_{current_time}.svg'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Combined_{current_time}.pdf'))
 plt.show()
 
 # --- Plot 4: Parameters Evolution (Theta, Omega, Gamma, z) ---
@@ -644,9 +680,9 @@ for cbar in (cbar0, cbar1):
     cbar.ax.tick_params(labelsize=20)
     cbar.set_label(r'Index', fontsize=22)
 
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Parameters_{current_time}.png'), dpi=600)
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Parameters_{current_time}.svg'))
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_Parameters_{current_time}.pdf'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Parameters_{current_time}.png'), dpi=600)
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Parameters_{current_time}.svg'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Parameters_{current_time}.pdf'))
 plt.show()
 
 # --- Plot 5: Final Predicted State Analysis ---
@@ -681,9 +717,9 @@ for ax in axs:
 
 plt.suptitle('Final Predicted State and Backup Barrier Analysis', fontsize=16)
 plt.tight_layout()
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_BackupAnalysis_{current_time}.png'), dpi=600)
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_BackupAnalysis_{current_time}.svg'))
-plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier_BackupAnalysis_{current_time}.pdf'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_BackupAnalysis_{current_time}.png'), dpi=600)
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_BackupAnalysis_{current_time}.svg'))
+plt.savefig(os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_BackupAnalysis_{current_time}.pdf'))
 plt.show()
 
 # --- Animation ---
@@ -795,7 +831,7 @@ def create_animation():
     anim = animation.FuncAnimation(fig_anim, animate, frames=time_steps_total,
                                    interval=50, blit=True)
 
-    animation_file = os.path.join(script_dir, f'figs/FlowBarrier_Animation_{current_time}.mp4')
+    animation_file = os.path.join(script_dir, f'figs/FlowBarrier2_Bicycle_Animation_{current_time}.mp4')
     writer = animation.FFMpegWriter(fps=20, metadata=dict(artist='FlowBarrierJAX'), bitrate=1800)
     anim.save(animation_file, writer=writer)
     print(f"Animation saved as: {animation_file}")

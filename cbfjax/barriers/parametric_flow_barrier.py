@@ -18,7 +18,7 @@ from cbfjax.barriers.composite_barrier import SoftCompositionBarrier
 from cbfjax.dynamics.base_dynamic import AffineInControlDynamics, CustomDynamics, create_augmented_dynamics
 from cbfjax.dynamics.single_integrator import SingleIntegratorDynamics
 from cbfjax.utils.utils import softmin
-from cbfjax.utils.integration import get_trajs_from_time_action_func_with_dense
+from cbfjax.utils.integration import get_trajs_from_time_action_func
 
 
 class FlowBarrier(MultiBarriers):
@@ -71,6 +71,10 @@ class FlowBarrier(MultiBarriers):
     control_low: Any = eqx.field(static=True)
     control_high: Any = eqx.field(static=True)
 
+    # Default plan: per-action-channel constants for the initial theta
+    # (None -> zeros)
+    theta_init: Any = eqx.field(static=True)
+
     def __init__(
             self,
             barrier_func=None,
@@ -104,7 +108,8 @@ class FlowBarrier(MultiBarriers):
             action_softmin_rho=1.0,
             integration_method='tsit5',
             control_low=None,
-            control_high=None
+            control_high=None,
+            theta_init=None
     ):
         """Initialize FlowBarrier with all parameters."""
         # Initialize parent MultiBarriers with augmented dynamics
@@ -150,6 +155,7 @@ class FlowBarrier(MultiBarriers):
         # Convert to tuples for static field compatibility
         self.control_low = tuple(control_low) if control_low is not None else None
         self.control_high = tuple(control_high) if control_high is not None else None
+        self.theta_init = tuple(theta_init) if theta_init is not None else None
 
     @classmethod
     def create_empty(cls, cfg=None):
@@ -169,7 +175,8 @@ class FlowBarrier(MultiBarriers):
             action_softmin_rho=cfg.get('action_softmin_rho', 1.0),
             integration_method=cfg.get('integration_method', 'tsit5'),
             control_low=cfg.get('control_low', None),
-            control_high=cfg.get('control_high', None)
+            control_high=cfg.get('control_high', None),
+            theta_init=cfg.get('theta_init', None)
         )
 
     # === Helper for Immutable Updates ===
@@ -207,7 +214,8 @@ class FlowBarrier(MultiBarriers):
             'action_softmin_rho': self.action_softmin_rho,
             'integration_method': self.integration_method,
             'control_low': self.control_low,
-            'control_high': self.control_high
+            'control_high': self.control_high,
+            'theta_init': self.theta_init
         })
         defaults.update(kwargs)
         return self.__class__(**defaults)
@@ -357,7 +365,7 @@ class FlowBarrier(MultiBarriers):
         if theta is None or gamma is None:
             raise ValueError("theta and gamma must be provided")
 
-        trajectory, _ = self.compute_trajectory(x, theta, gamma)
+        trajectory = self.compute_trajectory(x, theta, gamma)
         flow_safety = self.hocbf(x, theta, gamma)
         terminal_state = trajectory[-1]
         h_backup = self._backup_barriers[0].hocbf(terminal_state)
@@ -479,7 +487,7 @@ class FlowBarrier(MultiBarriers):
             x, theta, gamma = extract_params(s)
 
             # Compute trajectory
-            trajectory, _ = compute_traj(x, theta, gamma)  # Shape: (time_steps, state_dim)
+            trajectory = compute_traj(x, theta, gamma)  # Shape: (time_steps, state_dim)
 
             # Evaluate state barrier along trajectory
             h_traj_values = jax.vmap(state_barrier.hocbf)(trajectory[:-1])  # Shape: (time_steps-2,)
@@ -749,7 +757,7 @@ class FlowBarrier(MultiBarriers):
         def action_func(tau):
             return parametric_control_fn(tau, theta)
 
-        trajectory, dense_func = get_trajs_from_time_action_func_with_dense(
+        trajectory= get_trajs_from_time_action_func(
             x0=x,
             dynamics=self._original_dynamics,
             action_func=action_func,
@@ -759,10 +767,10 @@ class FlowBarrier(MultiBarriers):
             method=self.integration_method
         )
 
-        return trajectory, dense_func
+        return trajectory
 
 
-    def _evaluate_traj_backup_on_trajectory(self, trajectory, dense_func, theta, gamma):
+    def _evaluate_traj_backup_on_trajectory(self, trajectory, theta, gamma):
         """
         Evaluate trajectory+backup barriers on a pre-computed trajectory.
 
@@ -947,6 +955,10 @@ class FlowBarrier(MultiBarriers):
 
         return h_output
 
+    def _trajectory_duration(self, gamma):
+        """Length of the prediction window, here [gamma, horizon]."""
+        return self.horizon - gamma
+
     def _compute_trajectory_barrier_derivatives(self, trajectory, theta, gamma, horizon_steps):
         """
         Compute dh/dt = ∇h·f + ∇h·g·u_p at each trajectory point (excluding first point).
@@ -960,9 +972,7 @@ class FlowBarrier(MultiBarriers):
         Returns:
             Barrier time derivatives, shape (horizon_steps-1,) - excludes first point
         """
-        # Compute actual timestep for this integration interval [gamma, horizon]
-        duration = self.horizon - gamma
-        dt_actual = duration / (horizon_steps - 1)
+        dt_actual = self._trajectory_duration(gamma) / (horizon_steps - 1)
 
         grad_barrier = jax.grad(lambda x: self._state_barrier.hocbf(x))
 
@@ -1009,9 +1019,7 @@ class FlowBarrier(MultiBarriers):
             tau_candidates: Candidate times, shape (max_candidates,)
             valid_mask: Boolean mask for valid candidates, shape (max_candidates,)
         """
-        # Compute actual timestep for integration interval [gamma, self.horizon]
-        duration = self.horizon - gamma
-        dt_actual = duration / (horizon_steps - 1)
+        dt_actual = self._trajectory_duration(gamma) / (horizon_steps - 1)
 
         # Discretization times for trajectory[1:] (excluding trajectory[0])
         # barrier_derivs[i] corresponds to trajectory[i+1]
@@ -1099,10 +1107,15 @@ class FlowBarrier(MultiBarriers):
         Get default parameter values for single state.
 
         Returns:
-            Tuple of (theta, gamma) with default values
+            Tuple of (theta, gamma); theta filled from the per-channel
+            'theta_init' constants when configured, zeros otherwise
         """
-
-        theta = jnp.zeros((self._original_dynamics.action_dim, self.control_param_num))
+        action_dim = self._original_dynamics.action_dim
+        if self.theta_init is not None:
+            theta = jnp.tile(jnp.array(self.theta_init)[:, None],
+                             (1, self.control_param_num))
+        else:
+            theta = jnp.zeros((action_dim, self.control_param_num))
         gamma = jnp.array([0.0])
         return theta, gamma
 
