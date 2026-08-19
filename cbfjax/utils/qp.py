@@ -14,6 +14,7 @@ builder as its `init_state` attribute, signature (n, m, n_eq=0) -> state.
 import dataclasses
 from typing import Callable
 
+import jax
 import jax.numpy as jnp
 from qpax import solve_qp_primal
 from jaxopt import OSQP
@@ -25,6 +26,7 @@ QP_SOLVERS: dict[str, str] = {
     'qpax': '_solve_qpax',
     'jaxopt_osqp': '_solve_jaxopt_osqp',
     'mpax': '_solve_mpax',
+    'cvxopt': '_solve_cvxopt',
 }
 
 
@@ -68,6 +70,54 @@ def _solve_qpax(Q, c, G, h, A=None, b=None, state=None, **opts):
 
 
 _solve_qpax.init_state = _no_init_state
+
+
+def _solve_cvxopt(Q, c, G, h, A=None, b=None, state=None, **opts):
+    """
+    CVXOPT backend. CVXOPT is host-side and not traceable, so the solve runs
+    through jax.pure_callback: the surrounding computation stays jitted, JAX
+    hands the concrete QP data to the host, and the solution comes back as a
+    device array. Costs one host sync per solve and is not differentiable.
+
+    opts: maxiter (default 100), tol (feastol/abstol/reltol, default 1e-8).
+    """
+    n = Q.shape[0]
+    if A is None:
+        A = jnp.zeros((0, n), dtype=Q.dtype)
+        b = jnp.zeros(0, dtype=Q.dtype)
+
+    maxiter = int(opts.get('maxiter', 100))
+    tol = float(opts.get('tol', 1e-8))
+
+    def _host_solve(Q_h, c_h, G_h, h_h, A_h, b_h):
+        import numpy as np
+        from cvxopt import matrix, solvers
+
+        def _m(arr):
+            return matrix(np.asarray(arr, dtype=np.float64))
+
+        args = [_m(Q_h), _m(c_h), _m(G_h), _m(h_h)]
+        if A_h.shape[0] > 0:
+            args += [_m(A_h), _m(b_h)]
+        sol = solvers.qp(*args, options={'show_progress': False,
+                                         'maxiters': maxiter,
+                                         'abstol': tol, 'reltol': tol,
+                                         'feastol': tol})
+        x = sol['x']
+        if x is None:
+            return np.zeros(n, dtype=np.float64)
+        return np.asarray(x, dtype=np.float64).reshape(-1)
+
+    u = jax.pure_callback(
+        _host_solve,
+        jax.ShapeDtypeStruct((n,), Q.dtype),
+        Q, c, G, h, A, b,
+        vmap_method='sequential',
+    )
+    return u, state
+
+
+_solve_cvxopt.init_state = _no_init_state
 
 
 def _solve_jaxopt_osqp(Q, c, G, h, A=None, b=None, state=None, **opts):
