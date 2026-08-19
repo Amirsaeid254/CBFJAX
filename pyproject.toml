@@ -51,37 +51,22 @@ dependencies = [
     "qpax>=0.0.9",
     "jaxopt>=0.8.3",
     "mpax>=0.2.0",
-    "jaxopt>=0.8",
     "immutabledict>=4.2.1",
     "numpy>=2.0",
     "scipy>=1.13",
-]
-
-[project.optional-dependencies]
-# GPU support (CUDA 12). Run: pip install cbfjax[gpu]
-gpu = ["jax[cuda12]>=0.6.2"]
-
-# Plotting and example dependencies
-examples = [
     "matplotlib>=3.7",
 ]
 
-# NMPC controllers (CasADi + acados or do-mpc/IPOPT backend).
-# Note: acados is NOT on PyPI and must be installed separately from source
-# (https://docs.acados.org/). do-mpc is installable via pip and provides
-# an IPOPT-based NMPC backend out of the box.
-nmpc = [
+[project.optional-dependencies]
+# Everything: optional solver backends plus development tooling.
+# Note: acados (NMPC SQP backend) and trajax (iLQR) are not on PyPI and must be
+# installed separately:
+#   https://docs.acados.org/
+#   pip install "trajax @ git+https://github.com/google/trajax.git"
+dev = [
+    "cvxopt>=1.3",
     "casadi>=3.6",
     "do-mpc>=4.6.0",
-]
-
-# iLQR controllers (trajax).
-# Note: trajax is not on PyPI; install from GitHub:
-#   pip install "trajax @ git+https://github.com/google/trajax.git"
-ilqr = []
-
-# Development tooling
-dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "build>=1.0",
@@ -91,7 +76,6 @@ dev = [
     "mypy>=1.0",
     "ruff>=0.1",
     "pre-commit>=2.20",
-    "matplotlib>=3.7",
 ]
 
 # Convenience: everything that is pip-installable in one shot

@@ -23,21 +23,30 @@ This project is the JAX successor to the
   [diffrax](https://github.com/patrick-kidger/diffrax).
 - **Higher-Order CBFs (HOCBFs)** with automatic differentiation for arbitrary relative
   degree.
+- **Predicted-Flow CBFs (P-CBFs)** — barriers that are functionals of a predicted
+  flow under a parametrized control plan, certifying safety over the whole
+  prediction horizon in a single QP:
+  - `FlowBarrier` + `ParametricFlowSafeControl`
+  - `FlowBarrier2` + `ParametricFlowSafeControl2`
 - **A toolbox of controllers and safe-control backends**:
   - Closed-form min-intervention safe control (`MinIntervCFSafeControl`)
   - QP-based safe control with slack variables (`MinIntervQPSafeControl`)
   - Input-constrained QP (`MinIntervInputConstQPSafeControl`)
   - Backup-CBF with forward invariance (`MinIntervBackupSafeControl`)
+  - Predicted-flow safe control (`ParametricFlowSafeControl`, `…Control2`)
   - MPPI with barrier-aware cost (`MPPIControl`)
   - NMPC with barrier constraints (acados / do-mpc — optional)
   - Constrained iLQR with barrier-aware cost (trajax — optional)
+- **Pluggable QP backends** behind one interface (`params['qp_solver']`):
+  `qpax` (default), `jaxopt_osqp` (warm-started), `mpax`, and `cvxopt`.
 - **Composable barrier algebra**: `MultiBarriers`, `SoftCompositionBarrier`,
-  `HardCompositionBarrier`, `BackupBarrier`.
+  `HardCompositionBarrier`, `BackupBarrier`, `FlowBarrier`, `FlowBarrier2`.
 - **Config-driven construction** (`cbfjax.from_config`): a named barrier
   namespace — define barriers by name, reference them by name, wire one into
   the filter; unused entries stay available for plotting/analysis.
-- **Built-in dynamics**: unicycle, single/double integrator, bicycle, inverted pendulum,
-  reduced-order unicycle — plus a generic `AffineInControlDynamics` base.
+- **Built-in dynamics**: unicycle, single/double integrator, kinematic bicycle,
+  inverted pendulum, reduced-order unicycle — plus a generic
+  `AffineInControlDynamics` base and a `CustomDynamics` escape hatch.
 - **64-bit precision by default** for the numerical stability that CBF methods require.
 
 ---
@@ -50,31 +59,17 @@ This project is the JAX successor to the
 pip install cbfjax
 ```
 
-The core install is lightweight — it pulls in JAX, Equinox, Diffrax, qpax, NumPy, and
-SciPy, and is sufficient for the closed-form, QP, and Backup-CBF safety filters.
+The install pulls in JAX, Equinox, Diffrax, qpax, jaxopt, mpax, matplotlib, NumPy, and
+SciPy — enough to run every safety filter and every example.
 
-### Optional extras
-
-| Extra | Adds | Install |
-|-------|------|---------|
-| `examples` | matplotlib, animation deps | `pip install cbfjax[examples]` |
-| `gpu` | JAX CUDA 12 wheels | `pip install cbfjax[gpu]` |
-| `nmpc` | CasADi + do-mpc (IPOPT backend) | `pip install cbfjax[nmpc]` |
-| `dev` | pytest, build, twine, ruff, black, mypy, … | `pip install cbfjax[dev]` |
-
-The `nmpc` extra provides an IPOPT-based NMPC backend out of the box. For the
-acados SQP backend, install [acados](https://docs.acados.org/) separately from source.
-
-The `iLQR` controllers depend on Google's `trajax`, which is not on PyPI; install it
-directly from GitHub:
+### Development install
 
 ```bash
-pip install "trajax @ git+https://github.com/google/trajax.git"
+pip install cbfjax[dev]
 ```
 
-NMPC and iLQR controllers are lazily imported, so the core package keeps working even
-when these optional dependencies are not installed — the `ImportError` is only raised
-when you actually instantiate the controller.
+Adds the optional solver backends (`cvxopt`, CasADi + do-mpc for NMPC) and the
+development tooling (pytest, build, twine, ruff, black, mypy, …).
 
 ### From source
 
@@ -196,7 +191,9 @@ cbfjax/
 │   ├── barrier.py                  #  Single barrier
 │   ├── multi_barrier.py            #  Multiple barriers
 │   ├── composite_barrier.py        #  Soft / hard composition
-│   └── backup_barrier.py           #  Backup-CBF
+│   ├── backup_barrier.py           #  Backup-CBF
+│   ├── parametric_flow_barrier.py  #  Predicted-flow CBF
+│   └── parametric_flow_barrier2.py
 ├── dynamics/                       # Affine-in-control system dynamics
 │   ├── base_dynamic.py
 │   ├── unicycle.py
@@ -208,6 +205,7 @@ cbfjax/
 ├── controls/                       # Nominal/optimal controllers
 │   ├── base_control.py
 │   ├── mppi_control.py             #  MPPI (GPU-parallel, vmap+scan)
+│   ├── parametric_control.py       #  ZOH / FOH control plans u_p(τ; θ)
 │   ├── ilqr_control.py             #  (optional: trajax)
 │   ├── nmpc_control.py             #  (optional: casadi + acados/do-mpc)
 │   └── control_types.py
@@ -216,11 +214,14 @@ cbfjax/
 │   ├── closed_form_safe_control.py
 │   ├── qp_safe_control.py
 │   ├── backup_safe_control.py
+│   ├── parametric_flow_safe_control.py   #  Predicted-flow safe control
+│   ├── parametric_flow_safe_control2.py
 │   ├── nmpc_safe_control.py        #  (optional)
 │   └── ilqr_safe_control.py        #  (optional)
 ├── factory.py                      # from_config: named-barrier construction
 ├── utils/
 │   ├── integration.py              #  Diffrax-based ODE rollouts
+│   ├── qp.py                       #  QP backends (qpax, OSQP, mpax, cvxopt)
 │   ├── make_map.py                 #  Map / barrier factory
 │   ├── jax2casadi/                 #  JAX → CasADi conversion (used by NMPC)
 │   ├── profile_utils.py
