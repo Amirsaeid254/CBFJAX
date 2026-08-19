@@ -750,7 +750,7 @@ class FlowBarrier(MultiBarriers):
             Trajectory (time_steps, state_dim)
         """
 
-        target_points = int(self.horizon / self.time_steps) + 1
+        target_points = int(round(self.horizon / self.time_steps)) + 1
 
         parametric_control_fn = self._parametric_control
 
@@ -762,7 +762,7 @@ class FlowBarrier(MultiBarriers):
             dynamics=self._original_dynamics,
             action_func=action_func,
             start_time=gamma,
-            sim_time=self.horizon,
+            end_time=self.horizon,
             num_steps=target_points,
             method=self.integration_method
         )

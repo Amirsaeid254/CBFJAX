@@ -21,7 +21,7 @@ from immutabledict import immutabledict
 
 # CBFJAX configuration
 import cbfjax
-cbfjax.configure_jax(platform="cpu", enable_x64=True)
+cbfjax.configure_jax(platform="cpu", enable_x64=True, disable_jit=False)
 
 from cbfjax.dynamics.bicycle import BicycleDynamics
 from cbfjax.barriers.parametric_flow_barrier2 import smoothstep
@@ -52,11 +52,11 @@ cfg = immutabledict({
     'traj_softmin_rho': 50,
     'action_softmin_rho': 50,
     'state_barrier_rel_deg': 1,
-    'horizon': 8.0,
+    'horizon': 4.0,
     'time_steps': 0.05,
     'integration_method': 'euler',
     'control_param_method': 'zoh',
-    'control_param_num': 160,
+    'control_param_num': 80,
     'control_low': control_low,
     'control_high': control_high,
     'compose_action_barriers': True,   # Use composition (softmin) for action barriers
@@ -76,7 +76,7 @@ map_cfg = immutabledict({
 
 # Cost matrices for safety filter
 cost_matrices = {
-    'Lambda': 150.0,        # Parameter update weight
+    'Lambda': 30.0,        # Parameter update weight
     'Mu': 1e-1,          # Time shift weight
     'lambda_linear': 1000.0  # Linear penalty
 }
@@ -96,7 +96,7 @@ goal_pos = jnp.array([[8.0, 8.0]])
 x0 = jnp.array([-8.0, -8.0, 0.0, 0.0])
 
 # Simulation parameters
-timestep = 0.01
+timestep = 0.001
 sim_time = 20.0
 make_animation = False  # MP4 render over all frames; enable when needed
 
@@ -161,50 +161,57 @@ print("  Backup barrier configured (as a 'func' entry in the main config)")
 
 print("Setting up cost functional...")
 
-def cost_functional(trajectory):
-    """
-    Cost = sum_t (x_t - x_goal)^T Q_t (x_t - x_goal)
-    with Gaussian proximity weighting near the goal.
-    """
-    time_steps_traj, state_dim = trajectory.shape
+# J = W(φ(γ+T)) + ∫_γ^{γ+T} R(φ(τ), π(τ)) dτ
+# x = [q_x, q_y, v, theta]
+_x_ref = jnp.array([goal_pos[0, 0], goal_pos[0, 1], 0.0, 0.0])
+_Q_r = jnp.array([1.0, 1.0, 0.1, 0.1])
+_Q_f = jnp.array([1.0, 1.0, 0.1, 0.1])
+_sigma2 = 2.0
+_max_scale = 40.0
 
-    # Cost weights - running and terminal
-    Q_running = jnp.array([1.0, 1.0, 0.0, 0.0])
-    Q_terminal = jnp.array([1.0, 1.0, 0.0, 0.0])
 
-    Q_weights = jnp.tile(Q_running, (time_steps_traj - 1, 1))
-    Q_weights = jnp.concatenate([Q_weights, Q_terminal.reshape(1, -1)], axis=0)
+def _state_error(x, x_ref):
+    e = x - x_ref
+    return e.at[3].set(jnp.arctan2(jnp.sin(e[3]), jnp.cos(e[3])))
 
-    # Goal trajectory
-    goal_state = jnp.zeros(state_dim)
-    goal_state = goal_state.at[:2].set(goal_pos[0])
-    goal_traj = jnp.tile(goal_state, (time_steps_traj, 1))
 
-    # Compute errors
-    errors = trajectory - goal_traj
+def _proximity_scale(x):
+    d2 = jnp.sum((x[:2] - _x_ref[:2]) ** 2)
+    return 1.0 + _max_scale * jnp.exp(-d2 / _sigma2)
 
-    # Gaussian proximity weighting
-    pos_errors = errors[:, :2]
-    squared_distances = jnp.sum(pos_errors ** 2, axis=1)
-    sigma_squared = 2.0
-    max_scaling = 40.0
-    gaussian_weights = jnp.exp(-squared_distances / sigma_squared)
 
-    # Apply Gaussian scaling
-    scaling_factor = 1.0 + max_scaling * gaussian_weights
-    Q_weights_scaled = Q_weights * jax.lax.stop_gradient(scaling_factor[:, None])
+def running_cost(x, u):
+    e = _state_error(x, _x_ref)
+    return jax.lax.stop_gradient(_proximity_scale(x)) * jnp.sum(_Q_r * e ** 2)
 
-    # Compute cost
-    cost_per_timestep = jnp.sum(Q_weights_scaled * errors ** 2, axis=1)
-    total_cost = jnp.sum(cost_per_timestep)
 
-    return total_cost
+def terminal_cost(x):
+    e = _state_error(x, _x_ref)
+    return jax.lax.stop_gradient(_proximity_scale(x)) * jnp.sum(_Q_f * e ** 2)
+
+
+def cost_functional(trajectory, controls):
+    dt = cfg['horizon'] / (trajectory.shape[0] - 1)
+    r = jax.vmap(running_cost)(trajectory[:-1], controls[:-1])
+    return terminal_cost(trajectory[-1]) + dt * jnp.sum(r)
 
 print("  Cost functional configured")
 
 # ============================================
 # Setup ParametricFlowSafeControl2
 # ============================================
+
+# Adaptive omega weight. theta flattens channel-major: [u1 params, u2 params],
+p_num = cfg['control_param_num']
+ramp = jnp.linspace(30.0, 30.0, p_num)        # cheap to move early theta, costly later
+# ramp = jnp.linspace(10.0, 1.0, p_num)      # reverse: costly early, cheap later
+ramp1 = 30 * jnp.ones(p_num)                     # uniform (original behaviour)
+ramp2 = 30 * jnp.ones(p_num)                     # uniform (original behaviour)
+
+lambda_seq_u1 = ramp1
+lambda_seq_u2 = ramp2
+
+Lambda_matrix = jnp.diag(jnp.concatenate([lambda_seq_u1, lambda_seq_u2]))
 
 print("Setting up FlowBarrier2 + ParametricFlowSafeControl2 via cbfjax.from_config...")
 
@@ -230,7 +237,8 @@ system = cbfjax.from_config({
         'cost_functional': cost_functional,
         'control_low': control_low,
         'control_high': control_high,
-        'Lambda': jnp.eye(dynamics.action_dim * cfg['control_param_num']) * cost_matrices['Lambda'],
+        # 'Lambda': jnp.eye(dynamics.action_dim * cfg['control_param_num']) * cost_matrices['Lambda'],
+        'Lambda': Lambda_matrix,
         'Mu': jnp.array(cost_matrices['Mu']),
         'lambda_linear': jnp.array(cost_matrices['lambda_linear']),
     },

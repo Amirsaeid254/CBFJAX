@@ -280,8 +280,12 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
             x_i, theta_i, gamma_i = flow_barrier._extract_parameters_from_state(s_inner)
             trajectory = flow_barrier.compute_trajectory(x_i, theta_i, gamma_i)
 
-            # Cost on shared trajectory
-            J = cost_functional(trajectory)
+            n_steps = trajectory.shape[0]
+            taus = jnp.linspace(gamma_i, flow_barrier.horizon, n_steps)
+            controls = jax.vmap(
+                lambda tau: flow_barrier._parametric_control(tau, theta_i)
+            )(taus)
+            J = cost_functional(trajectory, controls)
 
             # Trajectory + backup barriers on shared trajectory
             h_traj_backup = flow_barrier._evaluate_traj_backup_on_trajectory(
@@ -336,7 +340,7 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         # Trajectory barriers
         if self.alpha_trajectory is not None and barrier_idx < num_barriers:
             if not getattr(self._flow_barrier, 'compose_state_barriers', True):
-                target_points = int(self._flow_barrier.horizon / self._flow_barrier.time_steps)
+                target_points = int(round(self._flow_barrier.horizon / self._flow_barrier.time_steps))
                 num_trajectory_only = target_points - 1
                 for _ in range(num_trajectory_only):
                     if barrier_idx < num_barriers:
@@ -438,15 +442,14 @@ class ParametricFlowSafeControl(InputConstQPSafeControl):
         return self._flow_barrier._parametric_control(gamma, theta)
 
     def get_init_state(self):
-        """Get initial controller state for warm-start-capable QP backends.
-
-        Runs one cold-start solve with default parameters to get the
-        KKTSolution pytree with correct shapes.
-        """
+        """Get initial controller state for warm-start-capable QP backends."""
         theta, gamma = self._flow_barrier._get_default_parameters()
         x_dummy = jnp.zeros(self._flow_barrier.original_dynamics.state_dim)
-        _, init_state = self.optimal_control(x_dummy, theta, gamma, state=None)
-        return init_state
+        _, _, _, h = self._compute_qp_data(x_dummy, theta, gamma)
+        m = h.shape[0]
+        if self._params.get('dual', False):
+            return self._qp_init_state_fn(m, m, 0)
+        return self._qp_init_state_fn(self._aug_action_dim, m, 0)
 
     def _validate_setup(self):
         """Validate that all required components are assigned."""

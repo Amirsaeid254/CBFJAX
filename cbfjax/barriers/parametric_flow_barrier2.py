@@ -177,7 +177,7 @@ class FlowBarrier2(FlowBarrier):
         Returns:
             Tuple (trajectory (time_steps, state_dim) evaluate function)
         """
-        target_points = int(self.horizon / self.time_steps) + 1
+        target_points = int(round(self.horizon / self.time_steps)) + 1
 
         blended_control = self.blended_control
 
@@ -189,7 +189,7 @@ class FlowBarrier2(FlowBarrier):
             dynamics=self._original_dynamics,
             action_func=action_func,
             start_time=gamma,
-            sim_time=gamma + self.horizon,
+            end_time=gamma + self.horizon,
             timestep=self.time_steps,
             num_steps=target_points,
             method=self.integration_method

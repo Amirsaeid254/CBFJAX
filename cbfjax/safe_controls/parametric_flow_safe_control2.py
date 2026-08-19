@@ -117,8 +117,12 @@ class ParametricFlowSafeControl2(ParametricFlowSafeControl):
             x_i, theta_i, gamma_i = flow_barrier._extract_parameters_from_state(s_inner)
             trajectory = flow_barrier.compute_trajectory(x_i, theta_i, gamma_i)
 
-            # Cost on shared trajectory
-            J = cost_functional(trajectory)
+            n_steps = trajectory.shape[0]
+            taus = gamma_i + jnp.linspace(0.0, flow_barrier.horizon, n_steps)
+            controls = jax.vmap(
+                lambda tau, y: flow_barrier.blended_control(tau, y, theta_i)
+            )(taus, trajectory)
+            J = cost_functional(trajectory, controls)
 
             # Trajectory + backup barriers on shared trajectory
             h_traj_backup = flow_barrier._evaluate_traj_backup_on_trajectory(
@@ -167,14 +171,6 @@ class ParametricFlowSafeControl2(ParametricFlowSafeControl):
             G, h = G_safety, h_safety
 
         return Q, c, G, h
-
-    # def _infeasible_fallback(self, v: jnp.ndarray) -> jnp.ndarray:
-    #     """
-    #     v = [omega, z] = [0, 1]: hold the plan and advance the planning time at
-    #     real-time rate, so the predicted flow slides along itself. This
-    #     direction is always admissible for the fixed-length window.
-    #     """
-    #     return jnp.zeros_like(v).at[-1].set(1.0)
 
     def _extend_control_bounds(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """

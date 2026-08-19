@@ -195,7 +195,7 @@ def get_trajs_from_state_action_func_zoh(x0: jnp.ndarray, dynamics, action_func:
 def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
                                     timestep: Union[float, jnp.ndarray] = None,
                                     start_time: Union[float, jnp.ndarray] = 0.0,
-                                    sim_time: Union[float, jnp.ndarray] = None,
+                                    end_time: Union[float, jnp.ndarray] = None,
                                     num_steps: int = None, method: str = 'tsit5',
                                     use_disturbed: bool = False) -> jnp.ndarray:
     """
@@ -209,8 +209,8 @@ def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Call
         action_func: Function that computes control given time
         timestep: Integration timestep (optional if num_steps provided, can be jnp.ndarray)
         start_time: Start time for integration (can be jnp.ndarray for gradient)
-        sim_time: Total simulation time (can be jnp.ndarray for gradient)
-        num_steps: Number of time steps (static, required when sim_time is traced)
+        end_time: End time t1 (can be jnp.ndarray for gradient)
+        num_steps: Number of time steps (static, required when end_time is traced)
         method: Integration method
         use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
@@ -222,23 +222,19 @@ def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Call
 
     rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
-    # Convert to jnp arrays if not already
     start_time = jnp.asarray(start_time)
-    if sim_time is not None:
-        sim_time = jnp.asarray(sim_time)
+    if end_time is not None:
+        end_time = jnp.asarray(end_time)
 
-    # Handle static num_steps with traced sim_time
     if num_steps is not None:
         steps = num_steps
-        # timestep is computed adaptively from sim_time / (steps - 1)
-        if timestep is None:
-            timestep = sim_time / (steps - 1) if steps > 1 else sim_time
     else:
-        if timestep is None or sim_time is None:
-            raise ValueError("Must provide either (timestep, sim_time) or (num_steps, sim_time)")
-        steps = int(sim_time / timestep) + 1
+        if timestep is None or end_time is None:
+            raise ValueError("Must provide either (timestep, end_time) or (num_steps, end_time)")
+        steps = int(jnp.round((end_time - start_time) / timestep)) + 1
 
-    t_eval = jnp.linspace(start_time, sim_time, steps)
+    dt0 = (end_time - start_time) / (steps - 1) if steps > 1 else (end_time - start_time)
+    t_eval = jnp.linspace(start_time, end_time, steps)
 
     def vector_field(t, y, args):
         return rhs_func(y, action_func(t))
@@ -251,8 +247,8 @@ def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Call
         terms=term,
         solver=solver,
         t0=start_time,
-        t1=sim_time,
-        dt0=timestep,
+        t1=end_time,
+        dt0=dt0,
         y0=x0,
         saveat=diffrax.SaveAt(ts=t_eval),
         adjoint=adjoint,
@@ -266,7 +262,7 @@ def get_trajs_from_time_action_func(x0: jnp.ndarray, dynamics, action_func: Call
 def get_trajs_from_time_action_func_with_dense(x0: jnp.ndarray, dynamics, action_func: Callable,
                                                timestep: Union[float, jnp.ndarray] = None,
                                                start_time: Union[float, jnp.ndarray] = 0.0,
-                                               sim_time: Union[float, jnp.ndarray] = None,
+                                               end_time: Union[float, jnp.ndarray] = None,
                                                num_steps: int = None, method: str = 'tsit5',
                                                use_disturbed: bool = False) -> jnp.ndarray:
     """
@@ -280,8 +276,8 @@ def get_trajs_from_time_action_func_with_dense(x0: jnp.ndarray, dynamics, action
         action_func: Function that computes control given time
         timestep: Integration timestep (optional if num_steps provided, can be jnp.ndarray)
         start_time: Start time for integration (can be jnp.ndarray for gradient)
-        sim_time: Total simulation time (can be jnp.ndarray for gradient)
-        num_steps: Number of time steps (static, required when sim_time is traced)
+        end_time: End time t1 (can be jnp.ndarray for gradient)
+        num_steps: Number of time steps (static, required when end_time is traced)
         method: Integration method
         use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
@@ -293,23 +289,19 @@ def get_trajs_from_time_action_func_with_dense(x0: jnp.ndarray, dynamics, action
 
     rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
-    # Convert to jnp arrays if not already
     start_time = jnp.asarray(start_time)
-    if sim_time is not None:
-        sim_time = jnp.asarray(sim_time)
+    if end_time is not None:
+        end_time = jnp.asarray(end_time)
 
-    # Handle static num_steps with traced sim_time
     if num_steps is not None:
         steps = num_steps
-        # timestep is computed adaptively from sim_time / (steps - 1)
-        if timestep is None:
-            timestep = sim_time / (steps - 1) if steps > 1 else sim_time
     else:
-        if timestep is None or sim_time is None:
-            raise ValueError("Must provide either (timestep, sim_time) or (num_steps, sim_time)")
-        steps = int(sim_time / timestep) + 1
+        if timestep is None or end_time is None:
+            raise ValueError("Must provide either (timestep, end_time) or (num_steps, end_time)")
+        steps = int(jnp.round((end_time - start_time) / timestep)) + 1
 
-    t_eval = jnp.linspace(start_time, sim_time, steps)
+    dt0 = (end_time - start_time) / (steps - 1) if steps > 1 else (end_time - start_time)
+    t_eval = jnp.linspace(start_time, end_time, steps)
 
     def vector_field(t, y, args):
         return rhs_func(y, action_func(t))
@@ -322,8 +314,8 @@ def get_trajs_from_time_action_func_with_dense(x0: jnp.ndarray, dynamics, action
         terms=term,
         solver=solver,
         t0=start_time,
-        t1=sim_time,
-        dt0=timestep,
+        t1=end_time,
+        dt0=dt0,
         y0=x0,
         saveat=diffrax.SaveAt(ts=t_eval, dense=True),
         adjoint=adjoint,
@@ -337,7 +329,7 @@ def get_trajs_from_time_action_func_with_dense(x0: jnp.ndarray, dynamics, action
 def get_trajs_from_time_state_action_func(x0: jnp.ndarray, dynamics, action_func: Callable,
                                                      timestep: Union[float, jnp.ndarray] = None,
                                                      start_time: Union[float, jnp.ndarray] = 0.0,
-                                                     sim_time: Union[float, jnp.ndarray] = None,
+                                                     end_time: Union[float, jnp.ndarray] = None,
                                                      num_steps: int = None, method: str = 'tsit5',
                                                      use_disturbed: bool = False) -> jnp.ndarray:
     """
@@ -351,8 +343,8 @@ def get_trajs_from_time_state_action_func(x0: jnp.ndarray, dynamics, action_func
         action_func: Function that computes control given (time, state)
         timestep: Integration timestep (optional if num_steps provided, can be jnp.ndarray)
         start_time: Start time for integration (can be jnp.ndarray for gradient)
-        sim_time: Total simulation time (can be jnp.ndarray for gradient)
-        num_steps: Number of time steps (static, required when sim_time is traced)
+        end_time: End time t1 (can be jnp.ndarray for gradient)
+        num_steps: Number of time steps (static, required when end_time is traced)
         method: Integration method
         use_disturbed: If True, use disturbed_rhs for closed-loop simulation
 
@@ -364,23 +356,19 @@ def get_trajs_from_time_state_action_func(x0: jnp.ndarray, dynamics, action_func
 
     rhs_func = dynamics.disturbed_rhs if use_disturbed else dynamics.rhs
 
-    # Convert to jnp arrays if not already
     start_time = jnp.asarray(start_time)
-    if sim_time is not None:
-        sim_time = jnp.asarray(sim_time)
+    if end_time is not None:
+        end_time = jnp.asarray(end_time)
 
-    # Handle static num_steps with traced sim_time
     if num_steps is not None:
         steps = num_steps
-        # timestep is computed adaptively from sim_time / (steps - 1)
-        if timestep is None:
-            timestep = sim_time / (steps - 1) if steps > 1 else sim_time
     else:
-        if timestep is None or sim_time is None:
-            raise ValueError("Must provide either (timestep, sim_time) or (num_steps, sim_time)")
-        steps = int(sim_time / timestep) + 1
+        if timestep is None or end_time is None:
+            raise ValueError("Must provide either (timestep, end_time) or (num_steps, end_time)")
+        steps = int(jnp.round((end_time - start_time) / timestep)) + 1
 
-    t_eval = jnp.linspace(start_time, sim_time, steps)
+    dt0 = (end_time - start_time) / (steps - 1) if steps > 1 else (end_time - start_time)
+    t_eval = jnp.linspace(start_time, end_time, steps)
 
     def vector_field(t, y, args):
         return rhs_func(y, action_func(t, y))
@@ -393,8 +381,8 @@ def get_trajs_from_time_state_action_func(x0: jnp.ndarray, dynamics, action_func
         terms=term,
         solver=solver,
         t0=start_time,
-        t1=sim_time,
-        dt0=timestep,
+        t1=end_time,
+        dt0=dt0,
         y0=x0,
         saveat=diffrax.SaveAt(ts=t_eval),
         adjoint=adjoint,

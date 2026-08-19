@@ -39,11 +39,12 @@ def set_default_dtype(dtype):
     DEFAULT_DTYPE = dtype
 
 
-def configure_jax(platform=None, enable_x64=True, debug_nans=False):
+def configure_jax(platform=None, enable_x64=True, debug_nans=False, disable_jit=False):
     """
     Configure JAX settings for CBF computations.
 
-    Must be called before the first JAX computation to take effect.
+    Must be called before the first JAX computation to take effect
+    (except disable_jit, which can be toggled later).
 
     Parameters:
         platform: str or None
@@ -53,13 +54,18 @@ def configure_jax(platform=None, enable_x64=True, debug_nans=False):
             Whether to enable 64-bit precision (recommended for CBF)
         debug_nans: bool
             Whether to enable NaN debugging (useful for development)
+        disable_jit: bool
+            If True, every jax.jit / eqx.filter_jit becomes a no-op so
+            you can pdb, print, and see Python stack traces.
 
     Example:
         configure_jax(platform="gpu", enable_x64=True)
+        configure_jax(platform="cpu", enable_x64=True, disable_jit=True)
     """
     if platform is not None:
         jax.config.update("jax_platform_name", platform)
     jax.config.update("jax_enable_x64", enable_x64)
+    jax.config.update("jax_disable_jit", bool(disable_jit))
 
     if debug_nans:
         jax.config.update("jax_debug_nans", True)
@@ -83,7 +89,8 @@ def get_jax_config():
         "platform": jax.default_backend(),
         "enable_x64": jax.config.jax_enable_x64,
         "default_dtype": DEFAULT_DTYPE,
-        "debug_nans": getattr(jax.config, 'jax_debug_nans', False)
+        "debug_nans": getattr(jax.config, 'jax_debug_nans', False),
+        "disable_jit": bool(getattr(jax.config, 'jax_disable_jit', False)),
     }
 
 

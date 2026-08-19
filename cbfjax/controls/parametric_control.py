@@ -54,7 +54,7 @@ class ParametricControl(eqx.Module):
         self.control_dim = control_dim
         self.param_dim = param_dim
         self.dt = dt
-        self.control_duration = horizon - dt
+        self.control_duration = horizon
 
         # Set control bounds as tuples
         if control_low is not None and control_high is not None:
@@ -175,7 +175,6 @@ class ZOHParametricControl(ParametricControl):
         # Compute segment index
         segment_idx = jnp.floor(tau_scalar / self.dt_segment).astype(jnp.int32)
         segment_idx = jnp.clip(segment_idx, 0, self.num_segments - 1)
-
         # Return control value for this segment
         return theta[:, segment_idx]
 
@@ -266,8 +265,7 @@ class FOHParametricControl(ParametricControl):
         )
 
         self.num_waypoints = num_waypoints
-        control_duration = horizon - dt
-        self.waypoint_times = tuple(float(t) for t in np.linspace(0, control_duration, num_waypoints))
+        self.waypoint_times = tuple(float(t) for t in np.linspace(0, self.control_duration, num_waypoints))
 
     def __call__(self, tau: float, theta: jnp.ndarray) -> jnp.ndarray:
         """

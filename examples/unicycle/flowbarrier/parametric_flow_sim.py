@@ -152,44 +152,39 @@ print("  Backup barrier configured (as a 'func' entry in the main config)")
 
 print("Setting up cost functional...")
 
-def cost_functional(trajectory):
-    """
-    Cost = sum_t (x_t - x_goal)^T Q_t (x_t - x_goal)
-    with Gaussian proximity weighting near the goal.
-    """
-    time_steps_traj, state_dim = trajectory.shape
+# J = W(φ(T)) + ∫_γ^T R(φ(τ), π(τ)) dτ
+# x = [q_x, q_y, v, theta]
+_x_ref = jnp.array([goal_pos[0, 0], goal_pos[0, 1], 0.0, 0.0])
+_Q_r = jnp.array([1.0, 1.0, 0.1, 0.1])
+_Q_f = jnp.array([1.0, 1.0, 0.1, 0.1])
+_sigma2 = 2.0
+_max_scale = 40.0
 
-    # Cost weights - running and terminal
-    Q_running = jnp.array([1.0, 1.0, 0.0, 0.0])
-    Q_terminal = jnp.array([1.0, 1.0, 0.0, 0.0])
 
-    Q_weights = jnp.tile(Q_running, (time_steps_traj - 1, 1))
-    Q_weights = jnp.concatenate([Q_weights, Q_terminal.reshape(1, -1)], axis=0)
+def _state_error(x, x_ref):
+    e = x - x_ref
+    return e.at[3].set(jnp.arctan2(jnp.sin(e[3]), jnp.cos(e[3])))
 
-    # Goal trajectory
-    goal_state = jnp.zeros(state_dim)
-    goal_state = goal_state.at[:2].set(goal_pos[0])
-    goal_traj = jnp.tile(goal_state, (time_steps_traj, 1))
 
-    # Compute errors
-    errors = trajectory - goal_traj
+def _proximity_scale(x):
+    d2 = jnp.sum((x[:2] - _x_ref[:2]) ** 2)
+    return 1.0 + _max_scale * jnp.exp(-d2 / _sigma2)
 
-    # Gaussian proximity weighting
-    pos_errors = errors[:, :2]
-    squared_distances = jnp.sum(pos_errors ** 2, axis=1)
-    sigma_squared = 2.0
-    max_scaling = 40.0
-    gaussian_weights = jnp.exp(-squared_distances / sigma_squared)
 
-    # Apply Gaussian scaling
-    scaling_factor = 1.0 + max_scaling * gaussian_weights
-    Q_weights_scaled = Q_weights * jax.lax.stop_gradient(scaling_factor[:, None])
+def running_cost(x, u):
+    e = _state_error(x, _x_ref)
+    return jax.lax.stop_gradient(_proximity_scale(x)) * jnp.sum(_Q_r * e ** 2)
 
-    # Compute cost
-    cost_per_timestep = jnp.sum(Q_weights_scaled * errors ** 2, axis=1)
-    total_cost = jnp.sum(cost_per_timestep)
 
-    return total_cost
+def terminal_cost(x):
+    e = _state_error(x, _x_ref)
+    return jax.lax.stop_gradient(_proximity_scale(x)) * jnp.sum(_Q_f * e ** 2)
+
+
+def cost_functional(trajectory, controls):
+    dt = cfg['horizon'] / (trajectory.shape[0] - 1)
+    r = jax.vmap(running_cost)(trajectory[:-1], controls[:-1])
+    return terminal_cost(trajectory[-1]) + dt * jnp.sum(r)
 
 print("  Cost functional configured")
 
