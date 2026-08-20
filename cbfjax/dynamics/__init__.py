@@ -11,6 +11,7 @@ from .single_integrator import SingleIntegratorDynamics
 from .bicycle import BicycleDynamics
 from .inverted_pendulum import InvertedPendulumDynamics
 from .unicycle_reduced_order import UnicycleReducedOrderDynamics
+from .unicycle_5th_order import Unicycle5thOrderDynamics
 
 __all__ = [
     "AffineInControlDynamics",
@@ -21,5 +22,6 @@ __all__ = [
     "SingleIntegratorDynamics",
     "BicycleDynamics",
     "InvertedPendulumDynamics",
-    "UnicycleReducedOrderDynamics"
+    "UnicycleReducedOrderDynamics",
+    "Unicycle5thOrderDynamics"
 ]

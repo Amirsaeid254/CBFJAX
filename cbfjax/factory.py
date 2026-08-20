@@ -84,6 +84,7 @@ from .dynamics import (
     BicycleDynamics,
     InvertedPendulumDynamics,
     UnicycleReducedOrderDynamics,
+    Unicycle5thOrderDynamics,
 )
 from .safe_controls import (
     CFSafeControl,
@@ -98,6 +99,7 @@ from .safe_controls import (
     MinIntervBackupSafeControl,
     ParametricFlowSafeControl,
     ParametricFlowSafeControl2,
+    CADPSafeControl,
 )
 from .barriers import (
     Barrier,
@@ -257,6 +259,7 @@ DYNAMICS_TYPES = {
     'bicycle': BicycleDynamics,
     'inverted_pendulum': InvertedPendulumDynamics,
     'unicycle_reduced_order': UnicycleReducedOrderDynamics,
+    'unicycle_5th_order': Unicycle5thOrderDynamics,
 }
 
 def _build_flow(name, spec, built, dynamics):
@@ -315,6 +318,7 @@ FILTER_TYPES = {
     'min_interv_backup': MinIntervBackupSafeControl,
     'parametric_flow': ParametricFlowSafeControl,
     'parametric_flow2': ParametricFlowSafeControl2,
+    'cadp': CADPSafeControl,
     'nmpc': 'NMPCSafeControl',
     'quadratic_nmpc': 'QuadraticNMPCSafeControl',
     'ilqr': 'iLQRSafeControl',

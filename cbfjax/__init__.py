@@ -30,6 +30,7 @@ from .dynamics import (
     BicycleDynamics,
     InvertedPendulumDynamics,
     UnicycleReducedOrderDynamics,
+    Unicycle5thOrderDynamics,
 )
 from .barriers import (
     Barrier,
@@ -60,6 +61,7 @@ from .safe_controls import (
     MinIntervBackupSafeControl,
     ParametricFlowSafeControl,
     ParametricFlowSafeControl2,
+    CADPSafeControl,
 )
 
 # Config-driven construction
@@ -97,6 +99,7 @@ __all__ = [
     "BicycleDynamics",
     "InvertedPendulumDynamics",
     "UnicycleReducedOrderDynamics",
+    "Unicycle5thOrderDynamics",
     # Barriers
     "Barrier",
     "MultiBarriers",
@@ -124,6 +127,7 @@ __all__ = [
     "MinIntervBackupSafeControl",
     "ParametricFlowSafeControl",
     "ParametricFlowSafeControl2",
+    "CADPSafeControl",
     # Config-driven construction
     "from_config",
     "System",

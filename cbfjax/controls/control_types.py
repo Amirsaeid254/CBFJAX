@@ -82,8 +82,28 @@ class MPPIState(NamedTuple):
     key: jnp.ndarray  # PRNGKey — threaded so the controller is a pure function
 
 
+class CADPState(NamedTuple):
+    """
+    State for C-ADP controller: the cost-to-go parameters from the previous
+    backward pass, which define the optimal functions used by the next forward
+    pass, plus the update counter that paces re-planning.
+    """
+    P_next: jnp.ndarray  # (N, n, n) P_1 .. P_N
+    T_next: jnp.ndarray  # (N, n)    T_1 .. T_N
+    step:   jnp.ndarray  # ()        update counter
+
+
 class MPPIInfo(NamedTuple):
     """Diagnostic info from MPPI solve."""
     S:       jnp.ndarray  # (K,)        per-sample total costs
     weights: jnp.ndarray  # (K,)        normalized importance weights
     U_new:   jnp.ndarray  # (N, m)      updated nominal trajectory (before warm-start shift)
+
+
+class CADPInfo(NamedTuple):
+    """Diagnostic info from a C-ADP solve."""
+    slack_vars:      jnp.ndarray  # ()      the slack delta* of the applied step
+    constraint_at_u: jnp.ndarray  # ()      a(x) + b(x)' u*, nonnegative by Theorem 1
+    u_desired:       jnp.ndarray  # (l_v,)  performance control (lam = 0), the paper's v_d
+    lam:             jnp.ndarray  # ()      constraint multiplier of the applied step
+    nominal_traj:    jnp.ndarray  # (N+1, n) forward-pass nominal trajectory

@@ -21,6 +21,7 @@ from .backup_safe_control import (
     BackupSafeControl,
     MinIntervBackupSafeControl
 )
+from .cadp_safe_control import CADPSafeControl
 from .parametric_flow_safe_control import ParametricFlowSafeControl
 from .parametric_flow_safe_control2 import ParametricFlowSafeControl2
 
@@ -65,6 +66,8 @@ __all__ = [
     # Backup controllers
     "BackupSafeControl",
     "MinIntervBackupSafeControl",
+    # C-ADP controller
+    "CADPSafeControl",
     # Parametric flow controllers
     "ParametricFlowSafeControl",
     "ParametricFlowSafeControl2",

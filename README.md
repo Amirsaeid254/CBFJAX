@@ -34,6 +34,10 @@ This project is the JAX successor to the
   - Input-constrained QP (`MinIntervInputConstQPSafeControl`)
   - Backup-CBF with forward invariance (`MinIntervBackupSafeControl`)
   - Predicted-flow safe control (`ParametricFlowSafeControl`, `…Control2`)
+  - Receding-horizon constrained approximate dynamic programming
+    (`CADPSafeControl`) — a backward Riccati-like recursion whose every step is
+    a closed-form constrained optimizer, so state constraints hold across the
+    whole prediction horizon
   - MPPI with barrier-aware cost (`MPPIControl`)
   - NMPC with barrier constraints (acados / do-mpc — optional)
   - Constrained iLQR with barrier-aware cost (trajax — optional)
@@ -45,7 +49,8 @@ This project is the JAX successor to the
   namespace — define barriers by name, reference them by name, wire one into
   the filter; unused entries stay available for plotting/analysis.
 - **Built-in dynamics**: unicycle, single/double integrator, kinematic bicycle,
-  inverted pendulum, reduced-order unicycle — plus a generic
+  inverted pendulum, reduced-order unicycle, 5th-order differential-drive robot
+  — plus a generic
   `AffineInControlDynamics` base and a `CustomDynamics` escape hatch.
 - **64-bit precision by default** for the numerical stability that CBF methods require.
 
@@ -214,6 +219,7 @@ cbfjax/
 │   ├── closed_form_safe_control.py
 │   ├── qp_safe_control.py
 │   ├── backup_safe_control.py
+│   ├── cadp_safe_control.py              #  Receding-horizon C-ADP safe control
 │   ├── parametric_flow_safe_control.py   #  Predicted-flow safe control
 │   ├── parametric_flow_safe_control2.py
 │   ├── nmpc_safe_control.py        #  (optional)
